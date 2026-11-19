@@ -86,6 +86,11 @@
   let ctxPasted = $state("");
   /** Paste box visible? */
   let pasteOpen = $state(false);
+  /**
+   * Agentic chip (per-run override, M13 chunk 3): default derives from the
+   * per-feature chat switch; toggling affects the next message only.
+   */
+  let agentic = $state(ai.isFeatureEnabled("chat"));
 
   /** 1s ticker while a turn streams (elapsed label), idle-cost zero. */
   let now = $state(Date.now());
@@ -131,7 +136,7 @@
     draft = "";
     pinned = true;
     void ai
-      .sendChat({ repoId, root, question: text, context: currentContext() })
+      .sendChat({ repoId, root, question: text, context: currentContext(), agentic })
       .catch((err: unknown) => {
         // Cancelled turns already landed in the thread with their partial
         // text — no extra toast; real failures did too, plus one toast.
@@ -164,6 +169,7 @@
   function metaLabel(message: ChatMessage): string | null {
     if (message.error !== undefined && message.error !== null) return null;
     const parts: string[] = [];
+    if (message.mode) parts.push(message.mode);
     if (message.model) parts.push(`via ${message.model}`);
     if (message.backend) parts.push(message.backend);
     if (typeof message.elapsedMs === "number") parts.push(aiResultSeconds(message.elapsedMs));
@@ -449,6 +455,17 @@
               onclick={() => (ctxStaged = !ctxStaged)}
             >
               Staged diff
+            </button>
+            <button
+              class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {agentic
+                ? 'border-primary/60 bg-primary/10 text-foreground'
+                : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              type="button"
+              aria-pressed={agentic}
+              aria-label="Let the assistant use repo tools for this message"
+              onclick={() => (agentic = !agentic)}
+            >
+              Tools
             </button>
             <button
               class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {ctxCommits

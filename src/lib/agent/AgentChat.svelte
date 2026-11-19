@@ -42,6 +42,11 @@
 
   /** Composer draft. */
   let draft = $state("");
+  /**
+   * Agentic chip (per-run override, M13 chunk 3): default derives from the
+   * per-feature chat switch; toggling affects the next message only.
+   */
+  let agentic = $state(ai.isFeatureEnabled("chat"));
 
   /** Context is fixed: the agent chat always reads staged diff + commits. */
   const CHAT_CONTEXT: ChatContextSelection = {
@@ -86,7 +91,7 @@
     draft = "";
     pinned = true;
     void ai
-      .sendChat({ repoId, root, question: text, context: CHAT_CONTEXT })
+      .sendChat({ repoId, root, question: text, context: CHAT_CONTEXT, agentic })
       .catch((err: unknown) => {
         // Cancelled turns already landed in the thread with their partial
         // text — no extra toast; real failures did too, plus one toast.
@@ -119,6 +124,7 @@
   function metaLabel(message: ChatMessage): string | null {
     if (message.error !== undefined && message.error !== null) return null;
     const parts: string[] = [];
+    if (message.mode) parts.push(message.mode);
     if (message.model) parts.push(`via ${message.model}`);
     if (message.backend) parts.push(message.backend);
     if (typeof message.elapsedMs === "number") parts.push(aiResultSeconds(message.elapsedMs));
@@ -267,6 +273,17 @@
 
     <!-- Composer -->
     <div class="flex flex-none items-end gap-1.5 border-t border-border bg-popover px-2.5 py-2">
+      <button
+        class="flex-none rounded-full border px-2 py-px text-ui-tiny transition-colors {agentic
+          ? 'border-primary/60 bg-primary/10 text-foreground'
+          : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+        type="button"
+        aria-pressed={agentic}
+        aria-label="Let the assistant use repo tools for this message"
+        onclick={() => (agentic = !agentic)}
+      >
+        Tools
+      </button>
       <textarea
         class="max-h-32 w-full flex-1 resize-y rounded-md border border-border bg-background px-[9px] py-1.5 text-ui-base leading-[1.4] text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
         placeholder={busy ? "Waiting for the assistant…" : `Ask about ${repoName}… (Enter to send, Shift+Enter for a new line)`}

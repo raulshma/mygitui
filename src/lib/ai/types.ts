@@ -226,6 +226,11 @@ export interface AiResult {
   elapsedMs: number;
   /** Token/usage accounting when the backend reports it. */
   usage?: AiUsage;
+  /**
+   * opencode session that served an agentic run (chat threads bind one
+   * session 1:1; throwaway runs remove theirs). Absent on single-shot.
+   */
+  sessionID?: string;
 }
 
 /** Uniform failure for anything AI: which backend and a safe message. */

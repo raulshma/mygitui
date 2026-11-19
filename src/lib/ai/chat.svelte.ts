@@ -22,6 +22,17 @@
  * are best-effort — a chip whose data cannot be read degrades to a note
  * in the prompt instead of failing the turn.
  *
+ * Agentic mode (M13 chunk 3): a thread binds ONE opencode session 1:1
+ * (`ChatThread.opencodeSessionId`, created lazily on the thread's first
+ * agentic message, persisted on the record, restored across restarts,
+ * deleted with the thread). Agentic turns skip the client-side context
+ * gather and transcript window — the server session owns history and the
+ * agent reads the repo itself; pasted notes are part of the message and
+ * always flow. The per-turn assistant bubble records the mode that
+ * actually ran (`mode`), and an agentic request that cannot be served
+ * (OpenRouter-only backend, 1.x server) silently degrades to single-shot
+ * per ADR 0001.
+ *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  */
 
@@ -29,15 +40,27 @@ import { loadVersioned, writeEnvelope } from "$lib/state/persist";
 import type { StorageLike } from "$lib/state/persist";
 import type { DiffSide, FileDiff, LogFilter, LogPage } from "$lib/ipc/types";
 import { AiError } from "./types";
-import type { AiBackend, AiUsage } from "./types";
+import type { AiBackend, AiResult, AiUsage } from "./types";
 import type { FeatureRouter } from "./features";
 import { budgetedDiffText } from "./diffBudget";
 import { formatFileDiff, gatherCommits } from "./features";
 import { describeError } from "$lib/errors";
 import { AiJobStore } from "./jobs.svelte";
+import type { AiJobTicket } from "./jobs.svelte";
+import type { AgenticRunController } from "./agenticRun.svelte";
 
 /** localStorage key for the enveloped chat threads. */
 export const CHAT_STORAGE_KEY = "mygitui.ai.chat";
+/**
+ * Sibling envelope for the threads' persistent opencode session bindings
+ * (chunk 3 review): kept OUT of the messages payload so old builds'
+ * read-modify-write of `mygitui.ai.chat` cannot erase bindings — an old
+ * build re-persists the messages array it read, and had the binding lived
+ * inside that payload, its next persist would overwrite the whole
+ * envelope. Old builds lose only bindings (they re-create sessions),
+ * never messages.
+ */
+export const CHAT_SESSIONS_KEY = "mygitui.ai.chat.sessions";
 /** Stored messages per thread, newest kept (user + assistant together). */
 export const CHAT_MESSAGE_CAP = 60;
 /** Threads (repo roots) kept, oldest-inserted dropped — storage stays bounded. */
@@ -84,6 +107,13 @@ export interface ChatMessage {
   error?: string | null;
   /** Turn was cancelled by the user (text = what arrived before cancel). */
   cancelled?: boolean;
+  /**
+   * Which mode actually served the turn (chunk 3): `"agentic"` (opencode
+   * session with repo tools) or `"single-shot"` (context-gathered prompt,
+   * including agentic requests that degraded per ADR 0001). Legacy turns
+   * carry no marker.
+   */
+  mode?: "agentic" | "single-shot";
 }
 
 /** Which context chips the user enabled for one turn. */
@@ -106,7 +136,56 @@ export interface ChatSendOptions {
   repoName?: string | null;
   question: string;
   context: ChatContextSelection;
+  /**
+   * Composer's agentic chip (per-run override; default derived from the
+   * per-feature enabled state). When the agentic path cannot serve the
+   * turn, it silently degrades to single-shot (ADR 0001).
+   */
+  agentic?: boolean;
 }
+
+/**
+ * One conversation thread (per repo root): the persisted messages plus the
+ * thread's persistent opencode session binding (agentic chat). A null
+ * binding means the thread's next agentic message creates a fresh session.
+ */
+export interface ChatThread {
+  messages: ChatMessage[];
+  /** Non-empty opencode session id, or `null` when none is bound yet. */
+  opencodeSessionId: string | null;
+}
+
+/**
+ * Agentic runner seam (chunk 3): wired by `AiStore` to its
+ * {@link AiStore.runAgentic} path with the turn's ticket adopted (the
+ * caller owns begin + settle). Resolves with the run summary — the
+ * `sessionID` is the session that served the turn (possibly re-created
+ * after a session-lost retry; the caller persists it).
+ */
+export interface ChatAgenticInput {
+  repoId: string;
+  prompt: string;
+  /** Advisory contract — folded into the text for sessions the runner creates. */
+  system?: string;
+  /** Per-run model override (picker choice; reused sessions switch first). */
+  model?: string;
+  /** The thread's current session binding (`undefined` = create fresh). */
+  sessionID?: string;
+  /** The turn's already-begun ticket (signal, serving, deltas, agentic runtime). */
+  ticket: AiJobTicket;
+  /** Feeds the turn's partial-text tracking alongside the ticket's stream. */
+  onDelta?: (delta: string) => void;
+  /**
+   * Fires synchronously at dispatch (once the run's session exists and the
+   * controller is live) — the caller distinguishes pre-start refusals
+   * (degradable per ADR 0001) from mid-run failures (surface honestly).
+   */
+  onController?: (controller: AgenticRunController) => void;
+}
+
+export type ChatAgenticRunner = (
+  input: ChatAgenticInput,
+) => Promise<AiResult & { sessionID: string }>;
 
 /** Git data providers chat needs (subset of `$lib/ipc/client`). */
 export interface ChatGitClient {
@@ -136,9 +215,26 @@ export interface ChatStoreDeps {
   now?: () => number;
   /** Message id minting (tests). */
   id?: () => string;
+  /**
+   * Agentic runner (wired by `AiStore` to its runAgentic path); absent =
+   * agentic requests degrade to single-shot (the chip has no effect).
+   */
+  agentic?: ChatAgenticRunner;
+  /**
+   * Best-effort persistent-session removal for a deleted thread (wired by
+   * `AiStore`; the store swallows every failure).
+   */
+  deleteSession?: (sessionID: string) => Promise<void>;
+  /** Per-repo model override reader (the picker's choice; `null` = default). */
+  model?: (repoId: string) => string | null;
 }
 
-/** Parse-and-drop validation for persisted threads. */
+/**
+ * Parse-and-drop validation for the persisted MESSAGES payload — the SAME
+ * old-format shape as before the agentic work (bare `root → messages`
+ * arrays), so old builds' read-modify-write round-trips unaffected; the
+ * session bindings live in the sibling {@link CHAT_SESSIONS_KEY} envelope.
+ */
 export function parseChatThreads(data: unknown): Record<string, ChatMessage[]> | null {
   if (typeof data !== "object" || data === null) return null;
   const out: Record<string, ChatMessage[]> = {};
@@ -169,6 +265,7 @@ export function parseChatThreads(data: unknown): Record<string, ChatMessage[]> |
         usage: typeof m.usage === "object" && m.usage !== null ? (m.usage as AiUsage) : undefined,
         error: typeof m.error === "string" ? m.error : undefined,
         cancelled: m.cancelled === true ? true : undefined,
+        mode: m.mode === "agentic" || m.mode === "single-shot" ? m.mode : undefined,
       });
     }
     if (messages.length > 0) out[root] = messages.slice(-CHAT_MESSAGE_CAP);
@@ -180,14 +277,29 @@ export function parseChatThreads(data: unknown): Record<string, ChatMessage[]> |
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function emptyThreads(): Record<string, ChatMessage[]> {
+/**
+ * Parse-and-drop validation for the sibling session-bindings envelope:
+ * `root → non-empty session id`, everything else dropped.
+ */
+export function parseChatSessions(data: unknown): Record<string, string> | null {
+  if (typeof data !== "object" || data === null) return null;
+  const out: Record<string, string> = {};
+  for (const [root, raw] of Object.entries(data as Record<string, unknown>)) {
+    if (typeof root === "string" && root !== "" && typeof raw === "string" && raw.length > 0) {
+      out[root] = raw;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function emptyThreads(): Record<string, ChatThread> {
   return {};
 }
 
 /** The assistant chat store — owned by `AiStore`; construct for tests. */
 export class ChatStore {
   /** Threads by repo root (deep-reactive; persisted on every change). */
-  readonly threads = $state<Record<string, ChatMessage[]>>({});
+  readonly threads = $state<Record<string, ChatThread>>({});
   /** One in-flight turn per root (own slot, separate from feature runs). */
   readonly busy = $state<Record<string, boolean>>({});
 
@@ -199,6 +311,9 @@ export class ChatStore {
   readonly #isOptedIn: (repoId: string) => boolean;
   readonly #now: () => number;
   readonly #mintId: () => string;
+  readonly #agentic: ChatAgenticRunner | null;
+  readonly #deleteSession: ((sessionID: string) => Promise<void>) | null;
+  readonly #model: ((repoId: string) => string | null) | null;
   /** root → in-flight job id (cancel + streaming lookup). */
   readonly #active = new Map<string, string>();
 
@@ -213,18 +328,36 @@ export class ChatStore {
     this.#mintId =
       deps.id ??
       (() => `chat-${Math.random().toString(36).slice(2, 10)}-${this.#now().toString(36)}`);
-    const loaded =
+    this.#agentic = deps.agentic ?? null;
+    this.#deleteSession = deps.deleteSession ?? null;
+    this.#model = deps.model ?? null;
+    const loadedThreads =
       loadVersioned<Record<string, ChatMessage[]>>({
         storage: this.#storage,
         key: CHAT_STORAGE_KEY,
         parse: parseChatThreads,
       }) ?? emptyThreads();
-    this.threads = loaded;
+    const loadedSessions =
+      loadVersioned<Record<string, string>>({
+        storage: this.#storage,
+        key: CHAT_SESSIONS_KEY,
+        parse: parseChatSessions,
+      }) ?? {};
+    const threads: Record<string, ChatThread> = {};
+    for (const [root, messages] of Object.entries(loadedThreads)) {
+      threads[root] = { messages, opencodeSessionId: loadedSessions[root] ?? null };
+    }
+    this.threads = threads;
   }
 
-  /** The thread for `root` (`[]` when none yet — safe for templates). */
+  /** The thread's messages for `root` (`[]` when none yet — safe for templates). */
   conversationFor(root: string): ChatMessage[] {
-    return this.threads[root] ?? [];
+    return this.threads[root]?.messages ?? [];
+  }
+
+  /** The thread's persistent opencode session binding (`null` when unbound). */
+  sessionFor(root: string): string | null {
+    return this.threads[root]?.opencodeSessionId ?? null;
   }
 
   /** The in-flight job id for `root` (status-bar/panel cancel lookup). */
@@ -286,7 +419,81 @@ export class ChatStore {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let streamed = "";
+    /** Which mode actually produced this turn's output (bubble meta). */
+    let mode: ChatMessage["mode"];
+    /** The agentic run dispatched (onController fired) — post-start
+     * failures surface honestly instead of degrading to single-shot. */
+    let runStarted = false;
     try {
+      if (opts.agentic === true && this.#agentic !== null) {
+        try {
+          mode = "agentic";
+          ticket.phase("generating");
+          // Agentic turns SKIP the client-side gather and transcript
+          // window — the server session owns history and the agent reads
+          // the repo itself (that is the point of the mode). Pasted notes
+          // are part of the message and always flow through.
+          const prompt = agenticPrompt(question, opts.context.pasted ?? null);
+          ticket.promptPreview(prompt);
+          // No chat deadline: the agentic budget (wall clock) bounds the
+          // run and the provider's own backstop rejects a dead stream.
+          const result = await this.#agentic({
+            repoId: opts.repoId,
+            prompt,
+            system: CHAT_SYSTEM,
+            model: this.#model?.(opts.repoId) ?? undefined,
+            sessionID: this.#session(opts.root) ?? undefined,
+            ticket,
+            onDelta: (delta) => {
+              streamed += delta;
+              ticket.delta(delta);
+            },
+            onController: () => {
+              runStarted = true;
+            },
+          });
+          const elapsedMs = this.#now() - startedAt;
+          const reply: ChatMessage = {
+            id: this.#mintId(),
+            role: "assistant",
+            text: result.text || streamed,
+            at: this.#now(),
+            backend: result.backend,
+            model: result.model,
+            elapsedMs,
+            usage: result.usage ?? null,
+            mode,
+          };
+          ticket.done({
+            backend: result.backend,
+            model: result.model,
+            elapsedMs,
+            usage: result.usage ?? null,
+            text: reply.text,
+          });
+          // The append first (it may recreate a thread the user cleared
+          // mid-run), THEN the binding — the reverse order would have the
+          // recreated null binding overwrite the fresh session id.
+          this.#append(opts.root, reply);
+          this.#setSession(opts.root, result.sessionID);
+          return reply;
+        } catch (agenticErr) {
+          // Pre-run refusal (OpenRouter-only backend, 1.x server): silently
+          // degrade to single-shot per ADR 0001. NEVER after the run
+          // dispatched (onController fired) or produced output — a mid-run
+          // server failure is not a capability gap, and re-executing the
+          // whole request would hide the agentic work and duplicate it.
+          if (
+            !(agenticErr instanceof AiError && agenticErr.kind === "unavailable") ||
+            runStarted ||
+            streamed.length > 0
+          ) {
+            throw agenticErr;
+          }
+        }
+      }
+
+      mode = "single-shot";
       ticket.phase("gathering", "collecting context");
       const context = await this.#gatherContext(opts.repoId, opts.context);
 
@@ -335,6 +542,7 @@ export class ChatStore {
         model: result.model,
         elapsedMs,
         usage: result.usage ?? null,
+        mode,
       };
       ticket.done({
         backend: result.backend,
@@ -359,6 +567,7 @@ export class ChatStore {
           text: partial,
           at: this.#now(),
           cancelled: true,
+          mode,
         };
         ticket.cancelled();
         this.#append(opts.root, cancelled);
@@ -378,6 +587,7 @@ export class ChatStore {
         text: partial,
         at: this.#now(),
         error: message,
+        mode,
       };
       ticket.failed(message);
       this.#append(opts.root, failed);
@@ -400,13 +610,35 @@ export class ChatStore {
     if (jobId !== undefined) this.#jobs.cancel(jobId);
   }
 
-  /** Drops the thread for `root` (memory + storage). */
+  /**
+   * Drops the thread for `root` (memory + storage) — the "new chat"
+   * action. The thread's persistent opencode session is removed
+   * best-effort (fire-and-forget; a dead server must not block thread
+   * deletion), so the next agentic message creates a fresh session.
+   */
   clear(root: string): void {
+    const sessionId = this.threads[root]?.opencodeSessionId ?? null;
+    if (sessionId !== null) {
+      void this.#deleteSession?.(sessionId).catch(() => {});
+    }
     delete this.threads[root];
     this.#persist();
   }
 
   // -- internals ---------------------------------------------------------------
+
+  /** Writes the thread's persistent session binding (after an agentic run). */
+  #setSession(root: string, sessionID: string): void {
+    const thread = this.threads[root];
+    if (thread === undefined || thread.opencodeSessionId === sessionID) return;
+    this.threads[root] = { ...thread, opencodeSessionId: sessionID };
+    this.#persist();
+  }
+
+  /** The thread's session binding for the agentic runner (`null` = fresh). */
+  #session(root: string): string | undefined {
+    return this.threads[root]?.opencodeSessionId ?? undefined;
+  }
 
   #append(root: string, message: ChatMessage): void {
     // Per-message text cap (either role): a runaway model answer or a
@@ -416,7 +648,8 @@ export class ChatStore {
       message.text.length > CHAT_MESSAGE_TEXT_CAP
         ? { ...message, text: capSafe(message.text, CHAT_MESSAGE_TEXT_CAP) }
         : message;
-    const next = [...(this.threads[root] ?? []), stored].slice(-CHAT_MESSAGE_CAP);
+    const thread = this.threads[root] ?? { messages: [], opencodeSessionId: null };
+    const next = { ...thread, messages: [...thread.messages, stored].slice(-CHAT_MESSAGE_CAP) };
     this.threads[root] = next;
     // Cap the thread count too (oldest-inserted roots drop first), so
     // opening many repositories cannot grow storage without bound.
@@ -428,7 +661,17 @@ export class ChatStore {
   }
 
   #persist(): void {
-    writeEnvelope(this.#storage, CHAT_STORAGE_KEY, this.threads);
+    // The messages payload stays in the OLD format exactly (bare arrays —
+    // old builds' read-modify-write round-trips it untouched); bindings
+    // ride the sibling envelope.
+    const messages: Record<string, ChatMessage[]> = {};
+    const sessions: Record<string, string> = {};
+    for (const [root, thread] of Object.entries(this.threads)) {
+      messages[root] = thread.messages;
+      if (thread.opencodeSessionId !== null) sessions[root] = thread.opencodeSessionId;
+    }
+    writeEnvelope(this.#storage, CHAT_STORAGE_KEY, messages);
+    writeEnvelope(this.#storage, CHAT_SESSIONS_KEY, sessions);
   }
 
   /**
@@ -520,6 +763,18 @@ export function chatPrompt(
   if (transcript) parts.push(`Conversation so far:\n\n${transcript}`);
   parts.push(`Question: ${question}`);
   return parts.join("\n\n");
+}
+
+/**
+ * Builds the agentic turn's message text: the question plus pasted notes
+ * (pasted text is part of the message and always flows through — unlike
+ * single-shot, no context blocks and no transcript are prepended; the
+ * server session owns history and the agent reads the repo itself).
+ */
+export function agenticPrompt(question: string, pasted: string | null): string {
+  const notes = pasted?.trim();
+  if (notes === undefined || notes.length === 0) return question;
+  return `${question}\n\n### Pasted notes\n\n${capSafe(notes, CHAT_FILE_CHARS)}`;
 }
 
 /** Cap helper that never throws on non-string input. */

@@ -172,6 +172,24 @@ export interface AgenticRunOptions {
    * the same way single-shot generation does.
    */
   sessionKey?: string;
+  /**
+   * REUSE an existing persistent session (chat threads bind one opencode
+   * session 1:1): no `session.create`, no teardown — the run prompts into
+   * the given session and leaves it alive. A session-lost failure
+   * (deleted server-side, reinstall) downgrades gracefully: a fresh
+   * session is created and the prompt retried once, with the NEW id in
+   * the result for the caller to persist.
+   */
+  sessionID?: string;
+  /**
+   * CREATE-and-keep: the run makes its own policy-injected session and
+   * leaves it alive, returning the id for the caller to bind (the FIRST
+   * message of a persistent thread — the binding only exists after the
+   * first run). With `sessionID` present this flag is implied. Neither
+   * `sessionID` nor `keepSession`: throwaway mode — create + remove at
+   * the end (chunk 4's per-invocation features).
+   */
+  keepSession?: boolean;
   /** Cancellation. */
   signal?: AbortSignal;
   /**
@@ -1100,21 +1118,53 @@ export class OpenCodeProvider implements AiProvider {
         { backend: "opencode" },
       );
     }
-    // v2 prompts carry no `system` field — fold it into the text.
-    const text = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
-
-    let sessionID: string;
+    // Session persistence is EXPLICIT at the seam: `sessionID` present =
+    // REUSE (prompt into the bound session, leave it alive); `keepSession`
+    // without an id = CREATE-and-keep (a persistent thread's FIRST message
+    // binds the returned id); neither = throwaway (create + remove). A
+    // reused session's model was fixed at its create, so an explicit
+    // per-run model switches first (switch-then-prompt).
+    const persistent = req.sessionID !== undefined || req.keepSession === true;
+    let sessionID: string | undefined = req.sessionID;
+    // `created` marks sessions THIS run made — the v2 prompt carries no
+    // system field, so the system folds into the text only for a session
+    // with no prior memory (fresh create, incl. every re-create below).
+    let created = !persistent;
+    // Sessions a persistent run created itself stay alive only when the
+    // run succeeds (the caller binds them); a failure would leak them.
+    let createdDuringRun = false;
+    let succeeded = false;
     try {
-      const session = await client.session.create({
-        title: SESSION_TITLE,
-        ...(normDirectory ? { location: { directory: normDirectory } } : {}),
-        ...(parsed ? { model: { providerID: parsed.providerID, id: parsed.modelID } } : {}),
-        permissions: buildToolPolicy(),
-      });
-      sessionID = session.id;
+      if (sessionID === undefined) {
+        sessionID = await this.#createV2Session(client, normDirectory, parsed);
+        created = true;
+        createdDuringRun = persistent;
+      } else if (persistent && parsed !== null) {
+        try {
+          await client.session
+            .switchModel({
+              sessionID,
+              model: { providerID: parsed.providerID, id: parsed.modelID },
+            })
+            .catch((err: unknown) => {
+              throw v2ErrorToAiError(err, "session.switchModel");
+            });
+        } catch (err) {
+          // A stale binding fails the switch the same way the prompt
+          // would: recreate-with-model-at-create instead of surfacing it
+          // (outside the retry boundary this would wedge every turn).
+          if (!isSessionLost(err, sessionID)) throw err;
+          sessionID = await this.#createV2Session(client, normDirectory, parsed);
+          created = true;
+          createdDuringRun = true;
+        }
+      }
     } catch (err) {
+      if (err instanceof AiError) throw err;
       throw v2ErrorToAiError(err, "session.create");
     }
+    const textFor = (): string =>
+      created && req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
 
     // Budget: per-run override > configured caps > types.ts constants
     // (the controller fills per-field defaults for anything left unset).
@@ -1123,39 +1173,72 @@ export class OpenCodeProvider implements AiProvider {
       ...req.budget,
     };
     const controller = new AgenticRunController({
-      sessionID,
+      // Guaranteed assigned by the resolution block above; a session-lost
+      // re-create mutates it (and this field) before any reply can flow.
+      sessionID: sessionID as string,
       budget,
+      // The closures read the MUTABLE id: a session-lost re-create late-
+      // binds replies/interrupts to the replacement session.
       reply: (requestID, decision, message) =>
         client.permission
           .reply({
-            sessionID,
+            sessionID: sessionID as string,
             requestID,
             decision,
             message: message ?? undefined,
           })
           .then(() => undefined),
       interrupt: () =>
-        client.session.interrupt({ sessionID }).then(() => undefined),
+        client.session.interrupt({ sessionID: sessionID as string }).then(() => undefined),
     });
     req.onController?.(controller);
     controller.start();
 
     try {
-      const { text: out, usage, budgetStopped, budgetReason } = await this.#awaitV2Execution(
-        client,
-        sessionID,
-        text,
-        req.signal,
-        req.onDelta,
-        { controller },
-      );
+      let text = textFor();
+      let run: {
+        text: string;
+        usage: AiUsage | undefined;
+        budgetStopped: boolean;
+        budgetReason: AgenticBudgetReason | null;
+      };
+      try {
+        run = await this.#awaitV2Execution(
+          client,
+          sessionID as string,
+          text,
+          req.signal,
+          req.onDelta,
+          { controller },
+        );
+      } catch (err) {
+        // A persisted session can vanish server-side (user deleted it in
+        // opencode, server reinstall): degrade gracefully — create a fresh
+        // policy-injected session and retry ONCE. The retry's session is
+        // persistent too (the caller binds the new id from the result).
+        if (!persistent || !isSessionLost(err, sessionID as string)) throw err;
+        sessionID = await this.#createV2Session(client, normDirectory, parsed);
+        created = true;
+        createdDuringRun = true;
+        controller.sessionID = sessionID;
+        text = textFor();
+        run = await this.#awaitV2Execution(
+          client,
+          sessionID,
+          text,
+          req.signal,
+          req.onDelta,
+          { controller },
+        );
+      }
+      succeeded = true;
       return {
-        text: out,
+        text: run.text,
         model,
-        usage,
+        usage: run.usage,
         steps: [...controller.steps],
-        budgetStopped,
-        budgetReason,
+        budgetStopped: run.budgetStopped,
+        budgetReason: run.budgetReason,
         approvals: { ...controller.summary },
         controller,
         sessionID,
@@ -1169,8 +1252,44 @@ export class OpenCodeProvider implements AiProvider {
       throw toAiError(err);
     } finally {
       controller.dispose();
-      await this.#teardownV2Session(client, sessionID);
+      // Throwaway runs always remove their session; persistent runs keep
+      // it for the thread's next message — EXCEPT sessions the run
+      // created itself when the run failed (nothing will ever bind them).
+      if (!persistent || (createdDuringRun && !succeeded)) {
+        await this.#teardownV2Session(client, sessionID);
+      }
     }
+  }
+
+  /**
+   * Creates one policy-injected session ({@link buildToolPolicy}) with the
+   * run's workspace directory and model — shared by the throwaway and
+   * session-lost-retry paths.
+   */
+  async #createV2Session(
+    client: OpenCodeV2Client,
+    normDirectory: string | undefined,
+    parsed: { providerID: string; modelID: string } | null,
+  ): Promise<string> {
+    const session = await client.session.create({
+      title: SESSION_TITLE,
+      ...(normDirectory ? { location: { directory: normDirectory } } : {}),
+      ...(parsed ? { model: { providerID: parsed.providerID, id: parsed.modelID } } : {}),
+      permissions: buildToolPolicy(),
+    });
+    return session.id;
+  }
+
+  /**
+   * Best-effort removal of one persistent agentic session (a chat thread
+   * was deleted). Callers fire-and-forget with a swallow-all catch — a
+   * dead server must never make thread deletion fail.
+   */
+  async deleteAgenticSession(sessionID: string): Promise<void> {
+    const resolved = await this.#resolveServer();
+    if (resolved.server.kind !== "v2") return;
+    const client = await this.#clientForV2(resolved.server.base);
+    await client.session.remove({ sessionID });
   }
 
   /**
@@ -1606,6 +1725,30 @@ function describeInfoError(
     kind: shape.name === "ProviderAuthError" ? "unauthenticated" : "bad-response",
     message,
   };
+}
+
+/**
+ * True when a v2 failure means the session id no longer exists
+ * server-side (user deleted it in opencode, server reinstall) — the
+ * signal for runAgentic's graceful fresh-session retry.
+ */
+function isSessionLost(err: unknown, sessionID: string): boolean {
+  const shape = err as
+    | { name?: unknown; message?: unknown; data?: { message?: unknown } }
+    | null;
+  const name = typeof shape?.name === "string" ? shape.name : "";
+  const text = [name, shape?.message, shape?.data?.message]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  // Match the DECLARED tag — bare (declared-status errors carry the
+  // body's `_tag` as name, verified for 2.0.26) or inside the wrapped
+  // summary ("opencode session.prompt failed: SessionNotFoundError").
+  // Never a bare "not found": that also matches ModelNotFoundError
+  // ("model X not found"), API-key errors, … and would wrongly re-run
+  // the task into a fresh session. The tag-less fallback must ALSO name
+  // the prompted session id.
+  if (text.includes("SessionNotFoundError")) return true;
+  return text.includes(sessionID) && /not\s*found/i.test(text);
 }
 
 /** Maps an arbitrary thrown value to an {@link AiError} for this backend. */

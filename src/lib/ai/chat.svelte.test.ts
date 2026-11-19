@@ -7,14 +7,17 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgenticRunController } from "./agenticRun.svelte";
 import { AiJobStore } from "./jobs.svelte";
 import {
   CHAT_MESSAGE_CAP,
   CHAT_MESSAGE_TEXT_CAP,
+  CHAT_SESSIONS_KEY,
   CHAT_THREAD_CAP,
   CHAT_STORAGE_KEY,
   ChatStore,
   chatPrompt,
+  parseChatSessions,
   parseChatThreads,
 } from "./chat.svelte";
 import type { ChatGitClient, ChatStoreDeps } from "./chat.svelte";
@@ -48,6 +51,9 @@ interface Harness {
   storage: Storage;
   router: { generate: ReturnType<typeof vi.fn>; generateStream?: ReturnType<typeof vi.fn> };
   git: ChatGitClient;
+  /** The agentic runner seam (absent unless `withAgentic`). */
+  agentic?: ReturnType<typeof vi.fn>;
+  deleteSession: ReturnType<typeof vi.fn>;
 }
 
 function makeHarness(opts?: {
@@ -58,6 +64,10 @@ function makeHarness(opts?: {
   generateText?: string;
   routerError?: unknown;
   gitError?: unknown;
+  /** Wires the agentic runner seam (tests stub the returned vi.fn). */
+  withAgentic?: boolean;
+  /** The per-repo model override reader. */
+  model?: (repoId: string) => string | null;
 }): Harness {
   const storage = opts?.storage ?? memStorage();
   const jobs = new AiJobStore({ storage: null });
@@ -115,7 +125,15 @@ function makeHarness(opts?: {
   };
   if (opts?.enabled !== undefined) deps.enabled = opts.enabled;
   if (opts?.isOptedIn !== undefined) deps.isOptedIn = opts.isOptedIn;
-  return { store: new ChatStore(deps), jobs, storage, router, git };
+  const deleteSession = vi.fn(async () => undefined);
+  if (opts?.gitError) deleteSession.mockRejectedValue(new Error("server dead"));
+  const agentic = opts?.withAgentic === true ? vi.fn() : undefined;
+  if (agentic !== undefined) deps.agentic = agentic as never;
+  if (opts?.model !== undefined) deps.model = opts.model;
+  deps.deleteSession = deleteSession;
+  const harness: Harness = { store: new ChatStore(deps), jobs, storage, router, git, deleteSession };
+  if (agentic !== undefined) harness.agentic = agentic;
+  return harness;
 }
 
 const CONTEXT = { staged: true, commits: false, path: null, pasted: null };
@@ -352,19 +370,35 @@ describe("ChatStore persistence", () => {
   it("persists threads in the envelope and reloads them", () => {
     const storage = memStorage();
     const first = makeHarness({ storage }).store;
-    first.threads["/repo"] = [
-      { id: "u1", role: "user", text: "hi", at: 1 },
-      {
-        id: "a1",
-        role: "assistant",
-        text: "hello",
-        at: 2,
-        model: "m",
-        backend: "opencode",
-        elapsedMs: 5,
-        usage: { totalTokens: 3 },
-      },
-    ];
+    first.threads["/repo"] = {
+      opencodeSessionId: "sess-bound",
+      messages: [
+        { id: "u1", role: "user", text: "hi", at: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          text: "hello",
+          at: 2,
+          model: "m",
+          backend: "opencode",
+          elapsedMs: 5,
+          usage: { totalTokens: 3 },
+        },
+      ],
+    };
+    // Direct $state assignment skips #persist; emulate what it writes:
+    // the OLD-format messages envelope + the sibling bindings envelope.
+    storage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        v: 1,
+        data: { "/repo": first.threads["/repo"].messages },
+      }),
+    );
+    storage.setItem(
+      CHAT_SESSIONS_KEY,
+      JSON.stringify({ v: 1, data: { "/repo": "sess-bound" } }),
+    );
     // #append persists; direct assignment does not — persist explicitly by
     // round-tripping through clear() + the loaded instance.
     const second = new ChatStore({
@@ -372,12 +406,6 @@ describe("ChatStore persistence", () => {
       id: () => "x",
       git: { repoDiff: async () => [], streamLog: async () => {} },
     });
-    // Direct $state assignment above skipped persistence; emulate a stored
-    // write to prove parsing, then check the reload.
-    storage.setItem(
-      CHAT_STORAGE_KEY,
-      JSON.stringify({ v: 1, data: { "/repo": first.threads["/repo"] } }),
-    );
     void second;
     const third = new ChatStore({
       storage,
@@ -385,6 +413,7 @@ describe("ChatStore persistence", () => {
       git: { repoDiff: async () => [], streamLog: async () => {} },
     });
     expect(third.conversationFor("/repo")).toHaveLength(2);
+    expect(third.sessionFor("/repo")).toBe("sess-bound");
     expect(third.conversationFor("/repo")[1]).toMatchObject({
       role: "assistant",
       text: "hello",
@@ -399,7 +428,11 @@ describe("ChatStore persistence", () => {
       .send({ repoId: "r1", root: "/repo", question: "kept?", context: CONTEXT })
       .catch(() => {});
     const raw = storage.dump()[CHAT_STORAGE_KEY]!;
-    expect(JSON.parse(raw).data["/repo"]).toHaveLength(2);
+    // The messages payload stays OLD-FORMAT (bare arrays) even after the
+    // agentic work — old builds' read-modify-write round-trips untouched.
+    const dumped = JSON.parse(raw).data["/repo"];
+    expect(Array.isArray(dumped)).toBe(true);
+    expect(dumped).toHaveLength(2);
   });
 
   it("caps threads at CHAT_MESSAGE_CAP messages", () => {
@@ -568,5 +601,345 @@ describe("ChatStore failure hygiene + caps (M13 fixes)", () => {
     expect(parsed).not.toBeNull();
     expect(Object.keys(parsed!)).toHaveLength(CHAT_THREAD_CAP);
     expect(Object.values(parsed!)[0]?.[0]?.text.endsWith("[truncated]")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agentic chat (chunk 3): thread-bound sessions, chip orchestration, markers
+// ---------------------------------------------------------------------------
+
+import { CHAT_SYSTEM, agenticPrompt } from "./chat.svelte";
+import type { ChatAgenticInput } from "./chat.svelte";
+
+/** A minimal successful runner result. */
+function runnerResult(text = "agentic answer", sessionID = "sess-9"): AiResult & { sessionID: string } {
+  return { text, model: "m-1", backend: "opencode", elapsedMs: 8, sessionID };
+}
+
+describe("Agentic chat (chunk 3)", () => {
+  function makeAgenticHarness() {
+    const h = makeHarness({ withAgentic: true });
+    h.agentic!.mockResolvedValue(runnerResult());
+    return h as ReturnType<typeof makeHarness> & {
+      agentic: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  it("agentic send skips the gather, binds the session, marks the turn", async () => {
+    const h = makeAgenticHarness();
+    const reply = await h.store.send({
+      repoId: "r1",
+      root: "/repo",
+      question: "What changed?",
+      context: { staged: true, commits: true, path: null, pasted: null },
+      agentic: true,
+    });
+    // The agent reads the repo itself: no client-side gather.
+    expect(h.git.repoDiff).not.toHaveBeenCalled();
+    expect(h.git.streamLog).not.toHaveBeenCalled();
+    // The runner got the task (no repo header, no transcript, no context blocks).
+    expect(h.agentic).toHaveBeenCalledTimes(1);
+    const input = h.agentic.mock.calls[0]![0] as ChatAgenticInput;
+    expect(input.prompt).toBe("What changed?");
+    expect(input.system).toBe(CHAT_SYSTEM);
+    expect(input.sessionID).toBeUndefined(); // fresh session
+    // The binding persists from the result; the turn records its mode.
+    expect(h.store.sessionFor("/repo")).toBe("sess-9");
+    expect(reply.mode).toBe("agentic");
+    expect(reply.text).toBe("agentic answer");
+    // Single-shot never ran.
+    expect(h.router.generate).not.toHaveBeenCalled();
+  });
+
+  it("pasted notes are part of an agentic message (always flow through)", async () => {
+    const h = makeAgenticHarness();
+    await h.store.send({
+      repoId: "r1",
+      root: "/repo",
+      question: "Review this",
+      context: { staged: false, commits: false, path: null, pasted: "my paste" },
+      agentic: true,
+    });
+    const input = h.agentic.mock.calls[0]![0] as ChatAgenticInput;
+    expect(input.prompt).toBe("Review this\n\n### Pasted notes\n\nmy paste");
+  });
+
+  it("reuses the thread's binding on the next agentic message", async () => {
+    const h = makeAgenticHarness();
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "one", context: CONTEXT, agentic: true,
+    });
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "two", context: CONTEXT, agentic: true,
+    });
+    expect(h.agentic).toHaveBeenCalledTimes(2);
+    const first = h.agentic.mock.calls[0]![0] as ChatAgenticInput;
+    const second = h.agentic.mock.calls[1]![0] as ChatAgenticInput;
+    expect(first.sessionID).toBeUndefined();
+    expect(second.sessionID).toBe("sess-9");
+    // The second message is user text only — no system re-send.
+    expect(second.prompt).toBe("two");
+  });
+
+  it("the per-repo model choice rides the runner", async () => {
+    const h = makeHarness({ withAgentic: true, model: () => "anthropic/claude-opus-4" });
+    const agentic = h.agentic as ReturnType<typeof vi.fn>;
+    agentic.mockResolvedValue(runnerResult());
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    expect((agentic.mock.calls[0]![0] as ChatAgenticInput).model).toBe("anthropic/claude-opus-4");
+  });
+
+  it("clear() fires the session DELETE best-effort and resets the binding", async () => {
+    const h = makeAgenticHarness();
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    expect(h.store.sessionFor("/repo")).toBe("sess-9");
+    h.store.clear("/repo");
+    expect(h.deleteSession).toHaveBeenCalledWith("sess-9");
+    expect(h.store.sessionFor("/repo")).toBeNull();
+
+    // A dead server must not make thread deletion fail.
+    h.deleteSession.mockRejectedValueOnce(new Error("server dead"));
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q2", context: CONTEXT, agentic: true,
+    });
+    expect(() => h.store.clear("/repo")).not.toThrow();
+    expect(h.store.sessionFor("/repo")).toBeNull();
+  });
+
+  it("stop() cancels a running agentic turn and keeps the partial text", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockImplementation(async (input: ChatAgenticInput) => {
+      input.onDelta?.("partial before cancel ");
+      await new Promise<void>((resolve) => {
+        if (input.ticket.signal.aborted) resolve();
+        else input.ticket.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
+    });
+    const pending = h.store
+      .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+      .catch((err: unknown) => err);
+    await vi.waitFor(() => expect(h.store.busy["/repo"]).toBe(true));
+    h.store.stop("/repo");
+    await expect(pending).resolves.toMatchObject({ kind: "cancelled" });
+    const last = h.store.conversationFor("/repo").at(-1);
+    expect(last).toMatchObject({ role: "assistant", cancelled: true, mode: "agentic" });
+    expect(last?.text).toBe("partial before cancel");
+    expect(h.store.busy["/repo"]).toBe(false);
+  });
+
+  it("chip off runs the single-shot path (byte-identical) with the mode marker", async () => {
+    const h = makeAgenticHarness();
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT,
+    });
+    expect(h.agentic).not.toHaveBeenCalled();
+    expect(h.router.generate).toHaveBeenCalledTimes(1);
+    const reply = h.store.conversationFor("/repo").at(-1);
+    expect(reply?.mode).toBe("single-shot");
+    // No binding written: the thread stays unbound.
+    expect(h.store.sessionFor("/repo")).toBeNull();
+  });
+
+  it("chip on without a runner seam degrades to single-shot (ADR 0001)", async () => {
+    const h = makeHarness(); // no agentic dep wired
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    expect(h.router.generate).toHaveBeenCalledTimes(1);
+    const reply = h.store.conversationFor("/repo").at(-1);
+    expect(reply?.mode).toBe("single-shot");
+    expect(h.store.sessionFor("/repo")).toBeNull();
+  });
+
+  it("chip on + runner refuses (no v2 server) degrades to single-shot", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockRejectedValue(
+      new AiError("unavailable", "agentic runs need a 2.x opencode server — this one is 1.x", {
+        backend: "opencode",
+      }),
+    );
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    // The turn completed as today: single-shot ran, gather included.
+    expect(h.git.repoDiff).toHaveBeenCalledTimes(1);
+    expect(h.router.generate).toHaveBeenCalledTimes(1);
+    const reply = h.store.conversationFor("/repo").at(-1);
+    expect(reply?.mode).toBe("single-shot");
+    expect(h.store.sessionFor("/repo")).toBeNull();
+  });
+
+  it("a mid-run agentic failure does NOT degrade (output already streamed)", async () => {
+    const h = makeAgenticHarness();
+    h.agentic!.mockImplementation(async (input: ChatAgenticInput) => {
+      input.onDelta?.("partial ");
+      throw new AiError("unavailable", "opencode request failed: fetch failed", {
+        backend: "opencode",
+      });
+    });
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    }).catch(() => {});
+    expect(h.router.generate).not.toHaveBeenCalled();
+    const failed = h.store.conversationFor("/repo").at(-1);
+    expect(failed).toMatchObject({ role: "assistant", mode: "agentic" });
+    expect(failed?.error).toBeTruthy();
+    expect(failed?.text).toBe("partial");
+  });
+
+  it("persisted session ids validate and survive a reload", async () => {
+    const storage = memStorage();
+    const h = makeHarness({ storage, withAgentic: true });
+    (h.agentic as ReturnType<typeof vi.fn>).mockResolvedValue(runnerResult());
+    await h.store.send({
+      repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true,
+    });
+    const reloaded = new ChatStore({
+      storage,
+      id: () => "x",
+      git: { repoDiff: async () => [], streamLog: async () => {} },
+    });
+    expect(reloaded.sessionFor("/repo")).toBe("sess-9");
+  });
+});
+
+describe("agenticPrompt (chunk 3)", () => {
+  it("passes the question through without notes", () => {
+    expect(agenticPrompt("What changed?", null)).toBe("What changed?");
+    expect(agenticPrompt("What changed?", "   ")).toBe("What changed?");
+  });
+
+  it("appends pasted notes as part of the message", () => {
+    expect(agenticPrompt("Review this", "my paste")).toBe(
+      "Review this\n\n### Pasted notes\n\nmy paste",
+    );
+  });
+});
+
+describe("chat parse — mode marker + sibling session bindings (chunk 3 review)", () => {
+  it("the mode marker validates in the messages payload", () => {
+    const parsed = parseChatThreads({
+      "/ok": [
+        { id: "a", role: "assistant", text: "x", at: 1, mode: "agentic" },
+        { id: "b", role: "assistant", text: "y", at: 2, mode: "weird" },
+        { id: "c", role: "assistant", text: "z", at: 3 },
+      ],
+    });
+    expect(parsed?.["/ok"]).toEqual([
+      expect.objectContaining({ id: "a", mode: "agentic" }),
+      expect.objectContaining({ id: "b", mode: undefined }),
+      expect.objectContaining({ id: "c", mode: undefined }),
+    ]);
+  });
+
+  it("the messages payload stays OLD-FORMAT (bare arrays) for old builds", () => {
+    // L5: an old build's read-modify-write of mygitui.ai.chat must round-
+    // trip through the new store's parse and persist untouched.
+    const storage = memStorage({
+      [CHAT_STORAGE_KEY]: JSON.stringify({
+        v: 1,
+        data: { "/repo": [{ id: "a", role: "user", text: "x", at: 1 }] },
+      }),
+    });
+    const store = new ChatStore({
+      storage,
+      id: () => "x",
+      git: { repoDiff: async () => [], streamLog: async () => {} },
+    });
+    expect(store.conversationFor("/repo")).toHaveLength(1);
+    const dump = JSON.parse(storage.dump()[CHAT_STORAGE_KEY]!);
+    expect(Array.isArray(dump.data["/repo"])).toBe(true);
+    expect(dump.data["/repo"]).toHaveLength(1);
+  });
+
+  it("parseChatSessions validates the sibling bindings envelope", () => {
+    const parsed = parseChatSessions({
+      "/ok": "sess-1",
+      "/junk": 42,
+      "/empty": "",
+      bad: "nope",
+      "/nested": { id: "sess-2" },
+    });
+    // Non-string values and empty ids drop; any non-empty root + id pair
+    // is kept (roots are opaque repo paths — same rule as the threads).
+    expect(parsed).toEqual({ "/ok": "sess-1", bad: "nope" });
+    expect(parseChatSessions("junk")).toBeNull();
+    expect(parseChatSessions(null)).toBeNull();
+  });
+});
+
+describe("Agentic chat — fix round (chunk 3 review)", () => {
+  /** A harness with the agentic seam pre-wired to a per-test vi.fn. */
+  function makeAgenticHarness() {
+    const h = makeHarness({ withAgentic: true });
+    h.agentic!.mockResolvedValue(runnerResult());
+    return h as ReturnType<typeof makeHarness> & { agentic: ReturnType<typeof vi.fn> };
+  }
+
+  function makeFailingRunner(shape: "backstop" | "transport" | "recreate-failed") {
+    return async (input: ChatAgenticInput): Promise<never> => {
+      // All three post-start shapes dispatch (onController fires) before
+      // the failure: a tools-only run hitting the dead-stream backstop, a
+      // mid-run SSE transport drop, and a failed session-lost re-create.
+      input.onController?.({} as AgenticRunController);
+      const message =
+        shape === "backstop"
+          ? "OpenCode did not finish generating in time."
+          : shape === "transport"
+            ? "opencode request failed: fetch failed"
+            : "opencode session.create failed: server gone";
+      throw new AiError("unavailable", message, { backend: "opencode" });
+    };
+  }
+
+  it.each([
+    ["dead-stream backstop", "backstop"],
+    ["mid-run SSE transport drop", "transport"],
+    ["failed session-lost re-create", "recreate-failed"],
+  ] as const)(
+    "post-start unavailable (%s) surfaces honestly — NO single-shot re-run",
+    async (_label, shape) => {
+      const h = makeAgenticHarness();
+      h.agentic!.mockImplementation(makeFailingRunner(shape));
+      await h.store
+        .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+        .catch(() => {});
+      // MEDIUM 4: the run dispatched — re-executing the whole request
+      // single-shot would hide (and duplicate) the agentic work.
+      expect(h.router.generate).not.toHaveBeenCalled();
+      const failed = h.store.conversationFor("/repo").at(-1);
+      expect(failed).toMatchObject({ role: "assistant", mode: "agentic" });
+      expect(failed?.error).toBeTruthy();
+    },
+  );
+
+  it("clear() mid-run: the turn's fresh session still binds (no orphan)", async () => {
+    const h = makeAgenticHarness();
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.agentic!.mockImplementation(async (input: ChatAgenticInput) => {
+      input.onController?.({} as AgenticRunController);
+      await gate;
+      return runnerResult("late answer", "sess-new");
+    });
+    const pending = h.store
+      .send({ repoId: "r1", root: "/repo", question: "q", context: CONTEXT, agentic: true })
+      .catch((err: unknown) => err);
+    await vi.waitFor(() => expect(h.agentic).toHaveBeenCalled());
+    h.store.clear("/repo");
+    expect(h.store.sessionFor("/repo")).toBeNull();
+    (release as unknown as () => void)?.();
+    await pending;
+    // The reply recreates the thread, and the fresh session binds to it —
+    // the recreated null binding must not overwrite the id (L6).
+    expect(h.store.conversationFor("/repo").at(-1)?.text).toBe("late answer");
+    expect(h.store.sessionFor("/repo")).toBe("sess-new");
   });
 });

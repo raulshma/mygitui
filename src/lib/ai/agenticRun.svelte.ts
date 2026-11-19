@@ -140,7 +140,12 @@ export interface AgenticRunDeps {
  * loop feeds.
  */
 export class AgenticRunController {
-  readonly sessionID: string;
+  /**
+   * The run's opencode session id. Mutable BY the provider: a session-
+   * lost re-create late-binds the controller (and its reply/interrupt
+   * closures) to the replacement session.
+   */
+  sessionID: string;
   /** Pending asks, oldest first (approval cards render these). */
   pending = $state<AgenticApproval[]>([]);
   /** Tool calls observed so far (budget counter + step log). */

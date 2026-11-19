@@ -70,6 +70,7 @@ const FAKE_V2 = vi.hoisted(() => {
       prompt: vi.fn(),
       remove: vi.fn(),
       interrupt: vi.fn(),
+      switchModel: vi.fn(),
     },
     permission: { reply: vi.fn() },
     event: { subscribe: vi.fn() },
@@ -177,6 +178,7 @@ beforeEach(() => {
   FAKE_V2.session.prompt.mockReset();
   FAKE_V2.session.remove.mockReset();
   FAKE_V2.session.interrupt.mockReset();
+  FAKE_V2.session.switchModel.mockReset();
   FAKE_V2.permission.reply.mockReset();
   FAKE_V2.event.subscribe.mockReset();
 });
@@ -1417,9 +1419,10 @@ describe("OpenCodeProvider v2 generateStream (M13)", () => {
 /** A pushable v2 event stream (tests drive the run's timeline). */
 function v2EventQueue() {
   const queued: Array<{ type: string; data: unknown }> = [];
-  const waiters: Array<() => void> = [];
+  const waiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
   let closed = false;
-  const wake = (): void => waiters.splice(0).forEach((resolve) => resolve());
+  const wake = (): void => waiters.splice(0).forEach((waiter) => waiter.resolve());
+  const fail = (err: Error): void => waiters.splice(0).forEach((waiter) => waiter.reject(err));
   return {
     push(type: string, data: unknown): void {
       queued.push({ type, data });
@@ -1429,16 +1432,27 @@ function v2EventQueue() {
       closed = true;
       wake();
     },
-    stream(): AsyncGenerator<{ type: string; data: unknown }> {
+    /**
+     * The real client's stream throws when its signal aborts — mirror that
+     * per generator, so an aborted first attempt cannot consume the
+     * retry's events (each attempt subscribes afresh).
+     */
+    stream(signal?: AbortSignal): AsyncGenerator<{ type: string; data: unknown }> {
       return (async function* () {
-        for (;;) {
-          const next = queued.shift();
-          if (next !== undefined) {
-            yield next;
-            continue;
+        const onAbort = (): void => fail(new Error("aborted"));
+        signal?.addEventListener("abort", onAbort, { once: true });
+        try {
+          for (;;) {
+            const next = queued.shift();
+            if (next !== undefined) {
+              yield next;
+              continue;
+            }
+            if (closed) return;
+            await new Promise<void>((resolve, reject) => waiters.push({ resolve, reject }));
           }
-          if (closed) return;
-          await new Promise<void>((resolve) => waiters.push(resolve));
+        } finally {
+          signal?.removeEventListener("abort", onAbort);
         }
       })();
     },
@@ -1447,14 +1461,19 @@ function v2EventQueue() {
 
 describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
   /** Default mocks for a run that ends via `execution.succeeded`. */
-  function setupAgentic(): ReturnType<typeof v2EventQueue> {
-    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+  function setupAgentic(sessionID = "sess-v2"): ReturnType<typeof v2EventQueue> {
+    FAKE_V2.session.create.mockResolvedValue({ id: sessionID });
     FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
     FAKE_V2.session.remove.mockResolvedValue(undefined);
     FAKE_V2.session.interrupt.mockResolvedValue(undefined);
     FAKE_V2.permission.reply.mockResolvedValue(undefined);
+    FAKE_V2.session.switchModel.mockResolvedValue(undefined);
     const queue = v2EventQueue();
-    FAKE_V2.event.subscribe.mockReturnValue(queue.stream());
+    // Each attempt subscribes afresh; the generator dies with its signal
+    // so an aborted first attempt cannot consume the retry's events.
+    FAKE_V2.event.subscribe.mockImplementation(({ signal }: { signal?: AbortSignal }) =>
+      queue.stream(signal),
+    );
     return queue;
   }
 
@@ -1840,5 +1859,324 @@ describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
       decision: "reject",
       message: AGENTIC_ENDED_MESSAGE,
     });
+  });
+  it("reuses a bound session (no create/remove) and returns the same id", async () => {
+    const queue = setupAgentic("sess-bound");
+    const { done, controllerReady } = startRun({ sessionID: "sess-bound" });
+    const controller = await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-bound",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "reused",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-bound" });
+    const result = await done;
+
+    expect(FAKE_V2.session.create).not.toHaveBeenCalled();
+    expect(FAKE_V2.session.remove).not.toHaveBeenCalled(); // the session stays alive
+    expect(result.sessionID).toBe("sess-bound");
+    expect(result.text).toBe("reused");
+    expect(controller.sessionID).toBe("sess-bound");
+    // The prompt went to the bound session.
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "sess-bound" }),
+      expect.anything(),
+    );
+  });
+
+  it("switches a reused session's model before prompting (picker mid-thread)", async () => {
+    const queue = setupAgentic("sess-bound");
+    const { done, controllerReady } = startRun({
+      sessionID: "sess-bound",
+      model: "anthropic/claude-opus-4",
+    });
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-bound",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "switched",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-bound" });
+    await done;
+
+    expect(FAKE_V2.session.switchModel).toHaveBeenCalledTimes(1);
+    expect(FAKE_V2.session.switchModel).toHaveBeenCalledWith({
+      sessionID: "sess-bound",
+      model: { providerID: "anthropic", id: "claude-opus-4" },
+    });
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "sess-bound" }),
+      expect.anything(),
+    );
+
+    // Throwaway runs do NOT switch — the model rides session.create.
+    FAKE_V2.session.switchModel.mockClear();
+    FAKE_V2.session.create.mockClear();
+    FAKE_V2.session.prompt.mockClear();
+    const queue2 = setupAgentic();
+    const { done: done2, controllerReady: ready2 } = startRun({
+      model: "anthropic/claude-opus-4",
+    });
+    await ready2;
+    queue2.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "x",
+    });
+    queue2.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    await done2;
+    expect(FAKE_V2.session.switchModel).not.toHaveBeenCalled();
+    expect(FAKE_V2.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { providerID: "anthropic", id: "claude-opus-4" },
+      }),
+    );
+  });
+
+  it("folds the system only into sessions the run creates", async () => {
+    // Throwaway: the fresh session has no memory — fold.
+    const queue = setupAgentic();
+    const { done, controllerReady } = startRun({ system: "ADVISORY CONTRACT" });
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "x",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    await done;
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("ADVISORY CONTRACT") }),
+      expect.anything(),
+    );
+
+    // Reused: the session remembers the system from its first turn — user
+    // text only, and the transcript window is never re-sent.
+    const queue2 = setupAgentic("sess-bound");
+    const { done: done2, controllerReady: ready2 } = startRun({
+      sessionID: "sess-bound",
+      system: "ADVISORY CONTRACT",
+    });
+    await ready2;
+    queue2.push("session.text.ended", {
+      sessionID: "sess-bound",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "y",
+    });
+    queue2.push("session.execution.succeeded", { sessionID: "sess-bound" });
+    await done2;
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "explore the repo" }),
+      expect.anything(),
+    );
+  });
+
+  it("re-creates a lost session and retries once (new id reported, kept alive)", async () => {
+    const queue = setupAgentic("sess-gone");
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-new" });
+    FAKE_V2.session.prompt
+      .mockRejectedValueOnce({ name: "SessionNotFoundError" })
+      .mockResolvedValue({ id: "msg-1" });
+    const { done, controllerReady } = startRun({ sessionID: "sess-gone", system: "ADVISORY" });
+    const controller = await controllerReady;
+    // The retry consumes the same queue — push its events only after the
+    // second prompt call is in flight.
+    await vi.waitFor(() => expect(FAKE_V2.session.prompt).toHaveBeenCalledTimes(2));
+    queue.push("session.text.ended", {
+      sessionID: "sess-new",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "fresh",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-new" });
+    const result = await done;
+
+    // Exactly one re-create; the retry prompted into the NEW session with
+    // the system folded (a fresh session has no memory); the session is
+    // persistent, so nothing was removed.
+    expect(FAKE_V2.session.create).toHaveBeenCalledTimes(1);
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledTimes(2);
+    expect(FAKE_V2.session.prompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionID: "sess-new", text: expect.stringContaining("ADVISORY") }),
+      expect.anything(),
+    );
+    expect(result.sessionID).toBe("sess-new");
+    expect(FAKE_V2.session.remove).not.toHaveBeenCalled();
+    // L8: the controller late-binds to the replacement session (its
+    // reply/interrupt closures target the new id from here on).
+    expect(controller.sessionID).toBe("sess-new");
+  });
+
+  it("does not retry non-session-lost prompt failures", async () => {
+    const queue = setupAgentic("sess-bound");
+    FAKE_V2.session.prompt.mockRejectedValue({ name: "ProviderAuthError" });
+    const err = await startRun({ sessionID: "sess-bound" }).done.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect((err as AiError).kind).toBe("bad-response");
+    expect(FAKE_V2.session.create).not.toHaveBeenCalled();
+  });
+
+  it("deleteAgenticSession removes the server session (thread deletion)", async () => {
+    setupAgentic("sess-bound");
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    await makeV2Provider().deleteAgenticSession("sess-bound");
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-bound" });
+  });
+  it("keepSession creates-and-keeps: first message binds a LIVE session", async () => {
+    const queue = setupAgentic("sess-fresh");
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    const { done, controllerReady } = startRun({ keepSession: true, system: "ADVISORY" });
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-fresh",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "first",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-fresh" });
+    const result = await done;
+
+    expect(result.sessionID).toBe("sess-fresh");
+    // HIGH 1: the first message's session is NOT removed — the caller
+    // binds a live session, not a tombstone.
+    expect(FAKE_V2.session.remove).not.toHaveBeenCalled();
+
+    // Turn 2 reuses the bound id: prompts into it, no 404, no re-create.
+    FAKE_V2.session.create.mockClear();
+    FAKE_V2.session.prompt.mockClear();
+    const queue2 = setupAgentic("sess-fresh");
+    const { done: done2, controllerReady: ready2 } = startRun({
+      sessionID: "sess-fresh",
+    });
+    await ready2;
+    queue2.push("session.text.ended", {
+      sessionID: "sess-fresh",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "second",
+    });
+    queue2.push("session.execution.succeeded", { sessionID: "sess-fresh" });
+    const result2 = await done2;
+    expect(FAKE_V2.session.create).not.toHaveBeenCalled();
+    expect(FAKE_V2.session.remove).not.toHaveBeenCalled();
+    expect(result2.sessionID).toBe("sess-fresh");
+    expect(FAKE_V2.session.prompt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionID: "sess-fresh" }),
+      expect.anything(),
+    );
+  });
+
+  it("keepSession is implied by sessionID; neither flag = throwaway", async () => {
+    // Throwaway (chunk 4's per-invocation path): create + remove.
+    const queue = setupAgentic();
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    const { done, controllerReady } = startRun({});
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "x",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    await done;
+    expect(FAKE_V2.session.create).toHaveBeenCalledTimes(1);
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+  });
+
+  it("a ModelNotFoundError-class prompt failure fails honestly (no re-create)", async () => {
+    const queue = setupAgentic("sess-bound");
+    FAKE_V2.session.prompt.mockRejectedValue({
+      name: "ModelNotFoundError",
+      data: { message: "model anthropic/nope not found" },
+    });
+    const err = await startRun({ sessionID: "sess-bound" }).done.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect((err as AiError).kind).toBe("bad-response");
+    // HIGH 2: a "not found" that is NOT the session must not re-create
+    // (which would orphan the bound history and duplicate the task).
+    expect(FAKE_V2.session.create).not.toHaveBeenCalled();
+  });
+
+  it("the message fallback for session-lost must also name the session id", async () => {
+    const queue = setupAgentic("sess-gone");
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-new" });
+    FAKE_V2.session.prompt
+      .mockRejectedValueOnce({ message: "session sess-gone not found" })
+      .mockResolvedValue({ id: "msg-1" });
+    const { done, controllerReady } = startRun({ sessionID: "sess-gone" });
+    await controllerReady;
+    await vi.waitFor(() => expect(FAKE_V2.session.prompt).toHaveBeenCalledTimes(2));
+    queue.push("session.text.ended", {
+      sessionID: "sess-new",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "fresh",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-new" });
+    const result = await done;
+    expect(FAKE_V2.session.create).toHaveBeenCalledTimes(1);
+    expect(result.sessionID).toBe("sess-new");
+
+    // A "not found" WITHOUT the session id is not a lost session.
+    FAKE_V2.session.create.mockClear();
+    const queue2 = setupAgentic("sess-bound");
+    FAKE_V2.session.prompt.mockRejectedValue({ message: "API key not found" });
+    const err = await startRun({ sessionID: "sess-bound" }).done.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect(FAKE_V2.session.create).not.toHaveBeenCalled();
+  });
+
+  it("a stale binding fails the switch into recreate-with-model (retry boundary)", async () => {
+    const queue = setupAgentic("sess-gone");
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-new" });
+    FAKE_V2.session.switchModel.mockRejectedValue({ name: "SessionNotFoundError" });
+    const { done, controllerReady } = startRun({
+      sessionID: "sess-gone",
+      model: "anthropic/claude-opus-4",
+    });
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-new",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "ok",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-new" });
+    const result = await done;
+
+    // MEDIUM 3: the switch failure is INSIDE the retry boundary — the run
+    // re-created the session with the model at create and succeeded.
+    expect(FAKE_V2.session.create).toHaveBeenCalledTimes(1);
+    expect(FAKE_V2.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { providerID: "anthropic", id: "claude-opus-4" },
+      }),
+    );
+    expect(FAKE_V2.session.switchModel).toHaveBeenCalledTimes(1);
+    expect(FAKE_V2.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "sess-new" }),
+      expect.anything(),
+    );
+    expect(result.sessionID).toBe("sess-new");
+    expect(FAKE_V2.session.remove).not.toHaveBeenCalled();
+  });
+
+  it("a failed retry run tears down the session it created (no leak)", async () => {
+    const queue = setupAgentic("sess-gone");
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-new" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.session.prompt
+      .mockRejectedValueOnce({ name: "SessionNotFoundError" })
+      .mockRejectedValue({ name: "ProviderAuthError" });
+    const err = await startRun({ sessionID: "sess-gone" }).done.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    // L7: the retry-created session is torn down — nothing will bind it.
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-new" });
   });
 });

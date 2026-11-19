@@ -962,3 +962,103 @@ describe("AiStore.runAgentic (chunk 2)", () => {
     await pending.catch(() => {});
   });
 });
+
+describe("AiStore.runAgentic — chat orchestration (chunk 3)", () => {
+  /** A full AgenticRunResult for mockResolvedValue. */
+  function runResult(sessionID: string): Record<string, unknown> {
+    return {
+      text: "agentic answer",
+      model: "m-1",
+      usage: { totalTokens: 30 },
+      steps: [],
+      budgetStopped: false,
+      budgetReason: null,
+      approvals: { asked: 0, autoRejected: 0, approved: 0, rejected: 0, cancelled: 0, expired: 0 },
+      controller: {},
+      sessionID,
+      elapsedMs: 9,
+    };
+  }
+
+  it("runAgentic adopts a caller-owned ticket (chat) without settling it", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockResolvedValue(runResult("sess-adopt"));
+
+    const ticket = store.jobs.begin({ repoId: "r1", feature: "chat" });
+    const result = await store.runAgentic({
+      repoId: "r1",
+      prompt: "x",
+      feature: "chat",
+      ticket,
+      sessionID: "sess-bind",
+      model: "m-1",
+    });
+    // The session that SERVED the run is reported (retry-aware) and the
+    // caller's session binding request rode through.
+    expect(result.sessionID).toBe("sess-adopt");
+    expect(opencode.runAgentic).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "sess-bind", model: "m-1" }),
+    );
+    // Adopted: the caller owns begin + settle — the job is still active.
+    expect(store.jobs.active[ticket.id]).toBeDefined();
+    expect(store.jobs.history).toHaveLength(0);
+    ticket.done({ backend: "opencode", model: "m-1", elapsedMs: 1, usage: null, text: "out" });
+    expect(store.jobs.active[ticket.id]).toBeUndefined();
+  });
+
+  it("agentic chat persists the thread binding and reuses it (full chain)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockResolvedValue(runResult("sess-9"));
+
+    const reply = await store.sendChat({
+      repoId: "r1",
+      root: "/repo",
+      question: "What changed?",
+      context: { staged: false, commits: false, path: null, pasted: null },
+      agentic: true,
+    });
+    expect(reply.mode).toBe("agentic");
+    expect(store.chat.sessionFor("/repo")).toBe("sess-9");
+    expect(opencode.runAgentic).toHaveBeenCalledTimes(1);
+    expect(opencode.runAgentic).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: undefined, system: expect.any(String) }),
+    );
+
+    // The next agentic message reuses the binding (switch-then-prompt
+    // semantics live in the provider).
+    await store.sendChat({
+      repoId: "r1",
+      root: "/repo",
+      question: "and now?",
+      context: { staged: false, commits: false, path: null, pasted: null },
+      agentic: true,
+    });
+    expect(opencode.runAgentic).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionID: "sess-9" }),
+    );
+    expect(store.jobs.history).toHaveLength(2);
+  });
+
+  it("chat without the agentic chip rides the router (single-shot, marked)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockResolvedValue(runResult("sess-never"));
+    opencode.generate.mockResolvedValue({
+      text: "single-shot answer",
+      model: "m",
+      backend: "opencode",
+      elapsedMs: 3,
+    });
+    const reply = await store.sendChat({
+      repoId: "r1",
+      root: "/repo",
+      question: "q",
+      context: { staged: false, commits: false, path: null, pasted: null },
+    });
+    expect(reply.mode).toBe("single-shot");
+    expect(opencode.runAgentic).not.toHaveBeenCalled();
+    expect(store.chat.sessionFor("/repo")).toBeNull();
+  });
+});

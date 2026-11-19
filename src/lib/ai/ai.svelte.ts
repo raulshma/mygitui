@@ -41,6 +41,9 @@ import { defaultAiConfig, AiError, isAiError, resolveAgenticBudget, resolveOpenc
 import type { AiAgenticBudget, AiBackend, AiConfig, AiResult, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet, Unsubscribe } from "./provider";
 import { AiJobStore } from "./jobs.svelte";
+import type { AiJobTicket } from "./jobs.svelte";
+import type { AgenticRunController } from "./agenticRun.svelte";
+import { modelChoice } from "./modelChoice.svelte";
 import { ChatStore } from "./chat.svelte";
 import type { ChatContextSelection, ChatMessage } from "./chat.svelte";
 import { aiFeatureLabel, featureWantsStreaming } from "./registry";
@@ -120,10 +123,37 @@ export interface AiAgenticRunInput {
   repoId: string;
   /** The task prompt. */
   prompt: string;
-  /** Optional instructions, folded into the v2 prompt text. */
+  /** Optional instructions — folded into the text for sessions this run creates. */
   system?: string;
+  /** Per-run model override (picker choice; reused sessions switch first). */
+  model?: string;
+  /**
+   * Reuse a persistent session (chat threads bind one 1:1); absent =
+   * throwaway create+remove. A session-lost failure re-creates one and
+   * the result carries the NEW id to persist.
+   */
+  sessionID?: string;
+  /**
+   * CREATE-and-keep: with no `sessionID`, the run makes its own session
+   * and leaves it alive (the caller binds the returned id — the FIRST
+   * message of a persistent thread). The chat seam always sets this.
+   */
+  keepSession?: boolean;
   /** Which job label this run carries ("chat" now, diagnose in chunk 4). */
   feature: AiFeatureTag;
+  /**
+   * Extra observer for the run's controller (fires synchronously at
+   * dispatch — the chat uses it to mark the run as started, so post-start
+   * refusals surface honestly instead of degrading to single-shot).
+   */
+  onController?: (controller: AgenticRunController) => void;
+  /**
+   * Adopt an already-begun ticket (chat turns own their job lifecycle —
+   * begin, settle, partial text): the runner then only routes and reports;
+   * the caller settles. Absent: the runner begins and settles its own
+   * ticket (chunk 2 behavior).
+   */
+  ticket?: AiJobTicket;
 }
 
 /** Shared frozen default for {@link AiStore.peekState} reads (never mutated). */
@@ -295,6 +325,25 @@ export class AiStore {
         // and per-repo opt-in, read live so settings apply instantly.
         enabled: () => this.isEnabled(),
         isOptedIn: (repoId) => this.isOptedIn(repoId),
+        // Agentic chat (M13 chunk 3): the turn's ticket is adopted by the
+        // runner (caller owns begin + settle); the thread binds one
+        // opencode session 1:1 and the per-repo model choice applies.
+        agentic: (input) =>
+          this.runAgentic({
+            repoId: input.repoId,
+            prompt: input.prompt,
+            system: input.system,
+            model: input.model,
+            sessionID: input.sessionID,
+            // Chat threads are persistent: the FIRST agentic message
+            // creates the session and binds the returned id.
+            keepSession: true,
+            feature: "chat",
+            ticket: input.ticket,
+            onController: input.onController,
+          }),
+        deleteSession: (sessionID) => this.#removeAgenticSession(sessionID),
+        model: (repoId) => modelChoice.overrideFor(repoId),
       });
 
     // M12: opencode SSE liveness — while the server streams its event
@@ -438,8 +487,11 @@ export class AiStore {
     if (!enabled) this.jobs.cancelAll();
   }
 
-  /** True when `kind` is on (master switch AND per-feature toggle). */
-  isFeatureEnabled(kind: FeatureKind): boolean {
+  /**
+   * True when `kind` is on (master switch AND per-feature toggle). Takes
+   * the wide tag so `"chat"` reads the same per-feature fields.
+   */
+  isFeatureEnabled(kind: AiFeatureTag): boolean {
     return this.isEnabled() && this.config.features?.[kind] !== false;
   }
 
@@ -537,7 +589,7 @@ export class AiStore {
    * tool loop); an unusable server surfaces as the usual AiError. Real
    * invocations (agent chat, diagnose) wire in chunks 3/4 and call THIS.
    */
-  async runAgentic(input: AiAgenticRunInput): Promise<AiResult> {
+  async runAgentic(input: AiAgenticRunInput): Promise<AiResult & { sessionID: string }> {
     if (!this.isEnabled()) {
       throw new AiError("opt-in", "AI features are turned off in AI settings", {});
     }
@@ -557,43 +609,76 @@ export class AiStore {
       );
     }
 
-    const repoName = tabStore.tabs.find((tab) => tab.id === input.repoId)?.name ?? null;
-    const ticket = this.jobs.begin({
-      repoId: input.repoId,
-      repoName,
-      feature: input.feature,
-    });
-    ticket.phase("generating");
+    // Adopted ticket (chat turns): the caller owns begin + settle and the
+    // turn's partial text; the runner only routes and reports into it.
+    const adopt = input.ticket !== undefined;
+    const ticket = input.ticket ?? this.beginAgenticTicket(input);
+    if (!adopt) ticket.phase("generating");
     try {
       const run = await (provider as OpenCodeProvider).runAgentic({
         system: input.system,
         prompt: input.prompt,
+        model: input.model,
+        sessionID: input.sessionID,
+        keepSession: input.keepSession,
         sessionKey: input.repoId,
         signal: ticket.signal,
         onServing: (backend, model) => ticket.serving(backend, model),
         onDelta: (delta) => ticket.delta(delta),
-        onController: (controller) => this.jobs.bindAgentic(ticket.id, controller),
+        onController: (controller) => {
+          this.jobs.bindAgentic(ticket.id, controller);
+          input.onController?.(controller);
+        },
       });
-      ticket.done({
-        backend: "opencode",
-        model: run.model,
-        elapsedMs: run.elapsedMs,
-        usage: run.usage ?? null,
-        text: run.text,
-      });
+      if (!adopt) {
+        ticket.done({
+          backend: "opencode",
+          model: run.model,
+          elapsedMs: run.elapsedMs,
+          usage: run.usage ?? null,
+          text: run.text,
+        });
+      }
       return {
         text: run.text,
         model: run.model,
         backend: "opencode",
         elapsedMs: run.elapsedMs,
+        sessionID: run.sessionID,
         ...(run.usage !== undefined ? { usage: run.usage } : {}),
       };
     } catch (err) {
-      if (isAiError(err) && err.kind === "cancelled") ticket.cancelled();
-      else if (this.jobs.cancelRequested(ticket.id)) ticket.cancelled();
-      else ticket.failed(describeError(err));
+      if (!adopt) {
+        if (isAiError(err) && err.kind === "cancelled") ticket.cancelled();
+        else if (this.jobs.cancelRequested(ticket.id)) ticket.cancelled();
+        else ticket.failed(describeError(err));
+      }
       throw err;
     }
+  }
+
+  /** Begins the runner-owned ticket for one agentic run. */
+  private beginAgenticTicket(input: AiAgenticRunInput): AiJobTicket {
+    const repoName = tabStore.tabs.find((tab) => tab.id === input.repoId)?.name ?? null;
+    return this.jobs.begin({
+      repoId: input.repoId,
+      repoName,
+      feature: input.feature,
+    });
+  }
+
+  /**
+   * Best-effort removal of one persistent agentic session (a chat thread
+   * was deleted). Resolves when the server answered or the backend cannot
+   * serve sessions; the chat store swallows every failure — a dead server
+   * must never make thread deletion fail.
+   */
+  async #removeAgenticSession(sessionID: string): Promise<void> {
+    const provider = this.#supervisor.provider("opencode");
+    if (typeof (provider as { deleteAgenticSession?: unknown }).deleteAgenticSession !== "function") {
+      return;
+    }
+    await (provider as OpenCodeProvider).deleteAgenticSession(sessionID);
   }
 
   // -- feature runs -----------------------------------------------------------------
@@ -717,6 +802,8 @@ export class AiStore {
     root: string;
     question: string;
     context: ChatContextSelection;
+    /** Composer's agentic chip (per-run override). */
+    agentic?: boolean;
   }): Promise<ChatMessage> {
     const repoName = tabStore.tabs.find((tab) => tab.id === opts.repoId)?.name ?? null;
     return this.chat.send({ ...opts, repoName });
