@@ -37,8 +37,8 @@ import type { ManagedServe } from "./opencode";
 import { OpenRouterProvider } from "./openrouter";
 import { runFeature } from "./features";
 import type { AiRunHooks, FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
-import { defaultAiConfig, AiError, isAiError, resolveOpencode } from "./types";
-import type { AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
+import { defaultAiConfig, AiError, isAiError, resolveAgenticBudget, resolveOpencode } from "./types";
+import type { AiAgenticBudget, AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet, Unsubscribe } from "./provider";
 import { AiJobStore } from "./jobs.svelte";
 import { ChatStore } from "./chat.svelte";
@@ -180,6 +180,19 @@ export function parseAiConfig(raw: string | null): AiConfig {
   if (typeof obj.statusBar === "boolean" && !obj.statusBar) {
     config.statusBar = false;
   }
+  if (typeof obj.agenticBudget === "object" && obj.agenticBudget !== null) {
+    const raw = obj.agenticBudget as Record<string, unknown>;
+    const budget: AiAgenticBudget = {};
+    if (typeof raw.maxWallClockMs === "number" && raw.maxWallClockMs > 0) {
+      budget.maxWallClockMs = raw.maxWallClockMs;
+    }
+    if (typeof raw.maxToolCalls === "number" && raw.maxToolCalls > 0) {
+      budget.maxToolCalls = raw.maxToolCalls;
+    }
+    if (budget.maxWallClockMs !== undefined || budget.maxToolCalls !== undefined) {
+      config.agenticBudget = budget;
+    }
+  }
   if (typeof obj.features === "object" && obj.features !== null) {
     for (const [kind, value] of Object.entries(obj.features as Record<string, unknown>)) {
       if (typeof value === "boolean") {
@@ -245,6 +258,9 @@ export class AiStore {
           },
           url: () => this.config.opencodeUrl ?? undefined,
           defaultModel: () => this.config.opencodeModel,
+          // Agentic-run budget caps (M13), read live per run so settings
+          // changes apply without rebuilding the provider.
+          agenticBudget: () => resolveAgenticBudget(this.config),
           managed: () => (live() ? managedServeBridge : null),
           directory: opencodeDirectory,
           password: () => secretsGet(SECRET_KEYS.opencodeServerPassword),
@@ -430,6 +446,17 @@ export class AiStore {
   setStatusBarEnabled(enabled: boolean): void {
     if (enabled) delete this.config.statusBar;
     else this.config.statusBar = false;
+    this.#persist();
+  }
+
+  /**
+   * Sets the agentic-run budget caps (M13); `undefined` restores the
+   * defaults. Read live by the opencode provider per agentic run —
+   * see `resolveAgenticBudget`.
+   */
+  setAgenticBudget(budget: AiAgenticBudget | undefined): void {
+    if (budget === undefined) delete this.config.agenticBudget;
+    else this.config.agenticBudget = budget;
     this.#persist();
   }
 

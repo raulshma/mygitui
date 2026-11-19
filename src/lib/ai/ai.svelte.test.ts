@@ -11,7 +11,7 @@ import { AiStore, localServeCwd, parseAiConfig, AI_STORAGE_KEY } from "./ai.svel
 import type { AiProbeResult, AiProvider, ProviderSet } from "./provider";
 import type { FeatureGitClient } from "./features";
 import { OpenCodeProvider } from "./opencode";
-import { AiError, defaultAiConfig, resolveOpencode, resolveOpencodeMode } from "./types";
+import { AiError, defaultAiConfig, resolveAgenticBudget, resolveOpencode, resolveOpencodeMode } from "./types";
 import type { AiBackend, AiResult } from "./types";
 
 const secrets = vi.hoisted(() => ({
@@ -202,6 +202,61 @@ describe("AiStore config persistence", () => {
       JSON.stringify({ backend: "opencode", opencodeMode: "telepathy" }),
     );
     expect(unknown.opencodeMode).toBeUndefined();
+  });
+
+  it("parses the agentic budget caps, dropping invalid entries", () => {
+    const config = parseAiConfig(
+      JSON.stringify({
+        backend: "opencode",
+        agenticBudget: { maxWallClockMs: 120_000, maxToolCalls: 10 },
+      }),
+    );
+    expect(config.agenticBudget).toEqual({ maxWallClockMs: 120_000, maxToolCalls: 10 });
+
+    // Zero/negative/non-numeric caps are dropped field-by-field; an object
+    // with no valid field stays unset (defaults apply).
+    const partial = parseAiConfig(
+      JSON.stringify({ backend: "opencode", agenticBudget: { maxToolCalls: 5 } }),
+    );
+    expect(partial.agenticBudget).toEqual({ maxToolCalls: 5 });
+
+    const invalid = parseAiConfig(
+      JSON.stringify({ backend: "opencode", agenticBudget: { maxWallClockMs: 0, maxToolCalls: -1 } }),
+    );
+    expect(invalid.agenticBudget).toBeUndefined();
+
+    const garbage = parseAiConfig(
+      JSON.stringify({ backend: "opencode", agenticBudget: { maxWallClockMs: "forever" } }),
+    );
+    expect(garbage.agenticBudget).toBeUndefined();
+  });
+
+  it("resolves the agentic budget: config overrides, else the defaults", () => {
+    expect(resolveAgenticBudget(defaultAiConfig())).toEqual({
+      maxWallClockMs: 5 * 60_000,
+      maxToolCalls: 40,
+    });
+    expect(
+      resolveAgenticBudget({ ...defaultAiConfig(), agenticBudget: { maxToolCalls: 12 } }),
+    ).toEqual({ maxWallClockMs: 5 * 60_000, maxToolCalls: 12 });
+    // A stored invalid cap (parse should drop it) still resolves safely.
+    expect(
+      resolveAgenticBudget({
+        ...defaultAiConfig(),
+        agenticBudget: { maxWallClockMs: -5, maxToolCalls: 0 },
+      }),
+    ).toEqual({ maxWallClockMs: 5 * 60_000, maxToolCalls: 40 });
+  });
+
+  it("round-trips the agentic budget through storage", () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setAgenticBudget({ maxWallClockMs: 90_000, maxToolCalls: 25 });
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.config.agenticBudget).toEqual({ maxWallClockMs: 90_000, maxToolCalls: 25 });
+    second.setAgenticBudget(undefined);
+    const third = new AiStore({ storage, providers: {} });
+    expect(third.config.agenticBudget).toBeUndefined();
   });
 
   it("resolves the mode: explicit value wins, legacy URL implies attach, else managed", () => {

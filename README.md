@@ -112,8 +112,11 @@ generated output — do not commit it.
   app-wide activity log (job history + usage aggregates); six new
   features (explain commit, explain blame line, CI/workflow failure
   diagnosis, custom-action failure diagnosis, merge-conflict resolution
-  suggestions, release notes from a compare range); a master switch and
-  per-feature toggles turn all of it off
+  suggestions, release notes from a compare range); agentic runs that let
+  the model use repo tools behind a strict permission policy (read-only
+  shell allowlist, user-approved asks, `git push` denied outright) with
+  per-run budget caps; a master switch and per-feature toggles turn all
+  of it off
 - **Diff workflow**: line-granular stage/unstage/discard (gutter
   selection), blame with age heat and re-blame-at-parent
 - **Quality gates**: proptest roundtrips (hunk apply, checkpoint

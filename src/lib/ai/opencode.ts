@@ -66,8 +66,15 @@ import type {
   Unsubscribe,
 } from "./provider";
 import { subscribeOpencodeEvents, type OpencodeEventSession } from "./opencodeEvents";
+import { AgenticRunController } from "./agenticRun.svelte";
+import type {
+  AgenticApprovalSummary,
+  AgenticBudgetReason,
+  AgenticStep,
+} from "./agenticRun.svelte";
+import { buildToolPolicy } from "./toolPolicy";
 import { AiError } from "./types";
-import type { AiResult, AiUsage, ModelInfo, OpencodeResolve } from "./types";
+import type { AgenticBudget, AiResult, AiUsage, ModelInfo, OpencodeResolve } from "./types";
 import { usageFromSdk } from "./openrouter";
 import { describeError } from "$lib/errors";
 
@@ -116,6 +123,15 @@ export const HEALTH_TIMEOUT_MS = 2_000;
 export const V2_GENERATION_TIMEOUT_MS = 3 * 60_000;
 
 /**
+ * Grace added ON TOP of the agentic wall-clock budget for the last-resort
+ * backstop timeout ({@link withTimeout}): the budget controller fires the
+ * session interrupt at the cap itself, and the server confirms with
+ * `session.execution.interrupted` — the backstop only rejects when that
+ * confirmation never arrives (dead stream), so it must never fire first.
+ */
+export const V2_AGENTIC_BACKSTOP_GRACE_MS = 10_000;
+
+/**
  * v2 model-list retry budget (ms) — t3's `makeOpenCode2ModelLoader`: a
  * server loads its catalog lazily and lists nothing for its first few
  * hundred milliseconds (a managed spawn is always fresh), so an empty
@@ -135,6 +151,59 @@ export const V2_MODEL_LIST_RETRY_MS = 250;
 const V2_GENERATION_PERMISSIONS = [
   { action: "*", resource: "*", effect: "ask" },
 ] as const;
+
+/** Options for one agentic run ({@link OpenCodeProvider.runAgentic}). */
+export interface AgenticRunOptions {
+  /** System prompt (instructions); folded into the text like single-shot. */
+  system?: string;
+  /** The user prompt (task). */
+  prompt: string;
+  /** `provider/model` override; default is the configured/settings model. */
+  model?: string;
+  /**
+   * Session affinity hint (repo id) — resolves the workspace directory
+   * the same way single-shot generation does.
+   */
+  sessionKey?: string;
+  /** Cancellation. */
+  signal?: AbortSignal;
+  /**
+   * Per-run budget cap override; absent fields fall back to the
+   * provider's configured budget (itself defaulting to the `types.ts`
+   * constants).
+   */
+  budget?: Partial<AgenticBudget>;
+  /**
+   * Invoked once the run's {@link AgenticRunController} exists (before
+   * the prompt goes out) so the caller can bind its reactive state
+   * (pending approvals, steps) while the run is in flight.
+   */
+  onController?: (controller: AgenticRunController) => void;
+}
+
+/** Result of one agentic run ({@link OpenCodeProvider.runAgentic}). */
+export interface AgenticRunResult {
+  /** The generated text (partial when budget-stopped). */
+  text: string;
+  /** Model that served the run (resolved id). */
+  model: string;
+  /** Token/usage accounting when the server reports it. */
+  usage: AiUsage | undefined;
+  /** Tool calls observed, in order (id, input, executed, outcome). */
+  steps: AgenticStep[];
+  /** True when a budget cap fired and the run was interrupted. */
+  budgetStopped: boolean;
+  /** Which cap fired (`null` when the run finished normally). */
+  budgetReason: AgenticBudgetReason | null;
+  /** Approval tallies over the run (asked/auto-rejected/approved/rejected/expired). */
+  approvals: AgenticApprovalSummary;
+  /** The run's controller (reactive `pending`/`steps`; disposed at end). */
+  controller: AgenticRunController;
+  /** The opencode session the run executed in (removed at the end for now). */
+  sessionID: string;
+  /** Wall-clock round trip in milliseconds. */
+  elapsedMs: number;
+}
 
 /** Title given to sessions mygitui creates on the server. */
 export const SESSION_TITLE = "mygitui";
@@ -192,6 +261,11 @@ export interface OpenCodeOptions {
   password?: () => Promise<string | null>;
   /** Selected model id, or `undefined` to use OpenCode's server default. */
   defaultModel?: string | (() => string | null | undefined);
+  /**
+   * Resolves the agentic-run budget caps from config (M13), read live per
+   * run. Absent → the `types.ts` constants apply.
+   */
+  agenticBudget?: () => AgenticBudget | undefined;
   /** Injectable fetch (tests); defaults to `globalThis.fetch`. */
   fetchImpl?: FetchLike;
 }
@@ -958,6 +1032,129 @@ export class OpenCodeProvider implements AiProvider {
   }
 
   /**
+   * Agentic run (M13, ADR 0001): prompts on a v2 session created with the
+   * {@link buildToolPolicy} permission ceiling and forwards
+   * `permission.asked` events into a per-run {@link AgenticRunController}
+   * instead of auto-rejecting them — deny-list asks are auto-rejected by
+   * the controller, the rest queue as pending approvals for the user
+   * (120 s auto-reject each). Budget caps (wall-clock, tool calls) are
+   * enforced by the controller; a breach interrupts the session and the
+   * run settles with the partial text kept. Single-shot generation is
+   * UNCHANGED: same neutered permissions, asks rejected inline.
+   *
+   * The session is still removed at the end for now (persistent chat
+   * sessions come later — see {@link #teardownV2Session}). UI wiring and
+   * the approval cards are chunk 2; `onController` hands the caller the
+   * reactive state while the run is in flight.
+   */
+  async runAgentic(req: AgenticRunOptions): Promise<AgenticRunResult> {
+    const started = Date.now();
+    const directory = this.#options.directory?.(req.sessionKey);
+    let resolved: ResolvedOpencodeServer;
+    try {
+      resolved = await this.#resolveServer();
+    } catch (err) {
+      if (err instanceof AiError) throw err;
+      throw toAiError(err);
+    }
+    if (resolved.server.kind !== "v2") {
+      throw new AiError(
+        "unavailable",
+        "agentic runs need a 2.x opencode server — this one is 1.x",
+        { backend: "opencode" },
+      );
+    }
+
+    const configuredModel = this.#options.defaultModel;
+    const defaultModel =
+      (typeof configuredModel === "function" ? configuredModel() : configuredModel)?.trim() ||
+      undefined;
+    const model = req.model ?? defaultModel ?? "opencode/default";
+
+    const client = await this.#clientForV2(resolved.server.base);
+    const normDirectory = normalizeDirectory(directory);
+    const parsed = model === "opencode/default" ? null : parseModelSlug(model);
+    if (model !== "opencode/default" && !parsed) {
+      throw new AiError(
+        "bad-response",
+        `OpenCode model '${model}' must use provider/model format`,
+        { backend: "opencode" },
+      );
+    }
+    // v2 prompts carry no `system` field — fold it into the text.
+    const text = req.system ? `${req.system}\n\n${req.prompt}` : req.prompt;
+
+    let sessionID: string;
+    try {
+      const session = await client.session.create({
+        title: SESSION_TITLE,
+        ...(normDirectory ? { location: { directory: normDirectory } } : {}),
+        ...(parsed ? { model: { providerID: parsed.providerID, id: parsed.modelID } } : {}),
+        permissions: buildToolPolicy(),
+      });
+      sessionID = session.id;
+    } catch (err) {
+      throw v2ErrorToAiError(err, "session.create");
+    }
+
+    // Budget: per-run override > configured caps > types.ts constants
+    // (the controller fills per-field defaults for anything left unset).
+    const budget: Partial<AgenticBudget> = {
+      ...this.#options.agenticBudget?.(),
+      ...req.budget,
+    };
+    const controller = new AgenticRunController({
+      sessionID,
+      budget,
+      reply: (requestID, decision, message) =>
+        client.permission
+          .reply({
+            sessionID,
+            requestID,
+            decision,
+            message: message ?? undefined,
+          })
+          .then(() => undefined),
+      interrupt: () =>
+        client.session.interrupt({ sessionID }).then(() => undefined),
+    });
+    req.onController?.(controller);
+    controller.start();
+
+    try {
+      const { text: out, usage, budgetStopped, budgetReason } = await this.#awaitV2Execution(
+        client,
+        sessionID,
+        text,
+        req.signal,
+        undefined,
+        { controller },
+      );
+      return {
+        text: out,
+        model,
+        usage,
+        steps: [...controller.steps],
+        budgetStopped,
+        budgetReason,
+        approvals: { ...controller.summary },
+        controller,
+        sessionID,
+        elapsedMs: Date.now() - started,
+      };
+    } catch (err) {
+      if (req.signal?.aborted) {
+        throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
+      }
+      if (err instanceof AiError) throw err;
+      throw toAiError(err);
+    } finally {
+      controller.dispose();
+      await this.#teardownV2Session(client, sessionID);
+    }
+  }
+
+  /**
    * Shared generation path. `onDelta` (M13) streams on v2 servers: each
    * `session.text.ended` part is appended as it completes (parts arrive
    * one by one as the model writes). Unrecognized cumulative-update
@@ -1124,15 +1321,29 @@ export class OpenCodeProvider implements AiProvider {
     try {
       return await this.#awaitV2Execution(client, sessionID, text, req.signal, onDelta);
     } finally {
-      await client.session.remove({ sessionID }).catch(() => {});
+      await this.#teardownV2Session(client, sessionID);
     }
+  }
+
+  /**
+   * Ends a v2 run's session. Both single-shot and agentic runs use
+   * temporary sessions for now (free-tier-safe); chunk 3's persistent
+   * chat sessions will keep the session alive here instead of removing
+   * it — this is the one seam to change.
+   */
+  async #teardownV2Session(client: OpenCodeV2Client, sessionID: string): Promise<void> {
+    await client.session.remove({ sessionID }).catch(() => {});
   }
 
   /**
    * Subscribes to the v2 `/api/event` stream before prompting (the stream
    * is volatile — the reply only arrives on it), prompts, then waits for
    * this session's execution end while collecting its `session.text.ended`
-   * parts.
+   * parts. Shared machinery for BOTH modes: single-shot passes no
+   * `agentic` hooks (permission asks auto-rejected, 3-minute one-shot
+   * timeout — unchanged behavior); agentic runs pass the run's
+   * {@link AgenticRunController}, which receives permission asks and tool
+   * events, and whose budget caps shorten the backstop timeout.
    */
   async #awaitV2Execution(
     client: OpenCodeV2Client,
@@ -1140,7 +1351,13 @@ export class OpenCodeProvider implements AiProvider {
     text: string,
     signal?: AbortSignal,
     onDelta?: (delta: string) => void,
-  ): Promise<{ text: string; usage: AiUsage | undefined }> {
+    agentic?: { controller: AgenticRunController },
+  ): Promise<{
+    text: string;
+    usage: AiUsage | undefined;
+    budgetStopped: boolean;
+    budgetReason: AgenticBudgetReason | null;
+  }> {
     if (signal?.aborted) {
       throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
     }
@@ -1155,7 +1372,12 @@ export class OpenCodeProvider implements AiProvider {
       signal?.removeEventListener("abort", onAbort);
     };
 
-    const outcome = new Promise<{ text: string; usage: AiUsage | undefined }>((resolve, reject) => {
+    const outcome = new Promise<{
+      text: string;
+      usage: AiUsage | undefined;
+      budgetStopped: boolean;
+      budgetReason: AgenticBudgetReason | null;
+    }>((resolve, reject) => {
       void (async () => {
         const texts = new Map<string, string>();
         let v2Usage: AiUsage | undefined;
@@ -1165,6 +1387,11 @@ export class OpenCodeProvider implements AiProvider {
           client.session
             .prompt({ sessionID, text }, { signal: controller.signal })
             .catch((err: unknown) => {
+              // A budget-stopped run's prompt promise rejects as part of
+              // the controller's interrupt; the `execution.interrupted`
+              // event settles the run (partial text kept) — don't
+              // pre-empt that settlement with a prompt error.
+              if (agentic?.controller.budgetStopped) return;
               finish();
               reject(v2ErrorToAiError(err, "session.prompt"));
             });
@@ -1182,6 +1409,14 @@ export class OpenCodeProvider implements AiProvider {
                 break;
               }
               case "permission.asked": {
+                if (agentic) {
+                  // Agentic: asks go to the run's controller — deny-list
+                  // asks are auto-rejected there, the rest queue as
+                  // pending approvals for the user.
+                  const d = data as { id: string; action: string; resources: string[] };
+                  agentic.controller.handlePermissionAsk(d);
+                  break;
+                }
                 const d = data as { id: string; sessionID: string };
                 await client.permission
                   .reply({
@@ -1191,6 +1426,21 @@ export class OpenCodeProvider implements AiProvider {
                     message: "Tools are not available while generating text.",
                   })
                   .catch(() => {});
+                break;
+              }
+              case "session.tool.called": {
+                if (agentic) {
+                  const d = data as { id: string; input: Record<string, unknown>; executed: boolean };
+                  agentic.controller.handleToolCalled(d);
+                }
+                break;
+              }
+              case "session.tool.success":
+              case "session.tool.failed": {
+                if (agentic) {
+                  const d = data as { id: string };
+                  agentic.controller.handleToolFinished(d.id, event.type === "session.tool.success");
+                }
                 break;
               }
               case "session.execution.succeeded": {
@@ -1204,7 +1454,7 @@ export class OpenCodeProvider implements AiProvider {
                     }),
                   );
                 } else {
-                  resolve({ text: joined, usage: v2Usage });
+                  resolve({ text: joined, usage: v2Usage, budgetStopped: false, budgetReason: null });
                 }
                 return;
               }
@@ -1220,6 +1470,19 @@ export class OpenCodeProvider implements AiProvider {
                 return;
               }
               case "session.execution.interrupted": {
+                // Agentic: an interrupt fired by the budget controller
+                // settles the run as budget-stopped — partial text is
+                // kept for the caller. Any other interrupt (user abort)
+                // stays a cancellation, as in single-shot.
+                if (agentic?.controller.budgetStopped) {
+                  resolve({
+                    text: [...texts.values()].join("\n").trim(),
+                    usage: v2Usage,
+                    budgetStopped: true,
+                    budgetReason: agentic.controller.budgetReason,
+                  });
+                  return;
+                }
                 reject(new AiError("cancelled", "AI request cancelled", { backend: "opencode" }));
                 return;
               }
@@ -1243,7 +1506,13 @@ export class OpenCodeProvider implements AiProvider {
     });
 
     try {
-      return await withTimeout(outcome, V2_GENERATION_TIMEOUT_MS, () =>
+      // Agentic: the controller's wall-clock cap fires the interrupt at
+      // the cap itself, so the backstop only guards a dead confirmation —
+      // give it the cap plus grace. Single-shot keeps t3's fixed timeout.
+      const timeoutMs = agentic
+        ? agentic.controller.budget.maxWallClockMs + V2_AGENTIC_BACKSTOP_GRACE_MS
+        : V2_GENERATION_TIMEOUT_MS;
+      return await withTimeout(outcome, timeoutMs, () =>
         client.session.interrupt({ sessionID }).catch(() => {}),
       );
     } finally {

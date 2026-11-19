@@ -72,8 +72,53 @@ export interface AiConfig {
   features?: Record<string, boolean>;
   /** Show live AI job rows in the status bar; default `true`. */
   statusBar?: boolean;
+  /**
+   * Agentic-run budget caps (M13 agentic runs); absent fields fall back
+   * to {@link AGENTIC_WALL_CLOCK_MS} / {@link AGENTIC_TOOL_CALLS_MAX}.
+   */
+  agenticBudget?: AiAgenticBudget;
   /** Per-repository opt-in: AI features stay off until the user allows. */
   repoOptIn: Record<string, boolean>;
+}
+
+/**
+ * Budget caps for ONE agentic run (both enforced by the run controller:
+ * a breach fires a session interrupt and settles the run as
+ * budget-stopped — partial text is kept). Overridable so users can loosen
+ * or tighten the ceiling; the UI stays out of it.
+ */
+export interface AiAgenticBudget {
+  /** Wall-clock cap per run in milliseconds; default {@link AGENTIC_WALL_CLOCK_MS}. */
+  maxWallClockMs?: number;
+  /** Tool-call cap per run; default {@link AGENTIC_TOOL_CALLS_MAX}. */
+  maxToolCalls?: number;
+}
+
+/** Default wall-clock cap per agentic run (5 minutes). */
+export const AGENTIC_WALL_CLOCK_MS = 5 * 60_000;
+
+/** Default tool-call cap per agentic run (40 calls). */
+export const AGENTIC_TOOL_CALLS_MAX = 40;
+
+/** A fully resolved agentic budget (no optional fields). */
+export interface AgenticBudget {
+  maxWallClockMs: number;
+  maxToolCalls: number;
+}
+
+/** Resolves the effective agentic budget: config overrides, else defaults. */
+export function resolveAgenticBudget(config: AiConfig): AgenticBudget {
+  const budget = config.agenticBudget;
+  return {
+    maxWallClockMs:
+      typeof budget?.maxWallClockMs === "number" && budget.maxWallClockMs > 0
+        ? budget.maxWallClockMs
+        : AGENTIC_WALL_CLOCK_MS,
+    maxToolCalls:
+      typeof budget?.maxToolCalls === "number" && budget.maxToolCalls > 0
+        ? budget.maxToolCalls
+        : AGENTIC_TOOL_CALLS_MAX,
+  };
 }
 
 /** opencode mode used when config does not say (managed = just works). */

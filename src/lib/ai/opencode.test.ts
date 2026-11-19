@@ -30,6 +30,9 @@ import {
   __resetOpencodeClientFactories,
 } from "./opencode";
 import type { FetchLike } from "./opencode";
+import { buildToolPolicy, AGENTIC_DENY_MESSAGE } from "./toolPolicy";
+import { AGENTIC_ENDED_MESSAGE } from "./agenticRun.svelte";
+import type { AgenticRunController } from "./agenticRun.svelte";
 import { AiError } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -1403,5 +1406,369 @@ describe("OpenCodeProvider v2 generateStream (M13)", () => {
     const result = await provider.generateStream({ prompt: "hi" }, (d) => deltas.push(d));
     expect(deltas).toEqual(["v1 whole answer"]);
     expect(result.text).toBe("v1 whole answer");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agentic runs (chunk 1): policy-injected sessions + the approval/budget
+// controller wired into the shared v2 execution loop.
+// ---------------------------------------------------------------------------
+
+/** A pushable v2 event stream (tests drive the run's timeline). */
+function v2EventQueue() {
+  const queued: Array<{ type: string; data: unknown }> = [];
+  const waiters: Array<() => void> = [];
+  let closed = false;
+  const wake = (): void => waiters.splice(0).forEach((resolve) => resolve());
+  return {
+    push(type: string, data: unknown): void {
+      queued.push({ type, data });
+      wake();
+    },
+    close(): void {
+      closed = true;
+      wake();
+    },
+    stream(): AsyncGenerator<{ type: string; data: unknown }> {
+      return (async function* () {
+        for (;;) {
+          const next = queued.shift();
+          if (next !== undefined) {
+            yield next;
+            continue;
+          }
+          if (closed) return;
+          await new Promise<void>((resolve) => waiters.push(resolve));
+        }
+      })();
+    },
+  };
+}
+
+describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
+  /** Default mocks for a run that ends via `execution.succeeded`. */
+  function setupAgentic(): ReturnType<typeof v2EventQueue> {
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.session.interrupt.mockResolvedValue(undefined);
+    FAKE_V2.permission.reply.mockResolvedValue(undefined);
+    const queue = v2EventQueue();
+    FAKE_V2.event.subscribe.mockReturnValue(queue.stream());
+    return queue;
+  }
+
+  /**
+   * Starts a run and hands back a promise for its controller (resolved
+   * from `onController`, which fires mid-run — after session.create, but
+   * on pure microtasks, so plain awaits reach it even under fake timers).
+   */
+  function startRun(
+    options?: Partial<Parameters<OpenCodeProvider["runAgentic"]>[0]>,
+  ): {
+    done: ReturnType<OpenCodeProvider["runAgentic"]>;
+    controllerReady: Promise<AgenticRunController>;
+  } {
+    let resolveController: (controller: AgenticRunController) => void = () => {};
+    const controllerReady = new Promise<AgenticRunController>((resolve) => {
+      resolveController = resolve;
+    });
+    const done = makeV2Provider().runAgentic({
+      prompt: "explore the repo",
+      onController: resolveController,
+      ...options,
+    });
+    return { done, controllerReady };
+  }
+
+  it("creates the session with the tool policy and keeps single-shot neutered", async () => {
+    const queue = setupAgentic();
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "done",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    const { done, controllerReady } = startRun();
+    await controllerReady;
+    const result = await done;
+
+    expect(FAKE_V2.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: SESSION_TITLE,
+        permissions: buildToolPolicy(),
+      }),
+    );
+    expect(result.text).toBe("done");
+    expect(result.budgetStopped).toBe(false);
+    expect(result.budgetReason).toBeNull();
+    expect(result.sessionID).toBe("sess-v2");
+    expect(result.approvals).toMatchObject({ asked: 0, autoRejected: 0 });
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+    // The run is over: nothing pending, no timers left in the controller.
+    expect(result.controller.pending).toEqual([]);
+
+    // Single-shot stays neutered: the one-shot path still sends the
+    // ask-everything permission wall and rejects asks inline.
+    FAKE_V2.session.create.mockClear();
+    FAKE_V2.permission.reply.mockClear();
+    FAKE_V2.event.subscribe.mockReturnValue(v2Events({ askPermission: true }));
+    await makeV2Provider().generate({ prompt: "hi" });
+    expect(FAKE_V2.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({ permissions: [{ action: "*", resource: "*", effect: "ask" }] }),
+    );
+    expect(FAKE_V2.permission.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "reject",
+        message: "Tools are not available while generating text.",
+      }),
+    );
+  });
+
+  it("forwards permission asks to the controller and applies the user's decision", async () => {
+    const queue = setupAgentic();
+    const { done, controllerReady } = startRun();
+    const controller = await controllerReady;
+
+    queue.push("permission.asked", {
+      id: "req-1",
+      sessionID: "sess-v2",
+      action: "shell",
+      resources: ["npm test"],
+    });
+    await vi.waitFor(() => expect(controller.pending).toHaveLength(1));
+    expect(controller.pending[0]).toMatchObject({ requestID: "req-1", action: "shell" });
+
+    await controller.respond("req-1", "once", "go ahead");
+    expect(FAKE_V2.permission.reply).toHaveBeenCalledWith({
+      sessionID: "sess-v2",
+      requestID: "req-1",
+      decision: "once",
+      message: "go ahead",
+    });
+
+    queue.push("session.tool.called", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      id: "t1",
+      input: { command: "npm test" },
+      executed: true,
+    });
+    queue.push("session.tool.success", { sessionID: "sess-v2", id: "t1" });
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "tests pass",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+
+    const result = await done;
+    expect(result.text).toBe("tests pass");
+    expect(result.steps).toEqual([
+      { id: "t1", input: { command: "npm test" }, executed: true, status: "ok" },
+    ]);
+    expect(result.approvals).toMatchObject({ asked: 1, approved: 1, autoRejected: 0 });
+    expect(result.budgetStopped).toBe(false);
+    expect(FAKE_V2.session.interrupt).not.toHaveBeenCalled();
+  });
+
+  it("auto-rejects deny-list asks (git push) without surfacing them", async () => {
+    const queue = setupAgentic();
+    const { done, controllerReady } = startRun();
+    const controller = await controllerReady;
+
+    queue.push("permission.asked", {
+      id: "req-push",
+      sessionID: "sess-v2",
+      action: "shell",
+      resources: ["git push --force origin main"],
+    });
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "cannot push",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+
+    const result = await done;
+    expect(FAKE_V2.permission.reply).toHaveBeenCalledWith({
+      sessionID: "sess-v2",
+      requestID: "req-push",
+      decision: "reject",
+      message: AGENTIC_DENY_MESSAGE,
+    });
+    expect(controller.pending).toEqual([]);
+    expect(result.approvals).toMatchObject({ asked: 1, autoRejected: 1, approved: 0 });
+    expect(result.text).toBe("cannot push");
+  });
+
+  it("stops at the tool-call cap: interrupts and settles budget-stopped with partial text", async () => {
+    const queue = setupAgentic();
+    const { done, controllerReady } = startRun({ budget: { maxToolCalls: 2 } });
+    const controller = await controllerReady;
+
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "partial findings",
+    });
+    queue.push("session.tool.called", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      id: "t1",
+      input: {},
+      executed: true,
+    });
+    queue.push("session.tool.called", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      id: "t2",
+      input: {},
+      executed: true,
+    });
+    await vi.waitFor(() => expect(controller.budgetStopped).toBe(true));
+    expect(FAKE_V2.session.interrupt).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+
+    // The server confirms the interrupt: the run settles, partial text kept.
+    queue.push("session.execution.interrupted", { sessionID: "sess-v2" });
+    const result = await done;
+    expect(result.budgetStopped).toBe(true);
+    expect(result.budgetReason).toBe("tool-calls");
+    expect(result.text).toBe("partial findings");
+    expect(result.steps).toHaveLength(2);
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+  });
+
+  it("stops at the wall-clock cap (fake timers) and keeps the partial text", async () => {
+    vi.useFakeTimers();
+    try {
+      const queue = setupAgentic();
+      const { done, controllerReady } = startRun({ budget: { maxWallClockMs: 1_000 } });
+      const controller = await controllerReady;
+
+      queue.push("session.text.ended", {
+        sessionID: "sess-v2",
+        assistantMessageID: "m1",
+        ordinal: 0,
+        text: "so far",
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(controller.budgetStopped).toBe(true);
+      expect(FAKE_V2.session.interrupt).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+
+      queue.push("session.execution.interrupted", { sessionID: "sess-v2" });
+      const result = await done;
+      expect(result.budgetStopped).toBe(true);
+      expect(result.budgetReason).toBe("wall-clock");
+      expect(result.text).toBe("so far");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the configured budget for unset per-run fields", async () => {
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.session.interrupt.mockResolvedValue(undefined);
+    FAKE_V2.permission.reply.mockResolvedValue(undefined);
+    const queue = v2EventQueue();
+    FAKE_V2.event.subscribe.mockReturnValue(queue.stream());
+
+    const provider = new OpenCodeProvider({
+      fetchImpl: healthFetch(200, { v2: true }),
+      agenticBudget: () => ({ maxWallClockMs: 60_000, maxToolCalls: 3 }),
+    });
+    let resolveController: (controller: AgenticRunController) => void = () => {};
+    const controllerReady = new Promise<AgenticRunController>((resolve) => {
+      resolveController = resolve;
+    });
+    const done = provider.runAgentic({
+      prompt: "hi",
+      onController: resolveController,
+      // Only the tool-call cap is overridden per run; the wall clock comes
+      // from the configured budget, not the types.ts default.
+      budget: { maxToolCalls: 2 },
+    });
+    const controller = await controllerReady;
+    expect(controller.budget).toEqual({ maxWallClockMs: 60_000, maxToolCalls: 2 });
+
+    for (let i = 0; i < 2; i++) {
+      queue.push("session.tool.called", {
+        sessionID: "sess-v2",
+        assistantMessageID: "m1",
+        id: `t${i}`,
+        input: {},
+        executed: true,
+      });
+    }
+    queue.push("session.execution.interrupted", { sessionID: "sess-v2" });
+    const result = await done;
+    expect(result.budgetReason).toBe("tool-calls");
+  });
+
+  it("rejects agentic runs against a 1.x server", async () => {
+    const err = await new OpenCodeProvider({ fetchImpl: healthFetch(200) })
+      .runAgentic({ prompt: "hi" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AiError);
+    expect((err as AiError).kind).toBe("unavailable");
+    expect((err as AiError).message).toContain("2.x");
+  });
+
+  it("ignores events from another session (no cross-run leakage)", async () => {
+    const queue = setupAgentic();
+    const { done, controllerReady } = startRun();
+    const controller = await controllerReady;
+
+    // A foreign session's ask (deny-shaped: would be auto-rejected if it
+    // ever reached this run's controller) and tool call.
+    queue.push("permission.asked", {
+      id: "req-foreign",
+      sessionID: "sess-other",
+      action: "shell",
+      resources: ["git push origin main"],
+    });
+    queue.push("session.tool.called", {
+      sessionID: "sess-other",
+      assistantMessageID: "m1",
+      id: "t-foreign",
+      input: { command: "git push" },
+      executed: true,
+    });
+    // This run's own ask and completion.
+    queue.push("permission.asked", {
+      id: "req-ours",
+      sessionID: "sess-v2",
+      action: "shell",
+      resources: ["npm test"],
+    });
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "ok",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+
+    const result = await done;
+    // Only the run's own session's events were dispatched.
+    expect(result.approvals).toMatchObject({ asked: 1, autoRejected: 0 });
+    expect(result.steps).toEqual([]);
+    expect(FAKE_V2.permission.reply.mock.calls.every((call) => call[0].requestID !== "req-foreign")).toBe(
+      true,
+    );
+    // The run's own ask was queued (and rejected again at disposal).
+    expect(controller.pending).toEqual([]);
+    expect(FAKE_V2.permission.reply).toHaveBeenCalledWith({
+      sessionID: "sess-v2",
+      requestID: "req-ours",
+      decision: "reject",
+      message: AGENTIC_ENDED_MESSAGE,
+    });
   });
 });
