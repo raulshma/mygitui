@@ -39,7 +39,8 @@ import { runFeature } from "./features";
 import type { AiRunHooks, FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
 import { defaultAiConfig, AiError, isAiError, resolveAgenticBudget, resolveOpencode } from "./types";
 import type { AiAgenticBudget, AiBackend, AiConfig, AiResult, FeatureKind, OpencodeMode } from "./types";
-import type { ProviderSet, Unsubscribe } from "./provider";
+import type { ProviderSet, ResolvedConnection, Unsubscribe } from "./provider";
+import { STALE_AFTER_MS } from "./connection";
 import { AiJobStore } from "./jobs.svelte";
 import type { AiJobTicket } from "./jobs.svelte";
 import type { AgenticRunController } from "./agenticRun.svelte";
@@ -142,11 +143,18 @@ export interface AiAgenticRunInput {
   /** Which job label this run carries ("chat" now, diagnose in chunk 4). */
   feature: AiFeatureTag;
   /**
+   * One-shot consent ("Just once") covering THIS run without persisting
+   * the repo opt-in — same semantics as single-shot's AiRunOptions.
+   */
+  oneShot?: boolean;
+  /**
    * Extra observer for the run's controller (fires synchronously at
    * dispatch — the chat uses it to mark the run as started, so post-start
    * refusals surface honestly instead of degrading to single-shot).
    */
   onController?: (controller: AgenticRunController) => void;
+  /** Extra stream observer (the fallback helper forwards the caller's sink). */
+  onDelta?: (delta: string) => void;
   /**
    * Adopt an already-begun ticket (chat turns own their job lifecycle —
    * begin, settle, partial text): the runner then only routes and reports;
@@ -593,7 +601,9 @@ export class AiStore {
     if (!this.isEnabled()) {
       throw new AiError("opt-in", "AI features are turned off in AI settings", {});
     }
-    if (!this.isOptedIn(input.repoId)) {
+    // One-shot consent ("Just once" in the first-use dialog) covers THIS
+    // run exactly like single-shot's run() — it is never persisted.
+    if (!input.oneShot && !this.isOptedIn(input.repoId)) {
       throw new AiError(
         "opt-in",
         "AI features are not enabled for this repository — allow them when prompted or in AI settings",
@@ -624,7 +634,10 @@ export class AiStore {
         sessionKey: input.repoId,
         signal: ticket.signal,
         onServing: (backend, model) => ticket.serving(backend, model),
-        onDelta: (delta) => ticket.delta(delta),
+        onDelta: (delta) => {
+          ticket.delta(delta);
+          input.onDelta?.(delta);
+        },
         onController: (controller) => {
           this.jobs.bindAgentic(ticket.id, controller);
           input.onController?.(controller);
@@ -665,6 +678,127 @@ export class AiStore {
       repoName,
       feature: input.feature,
     });
+  }
+
+  /**
+   * Resolves the agentic connection, or `null` when an agentic run cannot
+   * be served right now: an OpenRouter-configured backend (agentic runs
+   * are opencode-only by design — this also keeps the consent copy
+   * honest, since the run can never go agentic while the copy says
+   * OpenRouter), no runAgentic capability, or no 2.x server. OpenCode
+   * probes consult the supervisor's coalesced state first (a fresh-ok
+   * 60s status skips the health check) so repeated clicks do not
+   * triple-probe.
+   */
+  async #agenticConnection(): Promise<ResolvedConnection | null> {
+    if (this.config.backend === "openrouter") return null;
+    const provider = this.#supervisor.provider("opencode");
+    if (typeof (provider as { runAgentic?: unknown }).runAgentic !== "function") {
+      return null;
+    }
+    const status = this.#supervisor.status("opencode");
+    const fresh =
+      status.status !== "unknown" &&
+      status.lastCheck !== null &&
+      Date.now() - status.lastCheck < STALE_AFTER_MS;
+    if (!fresh) await this.#supervisor.check("opencode").catch(() => {});
+    try {
+      const conn = (await provider.connection?.()) ?? null;
+      // A 1.x server answers but cannot serve agentic runs.
+      return conn !== null && conn.serverKind === "v2" ? conn : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Whether an agentic run can be served RIGHT NOW (see
+   * {@link #agenticConnection}). The diagnose views do not call this
+   * separately — {@link runAgenticWithFallback} resolves the connection
+   * itself, once per invocation.
+   */
+  async agenticAvailable(): Promise<boolean> {
+    return (await this.#agenticConnection()) !== null;
+  }
+
+  /**
+   * One agentic attempt with the ADR-0001 degrade contract for
+   * per-invocation features (diagnose views): agentic when servable; a
+   * PRE-START refusal silently falls back to the given single-shot
+   * runner; a POST-START failure (onController fired — the run dispatched)
+   * surfaces honestly instead of re-executing the request on another
+   * backend. Owns the agentic attempt's ticket (a refused attempt settles
+   * CANCELLED — nothing ran — so the fallback never leaves a failed row
+   * next to the single-shot's), wraps the attempt in the same per-repo
+   * busy slot single-shot uses, and threads one-shot consent. `mode`
+   * records what actually ran; agentic results carry the serving
+   * `sessionID` (the views' mode marker reads it).
+   */
+  async runAgenticWithFallback(input: {
+    repoId: string;
+    prompt: string;
+    system?: string;
+    model?: string;
+    feature: AiFeatureTag;
+    oneShot?: boolean;
+    onDelta?: (delta: string) => void;
+    /** A pre-resolved connection (skips the capability probe). */
+    connection?: ResolvedConnection;
+    fallback: () => Promise<AiResult>;
+  }): Promise<{ result: AiResult; mode: "agentic" | "single-shot" }> {
+    const connection = input.connection ?? (await this.#agenticConnection());
+    if (connection === null || connection.serverKind !== "v2") {
+      return { result: await input.fallback(), mode: "single-shot" };
+    }
+    // Same concurrency gate as single-shot run() (pre-chunk-4 semantics):
+    // an in-flight agentic diagnose blocks other runs for this repo.
+    const state = this.stateFor(input.repoId);
+    if (state.busy) {
+      throw new AiError("unknown", "an AI request is already running for this repository", {});
+    }
+    const ticket = this.beginAgenticTicket(input);
+    ticket.phase("generating");
+    let runStarted = false;
+    state.busy = true;
+    try {
+      const run = await this.runAgentic({
+        repoId: input.repoId,
+        prompt: input.prompt,
+        system: input.system,
+        model: input.model,
+        feature: input.feature,
+        oneShot: input.oneShot,
+        ticket,
+        onDelta: input.onDelta,
+        onController: () => {
+          runStarted = true;
+        },
+      });
+      // Clear BEFORE the ticket settles/returns — no path may leave the
+      // slot set (the single-shot fallback re-sets it itself).
+      state.busy = false;
+      ticket.done({
+        backend: "opencode",
+        model: run.model,
+        elapsedMs: run.elapsedMs,
+        usage: run.usage ?? null,
+        text: run.text,
+      });
+      return { result: { ...run }, mode: "agentic" };
+    } catch (err) {
+      // Clear before the fallback too: single-shot's ai.run refuses while
+      // the slot reads busy.
+      state.busy = false;
+      const preStart = err instanceof AiError && err.kind === "unavailable" && !runStarted;
+      if (isAiError(err) && err.kind === "cancelled") ticket.cancelled();
+      else if (this.jobs.cancelRequested(ticket.id)) ticket.cancelled();
+      else if (preStart) ticket.cancelled();
+      else ticket.failed(describeError(err));
+      if (preStart) {
+        return { result: await input.fallback(), mode: "single-shot" };
+      }
+      throw err;
+    }
   }
 
   /**

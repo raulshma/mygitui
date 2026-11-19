@@ -28,6 +28,8 @@ vi.mock("$lib/ipc/client", () => ({
     openrouterApiKey: "openrouter.api-key",
     opencodeServerPassword: "opencode.server.password",
   },
+  // Serve-registry spies (the agentic-capability gate must never spawn a
+  // server behind an OpenRouter-configured backend).
   repoDiff: vi.fn(),
   streamLog: vi.fn(),
   opencodeDetect: vi.fn(async () => ({ installed: false, path: null, version: null, major: null })),
@@ -1060,5 +1062,324 @@ describe("AiStore.runAgentic — chat orchestration (chunk 3)", () => {
     expect(reply.mode).toBe("single-shot");
     expect(opencode.runAgentic).not.toHaveBeenCalled();
     expect(store.chat.sessionFor("/repo")).toBeNull();
+  });
+});
+
+describe("AiStore.agenticAvailable / runAgenticWithFallback (chunk 4)", () => {
+  /** Wire a connection capability onto the mock provider. */
+  function withConnection(opencode: ReturnType<typeof mockProvider>, serverKind: "v1" | "v2" | "throws"): void {
+    (opencode as unknown as { connection?: unknown }).connection =
+      serverKind === "throws"
+        ? vi.fn(async () => {
+            throw new Error("down");
+          })
+        : vi.fn(async () => ({ baseUrl: "http://x", authHeader: null, serverKind }));
+  }
+
+  it("agenticAvailable probes capability + a 2.x server", async () => {
+    const { store, opencode } = makeHarness();
+    // No runAgentic capability on the provider:
+    delete (opencode as unknown as { runAgentic?: unknown }).runAgentic;
+    withConnection(opencode, "v2");
+    expect(await store.agenticAvailable()).toBe(false);
+
+    // Capability present, no connection capability (probe impossible):
+    const { store: store2, opencode: opencode2 } = makeHarness();
+    expect(await store2.agenticAvailable()).toBe(false);
+
+    // Capability + v2 server:
+    const { store: store3, opencode: opencode3 } = makeHarness();
+    withConnection(opencode3, "v2");
+    expect(await store3.agenticAvailable()).toBe(true);
+
+    // 1.x server:
+    const { store: store4, opencode: opencode4 } = makeHarness();
+    withConnection(opencode4, "v1");
+    expect(await store4.agenticAvailable()).toBe(false);
+
+    // Probe failure (server down):
+    const { store: store5, opencode: opencode5 } = makeHarness();
+    withConnection(opencode5, "throws");
+    expect(await store5.agenticAvailable()).toBe(false);
+  });
+
+  it("runAgenticWithFallback runs agentic when a v2 path exists", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withConnection(opencode, "v2");
+    opencode.runAgentic.mockResolvedValue({
+      text: "agentic diagnosis",
+      model: "m-1",
+      backend: "opencode",
+      elapsedMs: 7,
+      sessionID: "sess-t",
+    });
+    const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    const { result, mode } = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "diagnose p",
+      feature: "diagnose-workflow",
+      fallback,
+    });
+    expect(mode).toBe("agentic");
+    expect(result.text).toBe("agentic diagnosis");
+    // The mode marker rides the serving session (agentic-only field).
+    expect(result.sessionID).toBe("sess-t");
+    expect(fallback).not.toHaveBeenCalled();
+    expect(opencode.runAgentic).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "diagnose p", sessionKey: "r1" }),
+    );
+  });
+
+  it("a pre-start refusal falls back silently (single-shot runs)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withConnection(opencode, "v2");
+    // The probe passed, but the dispatch refuses pre-start (e.g. the
+    // server flipped to 1.x between the probe and the run).
+    opencode.runAgentic.mockRejectedValue(
+      new AiError("unavailable", "agentic runs need a 2.x opencode server — this one is 1.x", {
+        backend: "opencode",
+      }),
+    );
+    const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    const { result, mode } = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-action",
+      fallback,
+    });
+    expect(mode).toBe("single-shot");
+    expect(result.text).toBe("single");
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("a post-start failure surfaces honestly (no fallback re-run)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withConnection(opencode, "v2");
+    opencode.runAgentic.mockImplementation(async (req: { onController?: (c: unknown) => void }) => {
+      // A real controller: the glue binds it and snapshots its state.
+      const controller = new AgenticRunController({
+        sessionID: "sess-x",
+        reply: async () => undefined,
+        interrupt: async () => undefined,
+      });
+      req.onController?.(controller);
+      throw new AiError("unavailable", "dead stream", { backend: "opencode" });
+    });
+    const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    await expect(
+      store.runAgenticWithFallback({
+        repoId: "r1",
+        prompt: "p",
+        feature: "diagnose-workflow",
+        fallback,
+      }),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("a false probe skips the agentic attempt entirely (no doomed ticket)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withConnection(opencode, "v1");
+    const fallback = vi.fn(async (): Promise<AiResult> => ({ text: "single", model: "m", backend: "opencode", elapsedMs: 1 }));
+    const { result, mode } = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      fallback,
+    });
+    expect(mode).toBe("single-shot");
+    expect(result.text).toBe("single");
+    expect(opencode.runAgentic).not.toHaveBeenCalled();
+  });
+});
+
+describe("Agentic diagnose — fix round (chunk 4 review)", () => {
+  /** Wires a v2 connection onto the mock provider. */
+  function withV2(opencode: ReturnType<typeof mockProvider>): void {
+    (opencode as unknown as { connection?: unknown }).connection = vi.fn(async () => ({
+      baseUrl: "http://x",
+      authHeader: null,
+      serverKind: "v2" as const,
+    }));
+  }
+
+  it("one-shot consent covers an agentic diagnose run (not persisted)", async () => {
+    const { store, opencode } = makeHarness();
+    withV2(opencode);
+    opencode.runAgentic.mockResolvedValue({
+      text: "agentic diagnosis",
+      model: "m-1",
+      backend: "opencode",
+      elapsedMs: 5,
+      sessionID: "sess-t",
+    });
+    // Not opted in + "Just once": the agentic run proceeds…
+    const { result, mode } = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      oneShot: true,
+      fallback: async (): Promise<AiResult> => ({
+        text: "single",
+        model: "m",
+        backend: "opencode",
+        elapsedMs: 1,
+      }),
+    });
+    expect(mode).toBe("agentic");
+    expect(result.text).toBe("agentic diagnosis");
+    // …and the consent is NOT persisted.
+    expect(store.isOptedIn("r1")).toBe(false);
+  });
+
+  it("no one-shot consent without opt-in still refuses (unchanged)", async () => {
+    const { store, opencode } = makeHarness();
+    withV2(opencode);
+    await expect(
+      store.runAgenticWithFallback({
+        repoId: "r1",
+        prompt: "p",
+        feature: "diagnose-workflow",
+        fallback: async (): Promise<AiResult> => ({
+          text: "single",
+          model: "m",
+          backend: "opencode",
+          elapsedMs: 1,
+        }),
+      }),
+    ).rejects.toMatchObject({ kind: "opt-in" });
+    expect(opencode.runAgentic).not.toHaveBeenCalled();
+  });
+
+  it("a pre-start refusal settles the agentic ticket cancelled (one visible row)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withV2(opencode);
+    // The probe passed but the dispatch refuses pre-start (server flipped
+    // to 1.x between probe and run).
+    opencode.runAgentic.mockRejectedValue(
+      new AiError("unavailable", "agentic runs need a 2.x opencode server — this one is 1.x", {
+        backend: "opencode",
+      }),
+    );
+    // The single-shot fallback is ai.run-shaped: its own ticket, settled done.
+    const fallback = vi.fn(async (): Promise<AiResult> => {
+      const ticket = store.jobs.begin({ repoId: "r1", feature: "diagnose-workflow" });
+      ticket.done({ backend: "opencode", model: "m", elapsedMs: 2, usage: null, text: "single" });
+      return { text: "single", model: "m", backend: "opencode", elapsedMs: 2 };
+    });
+    const { mode } = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      fallback,
+    });
+    expect(mode).toBe("single-shot");
+    const statuses = store.jobs.history.map((record) => record.status).sort();
+    expect(statuses).toEqual(["cancelled", "done"]); // no "error" row
+  });
+
+  it("backend=openrouter gates the capability off (no server spawn)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setBackend("openrouter");
+    // Even with a capable provider and a v2 connection wired:
+    withV2(opencode);
+    expect(await store.agenticAvailable()).toBe(false);
+    // The managed serve registry was never touched (no spawn, no probe).
+    const ipc = await import("$lib/ipc/client");
+    expect(ipc.opencodeServeStart).not.toHaveBeenCalled();
+    expect(ipc.opencodeServeStatus).not.toHaveBeenCalled();
+  });
+
+  it("the busy slot wraps the agentic attempt and clears on every exit path", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    withV2(opencode);
+
+    // Success path:
+    opencode.runAgentic.mockResolvedValueOnce({
+      text: "ok",
+      model: "m",
+      backend: "opencode",
+      elapsedMs: 3,
+      sessionID: "sess-t",
+    });
+    await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      fallback: async (): Promise<AiResult> => ({
+        text: "single",
+        model: "m",
+        backend: "opencode",
+        elapsedMs: 1,
+      }),
+    });
+    expect(store.peekState("r1").busy).toBe(false);
+
+    // Post-start failure path:
+    opencode.runAgentic.mockImplementationOnce(async (req: { onController?: (c: unknown) => void }) => {
+      const controller = new AgenticRunController({
+        sessionID: "sess-x",
+        reply: async () => undefined,
+        interrupt: async () => undefined,
+      });
+      req.onController?.(controller);
+      throw new AiError("unavailable", "dead stream", { backend: "opencode" });
+    });
+    await expect(
+      store.runAgenticWithFallback({
+        repoId: "r1",
+        prompt: "p",
+        feature: "diagnose-workflow",
+        fallback: async (): Promise<AiResult> => ({
+          text: "single",
+          model: "m",
+          backend: "opencode",
+          elapsedMs: 1,
+        }),
+      }),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+    expect(store.peekState("r1").busy).toBe(false);
+
+    // Fallback path:
+    opencode.runAgentic.mockRejectedValueOnce(
+      new AiError("unavailable", "agentic runs need a 2.x opencode server — this one is 1.x", {
+        backend: "opencode",
+      }),
+    );
+    await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      fallback: async (): Promise<AiResult> => ({
+        text: "single",
+        model: "m",
+        backend: "opencode",
+        elapsedMs: 1,
+      }),
+    });
+    expect(store.peekState("r1").busy).toBe(false);
+
+    // Concurrency: a busy slot refuses the next run (single-shot parity).
+    store.stateFor("r1").busy = true;
+    await expect(
+      store.runAgenticWithFallback({
+        repoId: "r1",
+        prompt: "p",
+        feature: "diagnose-workflow",
+        fallback: async (): Promise<AiResult> => ({
+          text: "single",
+          model: "m",
+          backend: "opencode",
+          elapsedMs: 1,
+        }),
+      }),
+    ).rejects.toMatchObject({ kind: "unknown" });
+    store.stateFor("r1").busy = false;
   });
 });

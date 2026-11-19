@@ -43,9 +43,15 @@
   } from "./forgeModel";
   import { describeError } from "$lib/errors";
 import { ai } from "$lib/ai/ai.svelte";
+import {
+  diagnoseFailureAgenticPrompt,
+  diagnoseLogTail,
+  DIAGNOSE_AGENTIC_LOG_CHARS,
+} from "$lib/ai/features";
+import type { FeatureOutcome } from "$lib/ai/features";
 import type { AiRunOptions } from "$lib/ai/ai.svelte";
 import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
-import { aiResultMeta } from "$lib/ai/usage";
+import { aiResultMetaWithMode } from "$lib/ai/usage";
 import { emitUiEvent } from "$lib/palette/events";
 
   let {
@@ -301,8 +307,15 @@ import { emitUiEvent } from "$lib/palette/events";
   /** Cap for the log tail sent to the model (the full log can be 1.5 MB). */
   const DIAG_LOG_TAIL_CHARS = 40_000;
 
-  /** diagnose-workflow: run metadata + the loaded log's tail. */
-  function runDiagnose(opts?: AiRunOptions) {
+  /**
+   * diagnose-workflow: run metadata + the loaded log's tail. Agentic-first
+   * (chunk 4): when a 2.x opencode path is available the run executes with
+   * repo tools on a throwaway session (the agent reads the workflow, the
+   * sources it invokes and their recent history itself) and only the
+   * TRIMMED log tail rides the prompt; otherwise — and on a pre-start
+   * refusal — the single-shot path runs exactly as before.
+   */
+  async function runDiagnose(opts?: AiRunOptions): Promise<FeatureOutcome> {
     const current = run;
     const log = (logText ?? "").trim();
     if (!current || log.length === 0) {
@@ -315,12 +328,25 @@ import { emitUiEvent } from "$lib/palette/events";
       failedJobs.length > 0 ? `Failed jobs:\n${failed}` : "Failed jobs: (see log)",
     ].join("\n");
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
-    return ai.run(
-      "diagnose-workflow",
-      { repoId, runMeta: meta, diff: tail },
-      undefined,
-      opts,
+    const fallback = async (): Promise<FeatureOutcome> =>
+      ai.run("diagnose-workflow", { repoId, runMeta: meta, diff: tail }, undefined, opts);
+    if (!(await ai.agenticAvailable())) return fallback();
+    const built = diagnoseFailureAgenticPrompt(
+      "The workflow run",
+      meta,
+      diagnoseLogTail(log, DIAGNOSE_AGENTIC_LOG_CHARS),
+      "workflow",
     );
+    const { result } = await ai.runAgenticWithFallback({
+      repoId,
+      prompt: built.prompt,
+      system: built.system,
+      model: opts?.model,
+      feature: "diagnose-workflow",
+      oneShot: opts?.oneShot,
+      fallback: async () => (await fallback()).result,
+    });
+    return { kind: "diagnose-workflow", text: result.text, result };
   }
 
   function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
@@ -328,7 +354,7 @@ import { emitUiEvent } from "$lib/palette/events";
     emitUiEvent("ai-show-result", {
       title: `Diagnosis: ${current?.name ?? "workflow run"} #${current?.number ?? ""}`,
       text: outcome.text ?? outcome.result.text,
-      meta: aiResultMeta(outcome.result),
+      meta: aiResultMetaWithMode(outcome.result),
     });
   }
 

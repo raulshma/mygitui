@@ -514,7 +514,11 @@ describe("runFeature", () => {
 import {
   conflictSuggestionPrompt,
   customPromptPrompt,
+  diagnoseFailureAgenticPrompt,
   diagnoseFailurePrompt,
+  diagnoseLogTail,
+  DIAGNOSE_AGENTIC_LOG_CHARS,
+  GUARDRAILS,
   explainBlamePrompt,
   explainCommitPrompt,
   explainSelectionPrompt,
@@ -840,5 +844,88 @@ describe("custom prompt kinds (item 56)", () => {
       deps,
     );
     expect(deps.generate.mock.calls[0][0].model).toBe("picker/model");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agentic diagnose builders (chunk 4)
+// ---------------------------------------------------------------------------
+
+describe("diagnoseFailureAgenticPrompt (chunk 4)", () => {
+  it("frames the investigation: repo as workspace + repo-directed directives", () => {
+    const built = diagnoseFailureAgenticPrompt(
+      "The workflow run",
+      "Workflow: CI\nBranch: main",
+      "error: boom",
+    );
+    expect(built.system).toContain("investigating the repository directly");
+    expect(built.system).toContain(".github/workflows/");
+    expect(built.prompt).toContain("The workflow run failed. Diagnose it by investigating the repository.");
+    expect(built.prompt).toContain("- Locate and read the workflow definition that owns this run.");
+    expect(built.prompt).toContain("recent commits and blame");
+  });
+
+  it("carries the run identity, the trimmed tail (labeled an excerpt) and the guardrails", () => {
+    const built = diagnoseFailureAgenticPrompt(
+      "The action run",
+      "Action: deploy\nExit code: 1",
+      "exit status 1",
+    );
+    expect(built.prompt).toContain("The action run failed.");
+    expect(built.prompt).toContain("Action: deploy");
+    expect(built.prompt).toContain("Exit code: 1");
+    // The tail is an excerpt: the server log is not tool-readable.
+    expect(built.prompt).toContain("EXCERPT");
+    expect(built.prompt).toContain("not readable via your tools");
+    expect(built.system).toContain(GUARDRAILS);
+  });
+
+  it("reuses the single-shot output contract verbatim", () => {
+    const single = diagnoseFailurePrompt("The workflow run", "m", "t");
+    const agentic = diagnoseFailureAgenticPrompt("The workflow run", "m", "t");
+    for (const line of single.system) {
+      void line;
+    }
+    // The decisive contract sentence is byte-identical in both systems.
+    expect(agentic.system).toContain(
+      "Identify the most likely failing step and root cause, quote the decisive log lines, and suggest the next concrete fix.",
+    );
+    expect(single.system).toContain(
+      "Identify the most likely failing step and root cause, quote the decisive log lines, and suggest the next concrete fix.",
+    );
+  });
+
+  it("the action variant points at the run's command, not an app config", () => {
+    // The app-managed custom actions live in the app's storage (NOT the
+    // repo) — the agent directive must not send tools to a nonexistent
+    // config location.
+    const action = diagnoseFailureAgenticPrompt(
+      "The action run",
+      "Action: deploy\nCommand: npm run deploy",
+      "exit 1",
+      "action",
+    );
+    expect(action.system).not.toContain("actions configuration");
+    expect(action.prompt).not.toContain("actions configuration");
+    expect(action.system).toContain("the command from the run details below");
+    expect(action.prompt).toContain("the run's command (see Run details)");
+    // The workflow variant keeps the in-repo directive.
+    const workflow = diagnoseFailureAgenticPrompt("The workflow run", "m", "t", "workflow");
+    expect(workflow.system).toContain(".github/workflows/");
+    expect(workflow.system).not.toContain("actions configuration");
+  });
+
+  it("diagnoseFailurePrompt stays single-shot (no agentic framing)", () => {
+    const built = diagnoseFailurePrompt("The action run", "m", "t");
+    expect(built.system).not.toContain("investigating the repository");
+    expect(built.prompt).not.toContain("EXCERPT");
+  });
+
+  it("diagnoseLogTail trims to the cap (default = the agentic budget)", () => {
+    expect(diagnoseLogTail("short")).toBe("short");
+    const long = "x".repeat(DIAGNOSE_AGENTIC_LOG_CHARS + 5);
+    expect(diagnoseLogTail(long)).toHaveLength(DIAGNOSE_AGENTIC_LOG_CHARS);
+    expect(diagnoseLogTail(long)).toBe(long.slice(-DIAGNOSE_AGENTIC_LOG_CHARS));
+    expect(diagnoseLogTail("abcdef", 3)).toBe("def");
   });
 });

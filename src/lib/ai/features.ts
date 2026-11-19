@@ -395,6 +395,74 @@ export function diagnoseFailurePrompt(
 }
 
 /**
+ * Log-tail cap for the AGENTIC diagnose path — much tighter than
+ * single-shot's 40k: the agent's job is correlating the failure with the
+ * repository (it can read the workflow, the sources and the history via
+ * tools), not reading the whole log.
+ */
+export const DIAGNOSE_AGENTIC_LOG_CHARS = 12_000;
+
+/** Trims `log` to its last `maxChars` characters (the log tail). */
+export function diagnoseLogTail(log: string, maxChars: number = DIAGNOSE_AGENTIC_LOG_CHARS): string {
+  return log.length > maxChars ? log.slice(-maxChars) : log;
+}
+
+/**
+ * Agentic variant of {@link diagnoseFailurePrompt} (chunk 4): the run
+ * executes with repo tools on a throwaway opencode session, so the agent
+ * investigates the repository itself — reads the workflow/action
+ * definition, the sources the failing step invokes, and recent commits
+ * touching them — instead of only seeing a pasted log tail. The server
+ * log still rides the prompt as a TRIMMED excerpt (it lives in the app's
+ * forge integration, not on the repo filesystem — no tool can read it).
+ * The diagnosis output contract is reused VERBATIM from the single-shot
+ * builder so downstream rendering is unchanged.
+ */
+export function diagnoseFailureAgenticPrompt(
+  subject: string,
+  meta: string,
+  logTail: string,
+  variant: "workflow" | "action" = "workflow",
+): { system: string; prompt: string } {
+  // The definition directive is variant-specific: workflows live in the
+  // repo (.github/workflows/), but the app-managed custom ACTIONS live in
+  // the app's own storage (NOT the repo) — their agent-directive points
+  // at the run's command instead, which the repo can answer.
+  const directive =
+    variant === "action"
+      ? "Locate the command from the run details below — find where it lives in the repository and what it invokes, read those files, and check recent commits and blame on them for recent changes that could explain the failure."
+      : "Locate and read the workflow definition (e.g. under .github/workflows/), read the files and commands the failing step invokes, and check recent commits and blame on those files for recent changes that could explain the failure.";
+  const investigate =
+    variant === "action"
+      ? "- Locate where the run's command (see Run details) lives in the repository and read what it invokes."
+      : "- Locate and read the workflow definition that owns this run.";
+  return {
+    system: [
+      "You diagnose failed CI / automation runs by investigating the repository directly: the repo is your workspace for this diagnosis.",
+      directive,
+      "Identify the most likely failing step and root cause, quote the decisive log lines, and suggest the next concrete fix.",
+      "If the provided log excerpt does not contain a clear cause, say what is missing and list the most plausible candidates.",
+      "Answer in concise GitHub-flavored markdown.",
+      GUARDRAILS,
+    ].join(" "),
+    prompt: [
+      `${subject} failed. Diagnose it by investigating the repository.`,
+      "Run details:",
+      meta,
+      "Log tail (an EXCERPT — the full log lives outside the repo and is not readable via your tools; correlate it with what you find in the repository):",
+      "```",
+      logTail,
+      "```",
+      "Investigate before answering:",
+      investigate,
+      "- Read the files and commands the failing step invokes.",
+      "- Check recent commits and blame on those files for recent changes that could explain the failure.",
+      "Then produce the diagnosis.",
+    ].join("\n"),
+  };
+}
+
+/**
  * System + user prompt suggesting a resolution for ONE merge conflict:
  * the two sides plus optional surrounding content and merge hints.
  * The answer must be replacement text only — the parser strips everything

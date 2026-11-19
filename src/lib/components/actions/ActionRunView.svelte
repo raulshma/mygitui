@@ -34,7 +34,13 @@
   import { ai } from "$lib/ai/ai.svelte";
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
-  import { aiResultMeta } from "$lib/ai/usage";
+  import {
+    diagnoseFailureAgenticPrompt,
+    diagnoseLogTail,
+    DIAGNOSE_AGENTIC_LOG_CHARS,
+  } from "$lib/ai/features";
+  import type { FeatureOutcome } from "$lib/ai/features";
+  import { aiResultMetaWithMode } from "$lib/ai/usage";
   import { emitUiEvent } from "$lib/palette/events";
 
   let {
@@ -136,8 +142,15 @@
     run !== null && run.done && run.exit_code !== null && run.exit_code !== 0,
   );
 
-  /** diagnose-action: command/exit metadata + the output's tail. */
-  function runDiagnose(opts?: AiRunOptions) {
+  /**
+   * diagnose-action: command/exit metadata + the output's tail. Agentic-
+   * first (chunk 4), same contract as the workflow view: when a 2.x
+   * opencode path is available the run executes with repo tools on a
+   * throwaway session and only the TRIMMED tail rides the prompt;
+   * otherwise — and on a pre-start refusal — the single-shot path runs
+   * exactly as before.
+   */
+  async function runDiagnose(opts?: AiRunOptions): Promise<FeatureOutcome> {
     const current = run;
     if (!current) {
       return Promise.reject(new Error("the run is not loaded"));
@@ -152,12 +165,25 @@
       .filter((part): part is string => part !== null)
       .join("\n");
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
-    return ai.run(
-      "diagnose-action",
-      { repoId, runMeta: meta, diff: tail },
-      undefined,
-      opts,
+    const fallback = async (): Promise<FeatureOutcome> =>
+      ai.run("diagnose-action", { repoId, runMeta: meta, diff: tail }, undefined, opts);
+    if (!(await ai.agenticAvailable())) return fallback();
+    const built = diagnoseFailureAgenticPrompt(
+      "The action run",
+      meta,
+      diagnoseLogTail(log, DIAGNOSE_AGENTIC_LOG_CHARS),
+      "action",
     );
+    const { result } = await ai.runAgenticWithFallback({
+      repoId,
+      prompt: built.prompt,
+      system: built.system,
+      model: opts?.model,
+      feature: "diagnose-action",
+      oneShot: opts?.oneShot,
+      fallback: async () => (await fallback()).result,
+    });
+    return { kind: "diagnose-action", text: result.text, result };
   }
 
   function onDiagnose(outcome: import("$lib/ai/features").FeatureOutcome): void {
@@ -165,7 +191,7 @@
     emitUiEvent("ai-show-result", {
       title: `Diagnosis: ${current?.name ?? "action run"}`,
       text: outcome.text ?? outcome.result.text,
-      meta: aiResultMeta(outcome.result),
+      meta: aiResultMetaWithMode(outcome.result),
     });
   }
 </script>

@@ -55,3 +55,16 @@ export function aiResultMeta(result: Pick<AiResult, "model" | "backend" | "elaps
   if (usage !== null) parts.push(usage);
   return parts.join(" · ");
 }
+
+/**
+ * The result footer with the run-mode marker (chunk 4): agentic runs
+ * report the opencode session that served them (`AiResult.sessionID`) —
+ * prefixed "agentic ·"; single-shot runs render exactly as before. Same
+ * convention as the chat turn meta.
+ */
+export function aiResultMetaWithMode(
+  result: Pick<AiResult, "model" | "backend" | "elapsedMs" | "usage" | "sessionID">,
+): string {
+  const base = aiResultMeta(result);
+  return result.sessionID !== undefined ? `agentic · ${base}` : base;
+}
