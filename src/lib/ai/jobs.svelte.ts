@@ -29,6 +29,13 @@
 
 import { loadVersioned, writeEnvelope } from "$lib/state/persist";
 import type { StorageLike } from "$lib/state/persist";
+import { agenticStepViews } from "./agenticRun.svelte";
+import type {
+  AgenticApprovalSummary,
+  AgenticBudgetReason,
+  AgenticRunController,
+  AgenticStepView,
+} from "./agenticRun.svelte";
 import type { AiBackend, AiJobPhase, AiUsage } from "./types";
 import type { AiFeatureTag } from "./registry";
 
@@ -37,6 +44,20 @@ export type { AiJobPhase, AiUsage } from "./types";
 
 /** Terminal status of a history record. */
 export type AiJobStatus = "done" | "cancelled" | "error";
+
+/** Cap for a stored/live agentic transcript (newest steps kept). */
+export const JOB_AGENTIC_STEP_CAP = 50;
+
+/**
+ * Live agentic runtime attached to an in-flight job (agentic runs only,
+ * bound via {@link AiJobStore.bindAgentic} once the run's session exists).
+ * The controller's reactive state (`pending`, `steps`, `summary`,
+ * `budgetStopped`) is read THROUGH this reference by the transcript and
+ * approval cards — no copies, so cards update as controller events fire.
+ */
+export interface AiJobAgentic {
+  controller: AgenticRunController;
+}
 
 /** One in-flight AI run (reactive; mutate only via {@link AiJobTicket}). */
 export interface AiJob {
@@ -57,6 +78,8 @@ export interface AiJob {
   model: string | null;
   usage: AiUsage | null;
   error: string | null;
+  /** Live agentic runtime; `null` until the run's session exists. */
+  agentic: AiJobAgentic | null;
 }
 
 /** One finished AI run (frozen summary; the Activity tab's rows). */
@@ -78,6 +101,23 @@ export interface AiJobRecord {
   text: string | null;
   /** Start of the prompt (what was sent), capped at {@link JOB_PROMPT_PREVIEW_CAP}. */
   promptPreview: string | null;
+  /**
+   * Agentic transcript snapshot (agentic runs only; `null` otherwise):
+   * capped step views, approval tallies and the budget outcome.
+   */
+  agentic: AiJobRecordAgentic | null;
+}
+
+/** Frozen agentic outcome stored on a history record. */
+export interface AiJobRecordAgentic {
+  /** Transcript rows, oldest first, capped at {@link JOB_AGENTIC_STEP_CAP}. */
+  steps: AgenticStepView[];
+  /** Approval tallies over the run (asked/auto-rejected/approved/rejected/expired). */
+  approvals: AgenticApprovalSummary;
+  /** True when a budget cap fired and the run was interrupted. */
+  budgetStopped: boolean;
+  /** Which cap fired (`null` when the run finished normally). */
+  budgetReason: AgenticBudgetReason | null;
 }
 
 /** localStorage key for the capped history envelope. */
@@ -99,6 +139,55 @@ export interface AiJobStoreDeps {
   id?: () => string;
   /** Epoch-ms clock (tests). */
   now?: () => number;
+}
+
+/** Parse-and-drop validation for one history record's agentic snapshot. */
+function parseAgenticRecord(raw: unknown): AiJobRecordAgentic | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.steps)) return null;
+  const STATUSES: readonly string[] = ["called", "ok", "failed"];
+  const steps: AgenticStepView[] = r.steps
+    .filter((step): step is Record<string, unknown> => typeof step === "object" && step !== null)
+    // A step without a usable id cannot key the history list's {#each}
+    // (two id-less steps collide the "" key and crash Svelte's keyed
+    // each) — drop it, same parse-survives style as the object filter.
+    .filter((step): step is Record<string, unknown> & { id: string } => {
+      // A step without a usable id cannot key the history list's {#each}
+      // (two id-less steps collide the "" key and crash Svelte's keyed
+      // each) — drop it, same parse-survives style as the object filter.
+      return typeof step.id === "string" && step.id.length > 0;
+    })
+    .map((step) => ({
+      id: step.id,
+      tool: typeof step.tool === "string" && step.tool.length > 0 ? step.tool : "tool",
+      args: typeof step.args === "string" ? step.args : "",
+      status: STATUSES.includes(step.status as string)
+        ? (step.status as AgenticStepView["status"])
+        : "called",
+      at: typeof step.at === "number" && Number.isFinite(step.at) ? step.at : 0,
+    }))
+    .slice(0, JOB_AGENTIC_STEP_CAP);
+  const approvals =
+    typeof r.approvals === "object" && r.approvals !== null
+      ? (r.approvals as Record<string, unknown>)
+      : {};
+  const tally = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  return {
+    steps,
+    approvals: {
+      asked: tally(approvals.asked),
+      autoRejected: tally(approvals.autoRejected),
+      approved: tally(approvals.approved),
+      rejected: tally(approvals.rejected),
+      cancelled: tally(approvals.cancelled),
+      expired: tally(approvals.expired),
+    },
+    budgetStopped: r.budgetStopped === true,
+    budgetReason:
+      r.budgetReason === "wall-clock" || r.budgetReason === "tool-calls" ? r.budgetReason : null,
+  };
 }
 
 /** Parse-and-drop validation for persisted history. */
@@ -136,6 +225,7 @@ export function parseJobHistory(data: unknown): AiJobRecord[] | null {
       text: typeof r.text === "string" ? cap(r.text, JOB_TEXT_CAP) : null,
       promptPreview:
         typeof r.promptPreview === "string" ? cap(r.promptPreview, JOB_PROMPT_PREVIEW_CAP) : null,
+      agentic: parseAgenticRecord(r.agentic),
     });
   }
   return records.slice(0, JOB_HISTORY_CAP);
@@ -241,6 +331,7 @@ export class AiJobStore {
       model: null,
       usage: null,
       error: null,
+      agentic: null,
     };
     this.active[id] = job;
     const controller = new AbortController();
@@ -315,11 +406,27 @@ export class AiJobStore {
   /**
    * User-initiated cancel: aborts the ticket's signal and flags the job.
    * The runner observes the abort through its provider and reports the
-   * terminal transition (`cancelled()`).
+   * terminal transition (`cancelled()`). For agentic runs the provider's
+   * abort path fires the session interrupt, and the controller's dispose
+   * rejects anything still pending — the run settles with its partial
+   * text (the streamed deltas) kept.
    */
   cancel(jobId: string): void {
     this.#cancelRequested.add(jobId);
     this.#controllers.get(jobId)?.abort();
+  }
+
+  /**
+   * Binds a started agentic run's controller to its job — the live source
+   * the transcript, approval cards and budget indicator read through.
+   * Called from the run glue's `onController` callback (the controller
+   * only exists once the run's session has been created). Ignored for an
+   * already-finished job.
+   */
+  bindAgentic(jobId: string, controller: AgenticRunController): void {
+    const job = this.active[jobId];
+    if (job === undefined || job.agentic !== null) return;
+    job.agentic = { controller };
   }
 
   /** Cancels every active job (master switch off, repo closed, …). */
@@ -419,6 +526,18 @@ export class AiJobStore {
       // would blow past the localStorage quota uncapped.
       text: fields.text === null ? null : cap(fields.text, JOB_TEXT_CAP),
       promptPreview: this.#prompts.get(id) ?? null,
+      // Frozen snapshot: the live controller dies with the run, so the
+      // history record carries capped step views + tallies, never the
+      // reactive reference.
+      agentic:
+        job.agentic === null
+          ? null
+          : {
+              steps: agenticStepViews(job.agentic.controller.steps, JOB_AGENTIC_STEP_CAP),
+              approvals: { ...job.agentic.controller.summary },
+              budgetStopped: job.agentic.controller.budgetStopped,
+              budgetReason: job.agentic.controller.budgetReason,
+            },
     };
     this.#prompts.delete(id);
     this.history = [record, ...this.history].slice(0, JOB_HISTORY_CAP);

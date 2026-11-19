@@ -781,7 +781,12 @@
             >{aiFeatureLabel(row.job.feature)}</span
           >
           <span class="min-w-0 flex-1 truncate text-left">
-            {row.job.message ?? aiPhaseLabel(row.job.phase) ?? "working"}
+            {row.job.message ?? aiPhaseLabel(row.job.phase) ?? "working"}{#if row.job.agentic !==
+              null &&
+              row.job.agentic.controller.pending.length > 0} ·
+            {row.job.agentic.controller.pending.length} approval{row.job.agentic.controller.pending.length === 1
+              ? ""
+              : "s"} needed{/if}
           </span>
           <span class="flex-none tabular-nums">{aiElapsedLabel(now - row.job.startedAt)}</span>
         </button>

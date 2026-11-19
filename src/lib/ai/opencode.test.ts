@@ -1567,7 +1567,7 @@ describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
     const result = await done;
     expect(result.text).toBe("tests pass");
     expect(result.steps).toEqual([
-      { id: "t1", input: { command: "npm test" }, executed: true, status: "ok" },
+      { id: "t1", input: { command: "npm test" }, executed: true, status: "ok", at: expect.any(Number) },
     ]);
     expect(result.approvals).toMatchObject({ asked: 1, approved: 1, autoRejected: 0 });
     expect(result.budgetStopped).toBe(false);
@@ -1718,6 +1718,76 @@ describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
     expect(err).toBeInstanceOf(AiError);
     expect((err as AiError).kind).toBe("unavailable");
     expect((err as AiError).message).toContain("2.x");
+  });
+
+  it("reports the resolved model via onServing (null for the server default)", async () => {
+    const queue = setupAgentic();
+    const serving: Array<[string, string | null]> = [];
+    const { done, controllerReady } = startRun({
+      model: "anthropic/claude-sonnet-4-5",
+      onServing: (backend, model) => serving.push([backend, model]),
+    });
+    await controllerReady;
+    queue.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "x",
+    });
+    queue.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    await done;
+    expect(serving).toEqual([["opencode", "anthropic/claude-sonnet-4-5"]]);
+
+    const queue2 = setupAgentic();
+    const serving2: Array<[string, string | null]> = [];
+    const { done: done2, controllerReady: ready2 } = startRun({
+      onServing: (backend, model) => serving2.push([backend, model]),
+    });
+    await ready2;
+    queue2.push("session.text.ended", {
+      sessionID: "sess-v2",
+      assistantMessageID: "m1",
+      ordinal: 0,
+      text: "y",
+    });
+    queue2.push("session.execution.succeeded", { sessionID: "sess-v2" });
+    await done2;
+    expect(serving2).toEqual([["opencode", null]]);
+  });
+
+  it("fires the session interrupt when the run's signal aborts (user cancel)", async () => {
+    // The real client's event stream throws when its abort signal fires;
+    // mirror that here so the abort path (not a stream end) is exercised.
+    FAKE_V2.session.create.mockResolvedValue({ id: "sess-v2" });
+    FAKE_V2.session.prompt.mockResolvedValue({ id: "msg-1" });
+    FAKE_V2.session.remove.mockResolvedValue(undefined);
+    FAKE_V2.session.interrupt.mockResolvedValue(undefined);
+    FAKE_V2.permission.reply.mockResolvedValue(undefined);
+    FAKE_V2.event.subscribe.mockImplementationOnce(({ signal }: { signal?: AbortSignal }) => {
+      return (async function* () {
+        await new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      })();
+    });
+
+    const abort = new AbortController();
+    let resolveController: (controller: AgenticRunController) => void = () => {};
+    const controllerReady = new Promise<AgenticRunController>((resolve) => {
+      resolveController = resolve;
+    });
+    const done = makeV2Provider().runAgentic({
+      prompt: "explore",
+      signal: abort.signal,
+      onController: resolveController,
+    });
+    await controllerReady;
+    abort.abort();
+
+    await expect(done).rejects.toMatchObject({ kind: "cancelled" });
+    // The cancel fired the server-side interrupt, then cleaned the session up.
+    expect(FAKE_V2.session.interrupt).toHaveBeenCalledWith({ sessionID: "sess-v2" });
+    expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-v2" });
   });
 
   it("ignores events from another session (no cross-run leakage)", async () => {

@@ -80,6 +80,9 @@ function mockProvider(id: AiBackend, probe: AiProbeResult = { status: "ok" }) {
     probe,
     available: vi.fn(async () => provider.probe.status !== "down"),
     check: vi.fn(async () => provider.probe),
+    // Agentic runs (chunk 2) feature-detect this method; tests stub it
+    // per-test via mockResolvedValue/mockImplementation.
+    runAgentic: vi.fn(),
     listModels: vi.fn(async () => [{ id: `${id}/model-a`, label: id }]),
     generate: vi.fn(async (_req?: { model?: string }): Promise<AiResult> => ({
       text: "feat(ui): add the thing\n\nIt was missing.",
@@ -775,5 +778,187 @@ describe("AiStore streaming preference (registry-driven)", () => {
     await store.run("review-staged", { repoId: "r1" }, git);
     expect(stream).toHaveBeenCalledTimes(1);
     expect(opencode.generate).toHaveBeenCalledTimes(1); // unchanged
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agentic runs (chunk 2): job-bound live runtime via AiStore.runAgentic
+// ---------------------------------------------------------------------------
+
+import { AgenticRunController } from "./agenticRun.svelte";
+import type { AgenticRunResult } from "./opencode";
+
+/** A fake runAgentic result (the shape the provider's method returns). */
+function fakeResult(controller: AgenticRunController, overrides?: Partial<AgenticRunResult>): AgenticRunResult {
+  return {
+    text: "done",
+    model: "opencode-model",
+    usage: { totalTokens: 30 },
+    steps: [...controller.steps],
+    budgetStopped: false,
+    budgetReason: null,
+    approvals: { ...controller.summary },
+    controller,
+    sessionID: "sess-1",
+    elapsedMs: 42,
+    ...overrides,
+  };
+}
+
+describe("AiStore.runAgentic (chunk 2)", () => {
+  it("refuses without opt-in and without the master switch (same gates as run)", async () => {
+    const { store } = makeHarness();
+    await expect(
+      store.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" }),
+    ).rejects.toMatchObject({ kind: "opt-in" });
+
+    const { store: disabled } = makeHarness();
+    disabled.setOptIn("r1", true);
+    disabled.setEnabled(false);
+    await expect(
+      disabled.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" }),
+    ).rejects.toMatchObject({ kind: "opt-in" });
+  });
+
+  it("refuses when the opencode provider cannot serve agentic runs", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    // Strip the capability (an OpenRouter-like provider): feature-detect
+    // routes the refusal BEFORE a job starts.
+    delete (opencode as unknown as { runAgentic?: unknown }).runAgentic;
+    await expect(
+      store.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" }),
+    ).rejects.toMatchObject({ kind: "unavailable" });
+    expect(store.jobs.history).toHaveLength(0);
+  });
+
+  it("starts a job, binds the controller, streams deltas and settles done", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockImplementation(
+      async (req: { onController?: (c: AgenticRunController) => void; onDelta?: (d: string) => void }) => {
+        const controller = new AgenticRunController({
+          sessionID: "sess-1",
+          reply: async () => undefined,
+          interrupt: async () => undefined,
+        });
+        req.onController?.(controller);
+        controller.handleToolCalled({ id: "t1", input: { command: "git status" }, executed: true });
+        controller.handleToolFinished("t1", true);
+        req.onDelta?.("partial ");
+        req.onDelta?.("answer");
+        return fakeResult(controller, { text: "partial answer" });
+      },
+    );
+    const result = await store.runAgentic({ repoId: "r1", prompt: "explore", feature: "chat" });
+    expect(result).toMatchObject({
+      text: "partial answer",
+      backend: "opencode",
+      model: "opencode-model",
+    });
+    // The run was served as a first-class job with the agentic snapshot.
+    const record = store.jobs.history[0];
+    expect(record).toMatchObject({
+      repoId: "r1",
+      feature: "chat",
+      status: "done",
+      backend: "opencode",
+      model: "opencode-model",
+      text: "partial answer",
+    });
+    expect(record?.agentic?.steps).toEqual([
+      expect.objectContaining({ id: "t1", tool: "shell", args: "git status", status: "ok" }),
+    ]);
+    expect(record?.usage).toMatchObject({ totalTokens: 30 });
+    expect(store.jobs.activeJob("r1", "chat")).toBeNull();
+  });
+
+  it("cancel settles the job as cancelled with the partial text kept", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockImplementation(
+      async (req: {
+        signal?: AbortSignal;
+        onController?: (c: AgenticRunController) => void;
+        onDelta?: (d: string) => void;
+      }) => {
+        const controller = new AgenticRunController({
+          sessionID: "sess-1",
+          reply: async () => undefined,
+          interrupt: async () => undefined,
+        });
+        req.onController?.(controller);
+        req.onDelta?.("partial before cancel");
+        // The user cancels through the store (status-bar/panel path); the
+        // provider reacts to the abort by settling cancelled.
+        const job = store.jobs.activeJob("r1", "chat");
+        store.jobs.cancel(job!.id);
+        await new Promise<void>((resolve) => {
+          if (req.signal?.aborted) resolve();
+          else req.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
+      },
+    );
+    await expect(
+      store.runAgentic({ repoId: "r1", prompt: "explore", feature: "chat" }),
+    ).rejects.toMatchObject({ kind: "cancelled" });
+    const record = store.jobs.history[0];
+    expect(record).toMatchObject({ status: "cancelled", text: "partial before cancel" });
+    expect(record?.agentic).not.toBeNull();
+  });
+
+  it("failures land in the job record with the safe error message", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    opencode.runAgentic.mockRejectedValue(new AiError("bad-response", "opencode exploded", {}));
+    await expect(
+      store.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" }),
+    ).rejects.toMatchObject({ kind: "bad-response" });
+    expect(store.jobs.history[0]).toMatchObject({
+      status: "error",
+      error: "opencode exploded",
+    });
+  });
+
+  it("the bound controller is reachable through the live job while running", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    opencode.runAgentic.mockImplementation(
+      async (req: {
+        signal?: AbortSignal;
+        onServing?: (backend: string, model: string | null) => void;
+        onController?: (c: AgenticRunController) => void;
+      }) => {
+        const controller = new AgenticRunController({
+          sessionID: "sess-1",
+          reply: async () => undefined,
+          interrupt: async () => undefined,
+        });
+        req.onServing?.("opencode", "opencode-model");
+        req.onController?.(controller);
+        controller.handlePermissionAsk({
+          id: "ask-1",
+          action: "shell",
+          resources: ["npm test"],
+        });
+        await gate;
+        return fakeResult(controller);
+      },
+    );
+    const pending = store.runAgentic({ repoId: "r1", prompt: "x", feature: "chat" });
+    // Give the glue a tick to begin the job, then assert the live state.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const job = store.jobs.activeJob("r1", "chat");
+    expect(job?.agentic?.controller.pending).toHaveLength(1);
+    // The serving seam feeds the live row's "via <model>" like single-shot.
+    expect(job?.model).toBe("opencode-model");
+    expect(store.jobs.activeJob("r1", "chat")).not.toBeNull();
+    (release as unknown as (() => void) | undefined)?.();
+    await pending.catch(() => {});
   });
 });

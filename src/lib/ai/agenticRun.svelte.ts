@@ -39,6 +39,8 @@ export interface AgenticApproval {
   resources: string[];
   /** Epoch ms when the ask arrived. */
   askedAt: number;
+  /** Human ask copy from the server (`permission.asked` data `message`), when present. */
+  message: string | null;
 }
 
 /** Which budget cap fired (both settle the run as budget-stopped). */
@@ -46,7 +48,7 @@ export type AgenticBudgetReason = "wall-clock" | "tool-calls";
 
 /** Running totals over one run's approval asks (result summary). */
 export interface AgenticApprovalSummary {
-  /** Total asks seen (auto-rejected, approved, rejected and expired). */
+  /** Total asks seen (the buckets below should add up to this). */
   asked: number;
   /** Deny-list asks rejected without surfacing. */
   autoRejected: number;
@@ -54,13 +56,24 @@ export interface AgenticApprovalSummary {
   approved: number;
   /** Asks the user explicitly rejected. */
   rejected: number;
+  /** Asks rejected because the run ended (dispose / budget stop / cancel). */
+  cancelled: number;
   /** Asks that hit the {@link AGENTIC_ASK_TIMEOUT_MS} auto-reject. */
   expired: number;
 }
 
 function freshApprovalSummary(): AgenticApprovalSummary {
-  return { asked: 0, autoRejected: 0, approved: 0, rejected: 0, expired: 0 };
+  return { asked: 0, autoRejected: 0, approved: 0, rejected: 0, cancelled: 0, expired: 0 };
 }
+
+/**
+ * Outcome of one {@link AgenticRunController.respond} call: `"handled"`
+ * (reply delivered, ask resolved), `"stale"` (unknown/expired id — the
+ * UI only renders pending cards, so this is a stale-click guard), or
+ * `"reply-failed"` (the POST did not reach the server — the ask stays
+ * pending with a re-armed timer and the card offers a retry).
+ */
+export type AgenticRespondResult = "handled" | "stale" | "reply-failed";
 
 /** One observed tool call (`session.tool.called` → result events). */
 export interface AgenticStep {
@@ -72,6 +85,8 @@ export interface AgenticStep {
   executed: boolean;
   /** Outcome once the matching success/failed event arrived. */
   status: "ok" | "failed" | null;
+  /** Epoch ms the call was observed (transcript timestamps). */
+  at: number;
 }
 
 /** Injectable timer surface (tests; defaults to the globals). */
@@ -180,6 +195,29 @@ export class AgenticRunController {
   }
 
   /**
+   * Budget-state snapshot for the in-card indicator (tool calls vs cap,
+   * elapsed vs wall clock). `elapsedMs` is 0 until {@link start} armed
+   * the run clock.
+   */
+  budgetView(nowMs: number): {
+    toolCalls: number;
+    maxToolCalls: number;
+    elapsedMs: number;
+    maxWallClockMs: number;
+    budgetStopped: boolean;
+    budgetReason: AgenticBudgetReason | null;
+  } {
+    return {
+      toolCalls: this.steps.length,
+      maxToolCalls: this.#budget.maxToolCalls,
+      elapsedMs: this.startedAt > 0 ? Math.max(0, nowMs - this.startedAt) : 0,
+      maxWallClockMs: this.#budget.maxWallClockMs,
+      budgetStopped: this.budgetStopped,
+      budgetReason: this.budgetReason,
+    };
+  }
+
+  /**
    * Arms the run-level wall-clock cap. Called once the prompt is about to
    * go out; a breach fires {@link interrupt} and settles budget-stopped.
    */
@@ -198,7 +236,12 @@ export class AgenticRunController {
    * Once budget-stopped, late asks are rejected immediately — the run is
    * over and nothing new should block on the user.
    */
-  handlePermissionAsk(data: { id: string; action: string; resources: string[] }): void {
+  handlePermissionAsk(data: {
+    id: string;
+    action: string;
+    resources: string[];
+    message?: string;
+  }): void {
     // Duplicate deliveries of the same request id (redelivered SSE events)
     // must not double-count or overwrite the id's ask timer.
     if (this.#seenAsks.has(data.id)) return;
@@ -211,6 +254,7 @@ export class AgenticRunController {
     }
     if (this.budgetStopped || this.#disposed) {
       // Run already settling: reject so the server is never left hanging.
+      this.summary.cancelled += 1;
       void this.#reply(data.id, "reject", AGENTIC_ENDED_MESSAGE).catch(() => {});
       return;
     }
@@ -219,40 +263,52 @@ export class AgenticRunController {
       action: data.action,
       resources: data.resources,
       askedAt: this.#now(),
+      message: data.message ?? null,
     };
     this.pending.push(approval);
-    this.#askTimers.set(
-      data.id,
-      this.#timers.set(() => {
-        void this.#expire(data.id);
-      }, AGENTIC_ASK_TIMEOUT_MS),
-    );
+    this.#armAskTimer(data.id);
   }
 
   /**
-   * Applies the user's decision to one pending ask: clears its timer,
-   * removes it from `pending`, POSTs the reply (which resolves the
-   * server's awaiting execution), and records the outcome. Returns
-   * `false` for unknown/expired requests (the UI only renders pending
+   * Applies the user's decision to one pending ask. The reply POST is
+   * awaited BEFORE the ask leaves `pending`: a failed reply (transient
+   * server error) keeps the ask queued — the server is still awaiting a
+   * decision — re-arms its 120 s timer and returns `"reply-failed"` so
+   * the card offers a retry; the tally counts only on success. Returns
+   * `"stale"` for unknown/expired requests (the UI only renders pending
    * cards, so this is a stale-click guard) — no reply is sent then.
    */
   async respond(
     requestID: string,
     decision: AgenticDecision,
     message?: string | null,
-  ): Promise<boolean> {
+  ): Promise<AgenticRespondResult> {
     const index = this.pending.findIndex((approval) => approval.requestID === requestID);
-    if (index === -1) return false;
+    if (index === -1) return "stale";
+    // Pause the ask's timer while the reply is in flight — it cannot
+    // expire mid-POST, and a failed reply re-arms it fresh below.
     const handle = this.#askTimers.get(requestID);
     if (handle !== undefined) {
       this.#timers.clear(handle);
       this.#askTimers.delete(requestID);
     }
-    this.pending.splice(index, 1);
+    let replyOk = true;
+    try {
+      await this.#reply(requestID, decision, message ?? null);
+    } catch {
+      replyOk = false;
+    }
+    if (!replyOk) {
+      this.#armAskTimer(requestID);
+      return "reply-failed";
+    }
+    // Re-find by id: the queue may have shifted during the await (another
+    // ask resolved, or the run settled and cleared it).
+    const settled = this.pending.findIndex((approval) => approval.requestID === requestID);
+    if (settled !== -1) this.pending.splice(settled, 1);
     if (decision === "reject") this.summary.rejected += 1;
     else this.summary.approved += 1;
-    await this.#reply(requestID, decision, message ?? null);
-    return true;
+    return "handled";
   }
 
   /** Entry point for `session.tool.called` events (budget counter + log). */
@@ -263,6 +319,7 @@ export class AgenticRunController {
       input: data.input,
       executed: data.executed,
       status: null,
+      at: this.#now(),
     });
     if (this.steps.length >= this.#budget.maxToolCalls) {
       this.#stopForBudget("tool-calls");
@@ -295,12 +352,22 @@ export class AgenticRunController {
         this.#askTimers.delete(approval.requestID);
       }
       this.pending.splice(0, 1);
-      this.summary.expired += 1;
+      this.summary.cancelled += 1;
       void this.#reply(approval.requestID, "reject", AGENTIC_ENDED_MESSAGE).catch(() => {});
     }
   }
 
   // -- internals ----------------------------------------------------------------
+
+  /** Arms (or re-arms) one ask's 120 s auto-reject timer. */
+  #armAskTimer(requestID: string): void {
+    this.#askTimers.set(
+      requestID,
+      this.#timers.set(() => {
+        void this.#expire(requestID);
+      }, AGENTIC_ASK_TIMEOUT_MS),
+    );
+  }
 
   /** Auto-rejects one ask whose 120 s timer fired. */
   async #expire(requestID: string): Promise<void> {
@@ -336,10 +403,110 @@ export class AgenticRunController {
         this.#askTimers.delete(approval.requestID);
       }
       this.pending.splice(0, 1);
-      this.summary.expired += 1;
+      this.summary.cancelled += 1;
       void this.#reply(approval.requestID, "reject", AGENTIC_ENDED_MESSAGE).catch(() => {});
     }
     void this.#interrupt().catch(() => {});
     this.#onBudgetStop?.(reason);
   }
+}
+
+// -- transcript views ----------------------------------------------------------
+
+/** Cap for the live transcript window (newest steps kept, oldest dropped). */
+export const AGENTIC_STEP_WINDOW = 50;
+
+/**
+ * One transcript row (display-ready). The v2 tool-call event carries no
+ * tool NAME — only a raw input — so `tool` is a best-effort label derived
+ * from the input shape, and `args` a short single-line summary. Display
+ * only; never used for decisions.
+ */
+export interface AgenticStepView {
+  /** The tool-call part id (stable key for keyed rendering). */
+  id: string;
+  /** Best-effort tool label ("shell", "read", "edit", "search", …). */
+  tool: string;
+  /** Short args summary (the command, path, url, …). */
+  args: string;
+  /** Outcome: `called` while in flight, then `ok` / `failed`. */
+  status: "called" | "ok" | "failed";
+  /** Epoch ms the call was observed. */
+  at: number;
+}
+
+/** First present non-empty string among `keys`. */
+function firstString(input: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
+}
+
+/** Best-effort display label for one tool-call input (see AgenticStepView). */
+function stepLabel(input: Record<string, unknown>): { tool: string; args: string } {
+  const command = firstString(input, "command");
+  if (command !== null) return { tool: "shell", args: command };
+  const url = firstString(input, "url");
+  if (url !== null) return { tool: "webfetch", args: url };
+  // Search inputs carry the query/pattern (often alongside a scope path —
+  // check the pattern first so a grep is not misread as a file read).
+  const pattern = firstString(input, "pattern", "query");
+  if (pattern !== null) return { tool: "search", args: pattern };
+  const path = firstString(input, "path", "file", "filePath");
+  if (path !== null) {
+    // A content-bearing call mutates the file; a bare path only reads it
+    // (snake_case AND camelCase content keys — tools vary).
+    const mutating =
+      "content" in input ||
+      "new_string" in input ||
+      "newString" in input ||
+      "oldString" in input ||
+      "edits" in input;
+    return { tool: mutating ? "edit" : "read", args: path };
+  }
+  const key = Object.keys(input)[0];
+  if (key !== undefined) return { tool: key, args: String(input[key]) };
+  return { tool: "tool", args: "" };
+}
+
+/**
+ * Maps raw observed steps to transcript rows, oldest first, capped at
+ * `cap` NEWEST entries (a runaway 40-call run stays bounded; the full
+ * list still lives on the controller for the budget counter).
+ */
+export function agenticStepViews(
+  steps: readonly AgenticStep[],
+  cap: number = AGENTIC_STEP_WINDOW,
+): AgenticStepView[] {
+  return steps.slice(-Math.max(1, cap)).map((step) => ({
+    id: step.id,
+    ...stepLabel(step.input),
+    status: step.status === "ok" ? "ok" : step.status === "failed" ? "failed" : "called",
+    at: step.at,
+  }));
+}
+
+// -- approval decisions --------------------------------------------------------
+
+/**
+ * Whether an ask of `action` may offer "Always in this repo". Server-side,
+ * `read`/`edit` permission asks persist a PROJECT-WIDE allow rule, so one
+ * "always" click would auto-allow every future sensitive-file ask in the
+ * project — those asks get allow-once/deny only (defensively enforced by
+ * {@link safeDecision}, not just by the card's buttons).
+ */
+export function offersAlways(action: string): boolean {
+  return action !== "read" && action !== "edit";
+}
+
+/**
+ * Defensive decision map by action: an "always" for a read/edit ask
+ * collapses to "once" (see {@link offersAlways}). Every other decision
+ * passes through unchanged.
+ */
+export function safeDecision(action: string, decision: AgenticDecision): AgenticDecision {
+  if (decision === "always" && !offersAlways(action)) return "once";
+  return decision;
 }

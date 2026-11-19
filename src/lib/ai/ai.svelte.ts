@@ -38,12 +38,13 @@ import { OpenRouterProvider } from "./openrouter";
 import { runFeature } from "./features";
 import type { AiRunHooks, FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
 import { defaultAiConfig, AiError, isAiError, resolveAgenticBudget, resolveOpencode } from "./types";
-import type { AiAgenticBudget, AiBackend, AiConfig, FeatureKind, OpencodeMode } from "./types";
+import type { AiAgenticBudget, AiBackend, AiConfig, AiResult, FeatureKind, OpencodeMode } from "./types";
 import type { ProviderSet, Unsubscribe } from "./provider";
 import { AiJobStore } from "./jobs.svelte";
 import { ChatStore } from "./chat.svelte";
 import type { ChatContextSelection, ChatMessage } from "./chat.svelte";
 import { aiFeatureLabel, featureWantsStreaming } from "./registry";
+import type { AiFeatureTag } from "./registry";
 
 import { describeError } from "$lib/errors";
 
@@ -111,6 +112,18 @@ export interface AiRunOptions {
    * on the configured default.
    */
   model?: string;
+}
+
+/** Input for one agentic run ({@link AiStore.runAgentic}). */
+export interface AiAgenticRunInput {
+  /** Repository the run acts on (workspace + opt-in + job key). */
+  repoId: string;
+  /** The task prompt. */
+  prompt: string;
+  /** Optional instructions, folded into the v2 prompt text. */
+  system?: string;
+  /** Which job label this run carries ("chat" now, diagnose in chunk 4). */
+  feature: AiFeatureTag;
 }
 
 /** Shared frozen default for {@link AiStore.peekState} reads (never mutated). */
@@ -508,6 +521,79 @@ export class AiStore {
    */
   runOptsFor(repoId: string): AiRunOptions | undefined {
     return this.isOptedIn(repoId) ? undefined : { oneShot: true };
+  }
+
+  // -- agentic runs (M13 chunk 2) ------------------------------------------------
+
+  /**
+   * Runs one agentic job: a job ticket + the opencode provider's
+   * `runAgentic` path, with the approval controller bound to the job the
+   * moment the run's session exists (the transcript and approval cards
+   * read the controller's reactive state through `job.agentic`). Partial
+   * text streams into the ticket so a cancel keeps what arrived.
+   *
+   * Gates: the same master switch + per-repo opt-in as `run`. No backend
+   * fallback — agentic runs need the opencode backend (OpenRouter has no
+   * tool loop); an unusable server surfaces as the usual AiError. Real
+   * invocations (agent chat, diagnose) wire in chunks 3/4 and call THIS.
+   */
+  async runAgentic(input: AiAgenticRunInput): Promise<AiResult> {
+    if (!this.isEnabled()) {
+      throw new AiError("opt-in", "AI features are turned off in AI settings", {});
+    }
+    if (!this.isOptedIn(input.repoId)) {
+      throw new AiError(
+        "opt-in",
+        "AI features are not enabled for this repository — allow them when prompted or in AI settings",
+        {},
+      );
+    }
+    const provider = this.#supervisor.provider("opencode");
+    if (typeof (provider as { runAgentic?: unknown }).runAgentic !== "function") {
+      throw new AiError(
+        "unavailable",
+        "agentic runs need the opencode backend — switch backends in AI settings",
+        { backend: "opencode" },
+      );
+    }
+
+    const repoName = tabStore.tabs.find((tab) => tab.id === input.repoId)?.name ?? null;
+    const ticket = this.jobs.begin({
+      repoId: input.repoId,
+      repoName,
+      feature: input.feature,
+    });
+    ticket.phase("generating");
+    try {
+      const run = await (provider as OpenCodeProvider).runAgentic({
+        system: input.system,
+        prompt: input.prompt,
+        sessionKey: input.repoId,
+        signal: ticket.signal,
+        onServing: (backend, model) => ticket.serving(backend, model),
+        onDelta: (delta) => ticket.delta(delta),
+        onController: (controller) => this.jobs.bindAgentic(ticket.id, controller),
+      });
+      ticket.done({
+        backend: "opencode",
+        model: run.model,
+        elapsedMs: run.elapsedMs,
+        usage: run.usage ?? null,
+        text: run.text,
+      });
+      return {
+        text: run.text,
+        model: run.model,
+        backend: "opencode",
+        elapsedMs: run.elapsedMs,
+        ...(run.usage !== undefined ? { usage: run.usage } : {}),
+      };
+    } catch (err) {
+      if (isAiError(err) && err.kind === "cancelled") ticket.cancelled();
+      else if (this.jobs.cancelRequested(ticket.id)) ticket.cancelled();
+      else ticket.failed(describeError(err));
+      throw err;
+    }
   }
 
   // -- feature runs -----------------------------------------------------------------

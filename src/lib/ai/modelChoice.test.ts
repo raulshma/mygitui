@@ -42,6 +42,7 @@ function record(overrides: Partial<AiJobRecord>): AiJobRecord {
     error: null,
     text: null,
     promptPreview: null,
+    agentic: null,
     ...overrides,
   };
 }

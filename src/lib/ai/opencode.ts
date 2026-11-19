@@ -74,7 +74,14 @@ import type {
 } from "./agenticRun.svelte";
 import { buildToolPolicy } from "./toolPolicy";
 import { AiError } from "./types";
-import type { AgenticBudget, AiResult, AiUsage, ModelInfo, OpencodeResolve } from "./types";
+import type {
+  AgenticBudget,
+  AiBackend,
+  AiResult,
+  AiUsage,
+  ModelInfo,
+  OpencodeResolve,
+} from "./types";
 import { usageFromSdk } from "./openrouter";
 import { describeError } from "$lib/errors";
 
@@ -167,6 +174,17 @@ export interface AgenticRunOptions {
   sessionKey?: string;
   /** Cancellation. */
   signal?: AbortSignal;
+  /**
+   * Called once routing resolved which model serves the run (the job
+   * store's live "via <backend>" badge, mirroring single-shot timing).
+   */
+  onServing?: (backend: AiBackend, model: string | null) => void;
+  /**
+   * Streams partial text per completed `session.text.ended` part (same
+   * incremental chunks as single-shot streaming) — feeds the job ticket's
+   * live preview so a cancelled run keeps what arrived before the abort.
+   */
+  onDelta?: (delta: string) => void;
   /**
    * Per-run budget cap override; absent fields fall back to the
    * provider's configured budget (itself defaulting to the `types.ts`
@@ -1070,6 +1088,7 @@ export class OpenCodeProvider implements AiProvider {
       (typeof configuredModel === "function" ? configuredModel() : configuredModel)?.trim() ||
       undefined;
     const model = req.model ?? defaultModel ?? "opencode/default";
+    req.onServing?.("opencode", model === "opencode/default" ? null : model);
 
     const client = await this.#clientForV2(resolved.server.base);
     const normDirectory = normalizeDirectory(directory);
@@ -1127,7 +1146,7 @@ export class OpenCodeProvider implements AiProvider {
         sessionID,
         text,
         req.signal,
-        undefined,
+        req.onDelta,
         { controller },
       );
       return {
@@ -1362,7 +1381,14 @@ export class OpenCodeProvider implements AiProvider {
       throw new AiError("cancelled", "AI request cancelled", { backend: "opencode" });
     }
     const controller = new AbortController();
-    const onAbort = (): void => controller.abort();
+    const onAbort = (): void => {
+      controller.abort();
+      // A user cancel must also stop the SERVER-side execution, not just
+      // the local wait — fire the session interrupt best-effort; the
+      // client-side abort settles the run regardless of whether the
+      // confirmation event arrives.
+      void client.session.interrupt({ sessionID }).catch(() => {});
+    };
     signal?.addEventListener("abort", onAbort, { once: true });
     let settled = false;
     const finish = (): void => {

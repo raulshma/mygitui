@@ -20,6 +20,7 @@
   import type { ChatContextSelection, ChatMessage } from "$lib/ai/chat.svelte";
   import { emitUiEvent } from "$lib/palette/events";
   import AiMarkdown from "$lib/components/ai/AiMarkdown.svelte";
+  import AgenticRunTranscript from "$lib/components/ai/AgenticRunTranscript.svelte";
 
   let { repoId, root, repoName }: { repoId: string; root: string; repoName: string } = $props();
 
@@ -244,6 +245,10 @@
                 <span class="inline-block size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
                 {job.message ?? aiPhaseLabel(job.phase) ?? "working"}…
               </p>
+            {/if}
+            {#if job.agentic !== null}
+              <!-- Agentic run: live tool transcript + approval cards. -->
+              <AgenticRunTranscript {job} {now} />
             {/if}
           </div>
           <span class="mt-px text-ui-micro text-muted-foreground">

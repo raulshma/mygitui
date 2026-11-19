@@ -5,8 +5,10 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { AgenticRunController } from "./agenticRun.svelte";
 import {
   AiJobStore,
+  JOB_AGENTIC_STEP_CAP,
   JOB_HISTORY_CAP,
   JOB_HISTORY_KEY,
   JOB_PROMPT_PREVIEW_CAP,
@@ -61,6 +63,7 @@ function record(overrides: Partial<AiJobRecord> | Record<string, unknown> = {}):
     error: null,
     text: "out",
     promptPreview: "prompt",
+    agentic: null,
     ...(overrides as Partial<AiJobRecord>),
   };
 }
@@ -355,5 +358,212 @@ describe("text caps on every terminal path", () => {
     ]);
     expect(parsed?.[0]?.text?.length).toBe(JOB_TEXT_CAP);
     expect(parsed?.[0]?.promptPreview?.length).toBe(JOB_PROMPT_PREVIEW_CAP);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agentic runs (chunk 2): controller-bound live runtime + history snapshots
+// ---------------------------------------------------------------------------
+
+describe("AiJobStore agentic runs", () => {
+  /** Controller with recording reply/interrupt doubles (default timers). */
+  function makeController(budget?: { maxWallClockMs?: number; maxToolCalls?: number }) {
+    const replies: Array<{ requestID: string; decision: string; message: string | null }> = [];
+    const controller = new AgenticRunController({
+      sessionID: "sess-1",
+      ...(budget ? { budget } : {}),
+      reply: async (requestID, decision, message) => {
+        replies.push({ requestID, decision, message: message ?? null });
+      },
+      interrupt: async () => undefined,
+    });
+    return { controller, replies };
+  }
+
+  it("bindAgentic attaches the controller and the job reads its live state", () => {
+    const { store } = makeStore();
+    const ticket = store.begin({ repoId: "r1", repoName: "repo", feature: "chat" });
+    const job = store.active[ticket.id];
+    expect(job?.agentic).toBeNull();
+
+    const { controller } = makeController();
+    store.bindAgentic(ticket.id, controller);
+    expect(job?.agentic?.controller).toBe(controller);
+
+    // Controller events reflect through the binding (same objects).
+    controller.handlePermissionAsk({ id: "ask-1", action: "shell", resources: ["npm test"] });
+    expect(job?.agentic?.controller.pending).toHaveLength(1);
+    controller.handleToolCalled({ id: "t1", input: { command: "ls" }, executed: true });
+    expect(job?.agentic?.controller.steps).toHaveLength(1);
+
+    // Rebinding and unknown/finished jobs are ignored.
+    store.bindAgentic(ticket.id, makeController().controller);
+    expect(job?.agentic?.controller).toBe(controller);
+    store.bindAgentic("nope", makeController().controller);
+  });
+
+  it("finish snapshots steps, approvals and the budget outcome into history", async () => {
+    const { store } = makeStore();
+    const ticket = store.begin({ repoId: "r1", repoName: "repo", feature: "chat" });
+    const { controller } = makeController({ maxToolCalls: 10 });
+    store.bindAgentic(ticket.id, controller);
+    controller.handleToolCalled({ id: "t1", input: { command: "git status" }, executed: true });
+    controller.handleToolFinished("t1", true);
+    controller.handlePermissionAsk({ id: "a1", action: "shell", resources: ["npm test"] });
+    await controller.respond("a1", "once");
+    ticket.done({ backend: "opencode", model: "m", elapsedMs: 10, usage: null, text: "out" });
+
+    const record = store.history[0];
+    expect(record?.agentic).not.toBeNull();
+    expect(record?.agentic?.steps).toEqual([
+      expect.objectContaining({ id: "t1", tool: "shell", args: "git status", status: "ok" }),
+    ]);
+    expect(record?.agentic?.approvals).toMatchObject({ asked: 1, approved: 1, rejected: 0 });
+    expect(record?.agentic?.budgetStopped).toBe(false);
+    expect(record?.agentic?.budgetReason).toBeNull();
+    // The live job is gone; the snapshot is a frozen copy.
+    expect(store.active[ticket.id]).toBeUndefined();
+  });
+
+  it("budget-stopped runs record the firing cap in history", () => {
+    const { store } = makeStore();
+    const ticket = store.begin({ repoId: "r1", feature: "chat" });
+    const { controller } = makeController({ maxToolCalls: 1 });
+    store.bindAgentic(ticket.id, controller);
+    controller.handleToolCalled({ id: "t1", input: {}, executed: true });
+    ticket.done({ backend: "opencode", model: "m", elapsedMs: 5, usage: null, text: null });
+    expect(store.history[0]?.agentic).toMatchObject({
+      budgetStopped: true,
+      budgetReason: "tool-calls",
+    });
+  });
+
+  it("cancel settles the job as cancelled with the partial text kept", () => {
+    const { store } = makeStore();
+    const ticket = store.begin({ repoId: "r1", feature: "chat" });
+    const { controller } = makeController();
+    store.bindAgentic(ticket.id, controller);
+    ticket.delta("partial answer");
+    store.cancel(ticket.id);
+    expect(store.cancelRequested(ticket.id)).toBe(true);
+    ticket.cancelled();
+    const record = store.history[0];
+    expect(record?.status).toBe("cancelled");
+    expect(record?.text).toBe("partial answer");
+    expect(record?.agentic).not.toBeNull();
+    expect(store.active[ticket.id]).toBeUndefined();
+  });
+
+  it("caps the history transcript at JOB_AGENTIC_STEP_CAP newest steps", () => {
+    const { store } = makeStore();
+    const ticket = store.begin({ repoId: "r1", feature: "chat" });
+    const { controller } = makeController();
+    store.bindAgentic(ticket.id, controller);
+    for (let i = 0; i < JOB_AGENTIC_STEP_CAP + 10; i++) {
+      controller.handleToolCalled({ id: `t${i}`, input: { command: `cmd ${i}` }, executed: true });
+    }
+    ticket.done({ backend: "opencode", model: "m", elapsedMs: 5, usage: null, text: null });
+    const record = store.history[0];
+    expect(record?.agentic?.steps).toHaveLength(JOB_AGENTIC_STEP_CAP);
+    expect(record?.agentic?.steps[0]?.args).toBe(`cmd 10`);
+  });
+
+  it("persists and reloads the agentic snapshot through the envelope", () => {
+    const storage = memStorage();
+    const { store } = makeStore(storage);
+    const ticket = store.begin({ repoId: "r1", feature: "chat" });
+    const { controller } = makeController({ maxToolCalls: 1 });
+    store.bindAgentic(ticket.id, controller);
+    controller.handleToolCalled({ id: "t1", input: { command: "ls" }, executed: true });
+    ticket.done({ backend: "opencode", model: "m", elapsedMs: 5, usage: null, text: null });
+
+    const reloaded = new AiJobStore({ storage, id: () => "x", now: () => 2_000 });
+    expect(reloaded.history).toHaveLength(1);
+    expect(reloaded.history[0]?.agentic?.steps).toEqual([
+      { id: "t1", tool: "shell", args: "ls", status: "called", at: expect.any(Number) },
+    ]);
+    expect(reloaded.history[0]?.agentic?.approvals).toMatchObject({
+      asked: 0,
+      approved: 0,
+      rejected: 0,
+      autoRejected: 0,
+      expired: 0,
+    });
+    expect(reloaded.history[0]?.agentic?.budgetReason).toBe("tool-calls");
+  });
+
+  it("parseJobHistory drops malformed agentic snapshots but keeps the record", () => {
+    const parsed = parseJobHistory([
+      {
+        id: "r1",
+        repoId: "repo",
+        feature: "chat",
+        status: "done",
+        startedAt: 1,
+        elapsedMs: 2,
+        agentic: { steps: "nope" },
+      },
+      {
+        id: "r2",
+        repoId: "repo",
+        feature: "chat",
+        status: "done",
+        startedAt: 1,
+        elapsedMs: 2,
+        agentic: {
+          steps: [
+            { id: "t1", tool: "shell", args: "ls", status: "ok", at: 5 },
+            { not: "a step" },
+            { id: "t2", tool: 42, args: null, status: "exploded", at: "x" },
+          ],
+          approvals: { asked: 3, approved: -1, cancelled: 2 },
+          budgetStopped: "yes",
+          budgetReason: "warp-speed",
+        },
+      },
+    ]);
+    expect(parsed).toHaveLength(2);
+    expect(parsed?.[0]?.agentic).toBeNull();
+    const agentic = parsed?.[1]?.agentic;
+    // Steps without a usable id are DROPPED (two id-less steps would
+    // collide the {#each (step.id)} key and crash the keyed each).
+    expect(agentic?.steps).toEqual([
+      { id: "t1", tool: "shell", args: "ls", status: "ok", at: 5 },
+      { id: "t2", tool: "tool", args: "", status: "called", at: 0 },
+    ]);
+    expect(agentic?.approvals).toEqual({
+      asked: 3,
+      autoRejected: 0,
+      approved: 0,
+      rejected: 0,
+      cancelled: 2,
+      expired: 0,
+    });
+    expect(agentic?.budgetStopped).toBe(false);
+    expect(agentic?.budgetReason).toBeNull();
+  });
+
+  it("parseJobHistory drops every id-less step (duplicate-key render safety)", () => {
+    const parsed = parseJobHistory([
+      {
+        id: "r1",
+        repoId: "repo",
+        feature: "chat",
+        status: "cancelled",
+        startedAt: 1,
+        elapsedMs: 2,
+        agentic: {
+          steps: [
+            { tool: "shell", args: "a", status: "ok", at: 1 },
+            { tool: "shell", args: "b", status: "ok", at: 2 },
+          ],
+          approvals: {},
+          budgetStopped: false,
+          budgetReason: null,
+        },
+      },
+    ]);
+    expect(parsed).toHaveLength(1);
+    expect(parsed?.[0]?.agentic?.steps).toEqual([]);
   });
 });

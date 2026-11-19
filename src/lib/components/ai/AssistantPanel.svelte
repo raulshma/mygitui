@@ -43,6 +43,7 @@
   import type { ChatMessage } from "$lib/ai/chat.svelte";
   import { emitUiEvent } from "$lib/palette/events";
   import AiMarkdown from "./AiMarkdown.svelte";
+  import AgenticRunTranscript from "./AgenticRunTranscript.svelte";
 
   let {
     repoId,
@@ -200,6 +201,19 @@
     cancelled: "cancelled",
     error: "failed",
   };
+
+  /** One-line approval tally for an agentic history record (non-zero parts). */
+  function agenticApprovalsLabel(approvals: AiJobRecord["agentic"]): string | null {
+    if (approvals === null || approvals.approvals.asked === 0) return null;
+    const parts: string[] = [];
+    const a = approvals.approvals;
+    if (a.approved > 0) parts.push(`${a.approved} allowed`);
+    if (a.rejected > 0) parts.push(`${a.rejected} denied`);
+    if (a.cancelled > 0) parts.push(`${a.cancelled} cancelled`);
+    if (a.autoRejected > 0) parts.push(`${a.autoRejected} auto-rejected`);
+    if (a.expired > 0) parts.push(`${a.expired} timed out`);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
 </script>
 
 <section
@@ -404,6 +418,10 @@
                     {job.message ?? aiPhaseLabel(job.phase) ?? "working"}…
                   </p>
                 {/if}
+                {#if job.agentic !== null}
+                  <!-- Agentic run: live tool transcript + approval cards. -->
+                  <AgenticRunTranscript {job} {now} />
+                {/if}
               </div>
               <span class="mt-px text-ui-micro text-muted-foreground">
                 {aiElapsedLabel(now - job.startedAt)} ·
@@ -593,6 +611,41 @@
                 </button>
                 {#if expanded[record.id] === true}
                   <div class="detail flex flex-col gap-1.5 border-t border-border px-2.5 py-1.5">
+                    {#if record.agentic !== null && record.agentic.steps.length > 0}
+                      <div>
+                        <h4 class="m-0 mb-px text-ui-tiny font-medium text-muted-foreground">Tools</h4>
+                        <ul class="m-0 flex list-none flex-col gap-px p-0" aria-label="Agentic tool transcript">
+                          {#each record.agentic.steps as step (step.id)}
+                            <li class="flex items-baseline gap-1.5 text-ui-micro">
+                              <span class="flex-none font-medium text-foreground">{step.tool}</span>
+                              <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={step.args}>
+                                {step.args}
+                              </span>
+                              <span
+                                class="flex-none {step.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}"
+                              >
+                                <!-- Frozen history: a non-terminal step was
+                                     interrupted mid-run (budget stop / cancel). -->
+                                {step.status === "called" ? "—" : step.status}
+                              </span>
+                            </li>
+                          {/each}
+                        </ul>
+                      </div>
+                    {/if}
+                    {#if record.agentic !== null && (agenticApprovalsLabel(record.agentic) !== null || record.agentic.budgetStopped)}
+                      <!-- Also shown with zero steps: a wall-clock stop
+                           before the first tool call still reports here. -->
+                      <p class="m-0 text-ui-tiny text-muted-foreground">
+                        {#if agenticApprovalsLabel(record.agentic) !== null}
+                          {agenticApprovalsLabel(record.agentic)}
+                        {/if}
+                        {#if record.agentic.budgetStopped}
+                          {agenticApprovalsLabel(record.agentic) !== null ? "·" : ""} budget
+                          reached ({record.agentic.budgetReason === "wall-clock" ? "time" : "tool calls"})
+                        {/if}
+                      </p>
+                    {/if}
                     {#if record.promptPreview}
                       <div>
                         <h4 class="m-0 mb-px text-ui-tiny font-medium text-muted-foreground">Prompt</h4>
