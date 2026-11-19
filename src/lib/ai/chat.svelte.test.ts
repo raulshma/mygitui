@@ -20,7 +20,7 @@ import {
   parseChatSessions,
   parseChatThreads,
 } from "./chat.svelte";
-import type { ChatGitClient, ChatStoreDeps } from "./chat.svelte";
+import type { ChatAgenticRunner, ChatGitClient, ChatStoreDeps } from "./chat.svelte";
 import { AiError } from "./types";
 import type { AiResult } from "./types";
 import type { FeatureRouter } from "./features";
@@ -941,5 +941,53 @@ describe("Agentic chat — fix round (chunk 3 review)", () => {
     // the recreated null binding must not overwrite the id (L6).
     expect(h.store.conversationFor("/repo").at(-1)?.text).toBe("late answer");
     expect(h.store.sessionFor("/repo")).toBe("sess-new");
+  });
+});
+
+describe("ChatStore per-feature gate (chunk 5)", () => {
+  function makeGatedHarness(enabled: boolean) {
+    const h = makeHarness({ withAgentic: true });
+    (h.agentic as ReturnType<typeof vi.fn>).mockResolvedValue(runnerResult());
+    const base = h as unknown as { store: ChatStore };
+    // Wrap the store's deps gate: rebuild with the per-feature gate wired.
+    const store = new ChatStore({
+      storage: memStorage(),
+      jobs: h.jobs,
+      router: { generate: async () => aiResult("single") } as FeatureRouter,
+      agentic: h.agentic as ChatAgenticRunner,
+      id: () => "m-x",
+      now: () => 2_000_000,
+      isFeatureEnabled: () => enabled,
+    });
+    base.store = store;
+    return { store: base.store, agentic: h.agentic, git: h.git };
+  }
+
+  it("chat mode off refuses the send at the store level (no agentic dispatch)", async () => {
+    const { store, agentic } = makeGatedHarness(false);
+    await expect(
+      store.send({
+        repoId: "r1",
+        root: "/repo",
+        question: "q",
+        context: CONTEXT,
+        agentic: true,
+      }),
+    ).rejects.toMatchObject({ kind: "opt-in", message: "Assistant is turned off in AI settings" });
+    expect(agentic).not.toHaveBeenCalled();
+    // A gate refusal lands nothing (the user bubble appends after the gates).
+  });
+
+  it("chat mode on sends normally with the gate wired", async () => {
+    const { store, agentic } = makeGatedHarness(true);
+    await store.send({
+      repoId: "r1",
+      root: "/repo",
+      question: "q",
+      context: CONTEXT,
+      agentic: true,
+    });
+    expect(agentic).toHaveBeenCalledTimes(1);
+    expect(store.conversationFor("/repo")).toHaveLength(2);
   });
 });

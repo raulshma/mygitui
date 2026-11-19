@@ -29,7 +29,7 @@
   import type { AiRunOptions } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
   import type { FeatureOutcome } from "$lib/ai/features";
-  import { aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
+  import { AGENTIC_FEATURES, aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
   import { modelChoice } from "$lib/ai/modelChoice.svelte";
   import AiSettings from "./AiSettings.svelte";
   import AiModelPicker from "./AiModelPicker.svelte";
@@ -136,6 +136,26 @@
     if (job === null) return `${title ?? label} — working…`;
     const phase = job.message ?? aiPhaseLabel(job.phase) ?? "working";
     return `${aiFeatureLabel(job.feature)} — ${phase} · ${aiElapsedLabel(now - job.startedAt)}`;
+  });
+
+  /**
+   * Opt-in disclosure for agentic-capable runs (chunk 5): shown in the
+   * first-use dialog when the run MAY go agentic — opencode backend + an
+   * agentic-eligible feature in "auto" mode. Phrased so it stays true
+   * when the run silently degrades to single-shot (a v1 server): the
+   * conditional lead-in ("If connected to opencode, …"). Single-shot-only
+   * backends and pinned single-shot modes keep today's copy unchanged.
+   */
+  const agenticDisclosure = $derived.by(() => {
+    if (kind === undefined) return null;
+    if (ai.config.backend === "openrouter") return null;
+    if (!AGENTIC_FEATURES.includes(kind)) return null;
+    if (ai.featureMode(kind) !== "auto") return null;
+    return (
+      "If connected to opencode, the agent can read files in this repo. " +
+      "Edits, commands, and anything outside the repo will ask you first. " +
+      "Push and web access are disabled."
+    );
   });
 
   function openAction(): void {
@@ -258,6 +278,11 @@
         use:floating={{ anchor: root, above: popUp, alignEnd: icon }}
       >
         <p class="confirm-text m-0 mb-ui-375 text-xs">{confirmText.replace("{backend}", backendLabel)}</p>
+        {#if agenticDisclosure !== null}
+          <p class="confirm-agentic m-0 mb-ui-375 text-ui-meta leading-[1.45] text-muted-foreground" role="note">
+            {agenticDisclosure}
+          </p>
+        {/if}
         <div class="confirm-actions flex flex-row flex-wrap gap-1">
           <Button variant="default" size="xs" class="mini rounded-full text-ui-meta" type="button" onclick={() => void allowAndRun(true)}>
             Always allow

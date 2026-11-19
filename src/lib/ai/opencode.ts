@@ -159,6 +159,23 @@ const V2_GENERATION_PERMISSIONS = [
   { action: "*", resource: "*", effect: "ask" },
 ] as const;
 
+/**
+ * One saved "always" allow rule (opencode v2, project-scoped). The
+ * server scopes rules to the project it created them in; the client side
+ * never mints project ids (the server resolves them from the session
+ * directory), so `list` passes NO project filter — the settings surface
+ * shows `projectID` per row so a rule from another project is visible.
+ */
+export interface SavedPermission {
+  id: string;
+  /** Server-side project the rule is scoped to. */
+  projectID: string;
+  /** Tool action the rule allows (e.g. "shell"). */
+  action: string;
+  /** Resource pattern the rule allows (e.g. "git status *"). */
+  resource: string;
+}
+
 /** Options for one agentic run ({@link OpenCodeProvider.runAgentic}). */
 export interface AgenticRunOptions {
   /** System prompt (instructions); folded into the text like single-shot. */
@@ -1290,6 +1307,39 @@ export class OpenCodeProvider implements AiProvider {
     if (resolved.server.kind !== "v2") return;
     const client = await this.#clientForV2(resolved.server.base);
     await client.session.remove({ sessionID });
+  }
+
+  /**
+   * Lists the server's saved "always" allow rules (opencode v2,
+   * project-scoped — persisted by "Always in this repo" replies). Uses the
+   * pinned client's typed `permission.saved.list` (PermissionSavedInfo:
+   * id/action/resource/time; auth headers flow through the same
+   * authedFetch wrapper every client call uses). Non-v2 servers list
+   * nothing.
+   */
+  async listSavedPermissions(): Promise<SavedPermission[]> {
+    const resolved = await this.#resolveServer();
+    if (resolved.server.kind !== "v2") return [];
+    const client = await this.#clientForV2(resolved.server.base);
+    // No project filter: the client never mints project ids (the server
+    // resolves them from the session directory), and PermissionSavedInfo
+    // carries projectID so foreign rules stay visible in the settings
+    // surface rather than being silently mixed in.
+    const saved = await client.permission.saved.list({});
+    return (saved ?? []).map((rule) => ({
+      id: rule.id,
+      projectID: rule.projectID,
+      action: rule.action,
+      resource: rule.resource,
+    }));
+  }
+
+  /** Removes one saved allow rule (v2; see {@link listSavedPermissions}). */
+  async deleteSavedPermission(id: string): Promise<void> {
+    const resolved = await this.#resolveServer();
+    if (resolved.server.kind !== "v2") return;
+    const client = await this.#clientForV2(resolved.server.base);
+    await client.permission.saved.remove({ id });
   }
 
   /**

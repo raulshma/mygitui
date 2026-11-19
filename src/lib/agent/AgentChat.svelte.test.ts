@@ -15,36 +15,43 @@ vi.mock("$lib/components/ai/AiMarkdown.svelte", () => ({
   default: ({ text }: { text: string }) => `<div data-testid="markdown">${text}</div>`,
 }));
 
-const sendChat = vi.hoisted(() => vi.fn(async () => undefined));
-const conversation = vi.hoisted(() => vi.fn<() => ChatMessage[]>(() => []));
-const isFeatureEnabled = vi.hoisted(() => vi.fn(() => true));
+// A REAL AiStore backs the mock: config is $state, so the chip's
+// reactive default sync can be driven by setFeatureMode in tests.
+vi.mock("$lib/ai/ai.svelte", async () => {
+  const { AiStore } = await import("../ai/ai.svelte");
+  const store = new AiStore({
+    storage: null,
+    providers: {},
+    events: false,
+    isTauri: () => false,
+  });
+  return { ai: store };
+});
 
-vi.mock("$lib/ai/ai.svelte", () => ({
-  ai: {
-    isEnabled: vi.fn(() => true),
-    isOptedIn: vi.fn(() => true),
-    isFeatureEnabled,
-    setOptIn: vi.fn(),
-    chat: {
-      conversationFor: () => conversation(),
-      busy: {} as Record<string, boolean>,
-      clear: vi.fn(),
-    },
-    sendChat,
-    jobs: { activeJob: vi.fn(() => null) },
-  },
-}));
-
+import { ai } from "$lib/ai/ai.svelte";
+import type { AiStore } from "$lib/ai/ai.svelte";
+import { AGENTIC_FEATURES } from "$lib/ai/registry";
 import AgentChat from "./AgentChat.svelte";
+
+const store = ai as AiStore;
+/** Spied per test via vi.spyOn(store, "sendChat"). */
+let sendChatSpy: ReturnType<typeof vi.fn>;
 
 afterEach(() => {
   cleanup();
 });
 
 beforeEach(() => {
-  sendChat.mockClear();
-  conversation.mockReturnValue([]);
-  isFeatureEnabled.mockReturnValue(true);
+  vi.restoreAllMocks();
+  store.chat.clear("/repo");
+  store.setOptIn("r1", true);
+  store.setFeatureMode("chat", "auto");
+  sendChatSpy = vi.spyOn(store, "sendChat").mockResolvedValue({
+    id: "a-x",
+    role: "assistant",
+    text: "answer",
+    at: 1,
+  } as ChatMessage);
 });
 
 const PROPS = { repoId: "r1", root: "/repo", repoName: "repo" };
@@ -66,11 +73,25 @@ describe("AgentChat composer chip (chunk 3)", () => {
     expect(chip().getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("derives the default from the per-feature switch (off when chat is off)", async () => {
-    isFeatureEnabled.mockReturnValue(false);
+  it("derives the default from the per-feature MODE, reactively (chunk 5)", async () => {
     render(AgentChat, { props: PROPS });
     await tick();
+    // "auto" → chip on:
+    expect(chip().getAttribute("aria-pressed")).toBe("true");
+    // A settings flip auto → single-shot re-syncs the chip default while
+    // the composer is idle (the reactive sync reads the $state config):
+    store.setFeatureMode("chat", "single-shot");
+    await tick();
     expect(chip().getAttribute("aria-pressed")).toBe("false");
+    // The feature itself stays enabled — the composer is still there.
+    expect(screen.getByLabelText("Ask the agent")).toBeTruthy();
+    cleanup();
+    // "off" → the whole surface hides (mode-off empty state):
+    store.setFeatureMode("chat", "off");
+    render(AgentChat, { props: PROPS });
+    await tick();
+    expect(screen.queryByRole("button", { name: "Tools" })).toBeNull();
+    expect(screen.getByText(/The agent chat is turned off/)).toBeTruthy();
   });
 
   it("chip state survives composer interactions and rides send", async () => {
@@ -84,7 +105,7 @@ describe("AgentChat composer chip (chunk 3)", () => {
     expect(chip().getAttribute("aria-pressed")).toBe("false");
     await fireEvent.click(screen.getByRole("button", { name: "Send question" }));
     await waitFor(() =>
-      expect(sendChat).toHaveBeenCalledWith(
+      expect(sendChatSpy).toHaveBeenCalledWith(
         expect.objectContaining({ agentic: false, question: "what changed?" }),
       ),
     );
@@ -94,53 +115,59 @@ describe("AgentChat composer chip (chunk 3)", () => {
     await fireEvent.input(input, { target: { value: "and now?" } });
     await fireEvent.click(screen.getByRole("button", { name: "Send question" }));
     await waitFor(() =>
-      expect(sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ agentic: true })),
+      expect(sendChatSpy).toHaveBeenLastCalledWith(expect.objectContaining({ agentic: true })),
     );
   });
 });
 
 describe("AgentChat turn meta — mode marker (chunk 3)", () => {
   it("renders the mode that actually ran", async () => {
-    conversation.mockReturnValue([
-      { id: "u1", role: "user", text: "q", at: 1 },
-      {
-        id: "a1",
-        role: "assistant",
-        text: "answer",
-        at: 2,
-        mode: "agentic",
-        model: "m-1",
-        backend: "opencode",
-        elapsedMs: 5,
-      } as ChatMessage,
-    ]);
+    store.chat.threads["/repo"] = {
+      opencodeSessionId: null,
+      messages: [
+        { id: "u1", role: "user", text: "q", at: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          text: "answer",
+          at: 2,
+          mode: "agentic",
+          model: "m-1",
+          backend: "opencode",
+          elapsedMs: 5,
+        } as ChatMessage,
+      ],
+    };
     render(AgentChat, { props: PROPS });
     await tick();
     expect(screen.getByText(/agentic · via m-1 · opencode/)).toBeTruthy();
   });
 
   it("single-shot turns say so; legacy turns carry no marker", async () => {
-    conversation.mockReturnValue([
-      {
-        id: "a2",
-        role: "assistant",
-        text: "old",
-        at: 1,
-        model: "m-1",
-        backend: "opencode",
-        elapsedMs: 5,
-      } as ChatMessage,
-      {
-        id: "a3",
-        role: "assistant",
-        text: "new",
-        at: 2,
-        mode: "single-shot",
-        model: "m-1",
-        backend: "opencode",
-        elapsedMs: 5,
-      } as ChatMessage,
-    ]);
+    store.chat.threads["/repo"] = {
+      opencodeSessionId: null,
+      messages: [
+        {
+          id: "a2",
+          role: "assistant",
+          text: "old",
+          at: 1,
+          model: "m-1",
+          backend: "opencode",
+          elapsedMs: 5,
+        } as ChatMessage,
+        {
+          id: "a3",
+          role: "assistant",
+          text: "new",
+          at: 2,
+          mode: "single-shot",
+          model: "m-1",
+          backend: "opencode",
+          elapsedMs: 5,
+        } as ChatMessage,
+      ],
+    };
     render(AgentChat, { props: PROPS });
     await tick();
     expect(screen.getByText(/single-shot · via m-1/)).toBeTruthy();

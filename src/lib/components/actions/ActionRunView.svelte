@@ -167,6 +167,10 @@
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
     const fallback = async (): Promise<FeatureOutcome> =>
       ai.run("diagnose-action", { repoId, runMeta: meta, diff: tail }, undefined, opts);
+    // Mode wiring (chunk 5): "single-shot"/"off" take the single-shot path
+    // with NO capability probe ("off" hides the button — the {#if} below);
+    // "auto" keeps the agentic-first flow.
+    if (ai.featureMode("diagnose-action") !== "auto") return fallback();
     if (!(await ai.agenticAvailable())) return fallback();
     const built = diagnoseFailureAgenticPrompt(
       "The action run",
@@ -321,7 +325,7 @@
           Copy log
         </Button>
         <!-- M13: AI diagnosis next to Copy log once the run failed. -->
-        {#if failed}
+        {#if failed && ai.featureMode("diagnose-action") !== "off"}
           <AiFeatureButton
             {repoId}
             kind="diagnose-action"

@@ -32,6 +32,8 @@
 
   const enabled = $derived(ai.isEnabled());
   const optedIn = $derived(ai.isOptedIn(repoId));
+  /** Per-feature chat mode "off" hides the whole surface (chunk 5). */
+  const chatModeOff = $derived(ai.featureMode("chat") === "off");
 
   // --- chat state -------------------------------------------------------------
 
@@ -44,9 +46,25 @@
   let draft = $state("");
   /**
    * Agentic chip (per-run override, M13 chunk 3): default derives from the
-   * per-feature chat switch; toggling affects the next message only.
+   * per-feature chat MODE — "auto" starts the chip on (agentic when a v2
+   * path exists), "single-shot" starts it off, "off" hides chat entirely
+   * (the feature-disabled gates above). Toggling affects the next message
+   * only; chunk 5's persistent mode lives in settings.
    */
-  let agentic = $state(ai.isFeatureEnabled("chat"));
+  let agentic = $state(ai.featureMode("chat") === "auto");
+  /** Last mode the chip default was synced to (user toggles win until the
+   * persisted MODE actually changes — busy flips never reset the chip). */
+  let syncedMode: "auto" | "single-shot" | "off" | null = null;
+  // Reactive default sync (chunk 5): a settings flip re-applies the mode
+  // default while no turn is running; composer typing never resets it.
+  $effect(() => {
+    const mode = ai.featureMode("chat");
+    if (mode === "off") return;
+    if (syncedMode === mode) return;
+    if (busy) return;
+    agentic = mode === "auto";
+    syncedMode = mode;
+  });
 
   /** Context is fixed: the agent chat always reads staged diff + commits. */
   const CHAT_CONTEXT: ChatContextSelection = {
@@ -143,6 +161,22 @@
     <EmptyState
       title="AI assist is off."
       hint="Enable it again in AI settings to use the agent chat."
+    >
+      <Button
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        variant="secondary"
+        type="button"
+        onclick={() => emitUiEvent("open-ai-settings")}
+      >
+        Open AI settings
+      </Button>
+    </EmptyState>
+  {:else if chatModeOff}
+    <!-- Per-feature chat mode "off" (chunk 5): the affordance hides; the
+         path back in stays reachable. -->
+    <EmptyState
+      title="The agent chat is turned off."
+      hint="Enable it again in AI settings (Features → Agent chat) to use the agent chat."
     >
       <Button
         class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"

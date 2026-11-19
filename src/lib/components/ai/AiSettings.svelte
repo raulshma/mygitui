@@ -25,8 +25,11 @@
   import { untrack } from "svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import { AI_BACKENDS } from "$lib/ai/types";
+import type { SavedPermission } from "$lib/ai/opencode";
+import type { OpenCodeProvider } from "$lib/ai/opencode";
   import type { AiBackend, FeatureKind, ModelInfo, OpencodeMode } from "$lib/ai/types";
-  import { AI_FEATURES } from "$lib/ai/registry";
+  import { AGENTIC_FEATURES, AI_FEATURES, aiFeatureLabel } from "$lib/ai/registry";
+import type { AiFeatureMode } from "$lib/ai/types";
   import { customPrompts, CUSTOM_PROMPT_VARS } from "$lib/ai/customPrompts.svelte";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import {
@@ -59,8 +62,12 @@
   // --- form state (copies of the live config; applied on Save) ---------------
   let aiEnabled = $state(true);
   let statusBar = $state(true);
-  /** Per-feature toggles keyed by FeatureKind (registry order). */
-  let featureToggles = $state<Record<string, boolean>>({});
+  /**
+   * Per-feature MODES keyed by tag (chunk 5): agentic-eligible rows carry
+   * a tri-state control, the other registry rows a plain on/off checkbox
+   * (auto/off). Persisted only for kinds the user changed — see save().
+   */
+  let featureModes = $state<Record<string, AiFeatureMode>>({});
   let backendChoice = $state<AiBackend>("opencode");
   let opencodeEnabled = $state(true);
   let opencodeModeChoice = $state<OpencodeMode>("managed");
@@ -96,8 +103,67 @@
     }
     return [...groups].map(([provider, models]) => ({ provider, models }));
   });
+  /** Form-row keys: every tag the Features section can persist. */
+  type AiFeatureModeKey = import("$lib/ai/registry").AiFeatureTag;
+
   /** Collapsed-by-default section for mode/URL/password. */
   let showAdvanced = $state(false);
+
+  // -- Saved "always" allow rules (chunk 5): the opencode server persists
+  // project-scoped allow rules for approved agentic asks; this section
+  // surfaces and revokes them. Server state only — never saved locally.
+  let savedRules = $state<SavedPermission[] | null>(null);
+  let savedRulesLoading = $state(false);
+  let savedRuleError = $state<string | null>(null);
+  let removingRule = $state<string | null>(null);
+
+  const savedRulesCapable = $derived.by(() => {
+    if (backendChoice !== "opencode" || !opencodeEnabled) return false;
+    const provider = ai.supervisor.provider("opencode");
+    if (
+      typeof (provider as { listSavedPermissions?: unknown }).listSavedPermissions !== "function"
+    ) {
+      return false;
+    }
+    // Reachability when the supervisor knows it (a down/unauthenticated
+    // server cannot list rules — the quiet note shows); "unknown"/
+    // "checking" stay capable-pending until refreshSavedRules resolves.
+    const status = statuses.opencode.status;
+    return status === "ok" || status === "unknown" || status === "checking";
+  });
+
+  async function refreshSavedRules(): Promise<void> {
+    const provider = ai.supervisor.provider("opencode");
+    if (
+      typeof (provider as { listSavedPermissions?: unknown }).listSavedPermissions !== "function"
+    ) {
+      savedRules = null;
+      return;
+    }
+    savedRulesLoading = true;
+    savedRuleError = null;
+    try {
+      savedRules = await (provider as OpenCodeProvider).listSavedPermissions();
+    } catch (err) {
+      savedRules = null;
+      savedRuleError = describeError(err);
+    } finally {
+      savedRulesLoading = false;
+    }
+  }
+
+  async function removeSavedRule(id: string): Promise<void> {
+    const provider = ai.supervisor.provider("opencode");
+    removingRule = id;
+    try {
+      await (provider as OpenCodeProvider).deleteSavedPermission(id);
+      savedRules = (savedRules ?? []).filter((rule) => rule.id !== id);
+    } catch (err) {
+      savedRuleError = describeError(err);
+    } finally {
+      removingRule = null;
+    }
+  }
 
   // Live install/server state (not form state — refreshed, never saved).
   let detection = $state<OpencodeDetection | null>(null);
@@ -141,8 +207,10 @@
     untrack(() => {
       aiEnabled = ai.isEnabled();
       statusBar = ai.isStatusBarEnabled();
-      featureToggles = Object.fromEntries(
-        AI_FEATURES.map((def) => [def.kind, ai.isFeatureEnabled(def.kind)]),
+      featureModes = Object.fromEntries(
+        (
+          [...AGENTIC_FEATURES, ...AI_FEATURES.map((def) => def.kind)] as AiFeatureModeKey[]
+        ).map((kind) => [kind, ai.featureMode(kind)]),
       );
       backendChoice = ai.config.backend;
       opencodeEnabled = ai.config.opencodeEnabled !== false;
@@ -158,8 +226,19 @@
       aiTokenBudget = String(appSettings.aiMonthlyTokenBudget);
       aiBudgetResetDay = String(appSettings.aiBudgetResetDay);
       showAdvanced = false;
+      savedRules = null;
+      savedRuleError = null;
       void refreshInstall();
+      if (backendChoice === "opencode" && opencodeEnabled) void refreshSavedRules();
     });
+  });
+
+  // The saved-rules section follows the backend radios: switching to the
+  // opencode backend mid-dialog (re)loads the rules for it.
+  $effect(() => {
+    if (!open) return;
+    if (backendChoice !== "opencode" || !opencodeEnabled) return;
+    void refreshSavedRules();
   });
 
   // Refresh both model lists whenever the settings dialog opens.
@@ -257,8 +336,13 @@
     try {
       ai.setEnabled(aiEnabled);
       ai.setStatusBarEnabled(statusBar);
-      for (const def of AI_FEATURES) {
-        ai.setFeatureEnabled(def.kind, featureToggles[def.kind] !== false);
+      // Write only kinds whose form mode differs from the live store: a
+      // hand-pinned mode (e.g. single-shot) hydrated into the control
+      // survives an unchanged save (never mass-rewritten to auto).
+      for (const [kind, mode] of Object.entries(featureModes)) {
+        if (mode !== ai.featureMode(kind as AiFeatureModeKey)) {
+          ai.setFeatureMode(kind as AiFeatureModeKey, mode);
+        }
       }
       ai.setBackend(backendChoice);
       ai.setOpencodeMode(opencodeModeChoice);
@@ -393,14 +477,48 @@
             </span>
           </label>
           {#if aiEnabled}
+            {#each AGENTIC_FEATURES as kind (kind)}
+              <div class="feature-mode flex flex-col gap-[3px] pl-4">
+                <div class="flex min-h-[1.4rem] items-center justify-between gap-ui-375">
+                  <span class="text-ui-base">{aiFeatureLabel(kind)}</span>
+                  <span
+                    class="mode-control flex flex-none items-center gap-px rounded-full border border-border p-px"
+                    role="group"
+                    aria-label="{aiFeatureLabel(kind)} mode"
+                  >
+                    {#each [["auto", "Auto"], ["single-shot", "Single-shot"], ["off", "Off"]] as [mode, label] (mode)}
+                      <button
+                        class="rounded-full px-2 py-px text-ui-micro transition-colors {featureModes[kind] === mode
+                          ? 'bg-primary/15 font-medium text-foreground'
+                          : 'text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                        type="button"
+                        aria-pressed={featureModes[kind] === mode}
+                        onclick={() => (featureModes[kind] = mode as AiFeatureMode)}
+                      >
+                        {label}
+                      </button>
+                    {/each}
+                  </span>
+                </div>
+                <span class="text-ui-meta font-normal text-muted-foreground">
+                  {featureModes[kind] === "single-shot"
+                    ? "Always gathers context up front and sends one prompt — never uses repo tools."
+                    : featureModes[kind] === "off"
+                      ? "Turned off."
+                      : "Agentic when a 2.x opencode server is connected; falls back to single-shot otherwise."}
+                </span>
+              </div>
+            {/each}
             {#each AI_FEATURES as def (def.kind)}
-              <label class="radio feature-toggle flex cursor-pointer items-baseline gap-ui-375 pl-4 text-ui-base">
-                <Checkbox
-                  checked={featureToggles[def.kind] !== false}
-                  onCheckedChange={(checked) => (featureToggles[def.kind] = checked === true)}
-                />
-                <span>{def.title}</span>
-              </label>
+              {#if !AGENTIC_FEATURES.includes(def.kind)}
+                <label class="radio feature-toggle flex cursor-pointer items-baseline gap-ui-375 pl-4 text-ui-base">
+                  <Checkbox
+                    checked={featureModes[def.kind] !== "off"}
+                    onCheckedChange={(checked) => (featureModes[def.kind] = checked === true ? "auto" : "off")}
+                  />
+                  <span>{def.title}</span>
+                </label>
+              {/if}
             {/each}
             <label class="radio flex cursor-pointer items-baseline gap-ui-375 text-ui-base">
               <Checkbox bind:checked={statusBar} />
@@ -417,6 +535,81 @@
             </p>
           {/if}
         </fieldset>
+
+        {#if aiEnabled && backendChoice === "opencode" && opencodeEnabled}
+          <fieldset
+            class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]"
+          >
+            <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">
+              Allowed tool rules
+            </legend>
+            <p class="m-0 text-ui-meta text-muted-foreground">
+              Approvals you allowed with "Always in this repo" persist as allow rules on the
+              opencode server. Removing one asks again on the next matching request.
+            </p>
+            {#if !savedRulesCapable}
+              <p class="m-0 text-ui-meta text-muted-foreground" role="status">
+                Saved rules need a 2.x opencode server.
+              </p>
+            {:else if savedRulesLoading && savedRules === null}
+              <p class="m-0 flex items-center gap-1.5 text-ui-meta text-muted-foreground" role="status">
+                <span class="inline-block size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
+                Loading saved rules…
+              </p>
+            {:else if savedRuleError !== null}
+              <p class="m-0 text-ui-meta text-destructive" role="alert">
+                Saved rules could not be loaded: {savedRuleError}
+              </p>
+            {:else if savedRules !== null && savedRules.length === 0}
+              <p class="m-0 text-ui-meta text-muted-foreground" role="status">
+                No saved rules — every agentic ask that needs one asked you first.
+              </p>
+            {:else if savedRules !== null}
+              <ul class="rules m-0 flex list-none flex-col gap-px p-0" aria-label="Saved allow rules">
+                {#each savedRules as rule (rule.id)}
+                  <li
+                    class="rule flex items-baseline gap-2 rounded px-1 py-px text-ui-micro {removingRule === rule.id
+                      ? 'opacity-50'
+                      : ''}"
+                  >
+                    <span class="flex-none font-medium text-foreground">{rule.action}</span>
+                    <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={rule.resource}>
+                      {rule.resource}
+                    </span>
+                    <span
+                      class="flex-none font-mono text-muted-foreground/70"
+                      title="Server-side project this rule is scoped to"
+                    >
+                      {rule.projectID.slice(0, 8)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      class="h-auto flex-none whitespace-nowrap rounded-sm px-1.5 py-px font-normal text-destructive"
+                      type="button"
+                      disabled={removingRule !== null}
+                      onclick={() => void removeSavedRule(rule.id)}
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            {#if savedRulesCapable}
+              <Button
+                variant="link"
+                size="sm"
+                class="link relative h-auto self-start p-0 text-ui-meta underline after:absolute after:-inset-1 after:content-['']"
+                type="button"
+                disabled={savedRulesLoading}
+                onclick={() => void refreshSavedRules()}
+              >
+                {#if savedRulesLoading}Refreshing…{:else}Refresh saved rules{/if}
+              </Button>
+            {/if}
+          </fieldset>
+        {/if}
 
         <fieldset class="group m-0 flex min-w-0 flex-col gap-[0.625rem] rounded-xl border border-border bg-muted/30 px-4 pb-4 pt-[0.9rem]">
           <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Preferred backend</legend>

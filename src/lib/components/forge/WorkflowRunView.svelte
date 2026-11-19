@@ -330,6 +330,11 @@ import { emitUiEvent } from "$lib/palette/events";
     const tail = log.length > DIAG_LOG_TAIL_CHARS ? log.slice(-DIAG_LOG_TAIL_CHARS) : log;
     const fallback = async (): Promise<FeatureOutcome> =>
       ai.run("diagnose-workflow", { repoId, runMeta: meta, diff: tail }, undefined, opts);
+    // Mode wiring (chunk 5): "single-shot" and "off" always take the
+    // single-shot path with NO capability probe ("off" hides the button
+    // entirely — the {#if} below — so this is a defensive path only);
+    // "auto" keeps the agentic-first flow.
+    if (ai.featureMode("diagnose-workflow") !== "auto") return fallback();
     if (!(await ai.agenticAvailable())) return fallback();
     const built = diagnoseFailureAgenticPrompt(
       "The workflow run",
@@ -617,7 +622,7 @@ import { emitUiEvent } from "$lib/palette/events";
           {/if}
         {/if}
         <!-- M13: AI diagnosis for any failed run (log tail → markdown answer). -->
-        {#if runHasFailures(run)}
+        {#if runHasFailures(run) && ai.featureMode("diagnose-workflow") !== "off"}
           <AiFeatureButton
             {repoId}
             kind="diagnose-workflow"

@@ -72,7 +72,13 @@ const FAKE_V2 = vi.hoisted(() => {
       interrupt: vi.fn(),
       switchModel: vi.fn(),
     },
-    permission: { reply: vi.fn() },
+    permission: {
+      reply: vi.fn(),
+      saved: {
+        list: vi.fn(),
+        remove: vi.fn(),
+      },
+    },
     event: { subscribe: vi.fn() },
   };
   return client;
@@ -180,6 +186,8 @@ beforeEach(() => {
   FAKE_V2.session.interrupt.mockReset();
   FAKE_V2.session.switchModel.mockReset();
   FAKE_V2.permission.reply.mockReset();
+  FAKE_V2.permission.saved.list.mockReset();
+  FAKE_V2.permission.saved.remove.mockReset();
   FAKE_V2.event.subscribe.mockReset();
 });
 
@@ -2178,5 +2186,47 @@ describe("OpenCodeProvider.runAgentic (chunk 1)", () => {
     expect(err).toBeInstanceOf(AiError);
     // L7: the retry-created session is torn down — nothing will bind it.
     expect(FAKE_V2.session.remove).toHaveBeenCalledWith({ sessionID: "sess-new" });
+  });
+});
+
+describe("OpenCodeProvider saved allow rules (chunk 5)", () => {
+  it("listSavedPermissions maps the typed saved.list reply (v2)", async () => {
+    FAKE_V2.permission.saved.list.mockResolvedValue([
+      {
+        id: "rule-1",
+        projectID: "proj",
+        action: "shell",
+        resource: "npm test *",
+        time: { created: 1, updated: 2 },
+      },
+      {
+        id: "rule-2",
+        projectID: "proj",
+        action: "edit",
+        resource: "src/*",
+        time: { created: 3, updated: 4 },
+      },
+    ]);
+    const rules = await makeV2Provider().listSavedPermissions();
+    // projectID is surfaced (no client-side project filter — the server
+    // resolves projects from the session directory; foreign rules stay
+    // visible in the settings surface).
+    expect(rules).toEqual([
+      { id: "rule-1", projectID: "proj", action: "shell", resource: "npm test *" },
+      { id: "rule-2", projectID: "proj", action: "edit", resource: "src/*" },
+    ]);
+    expect(FAKE_V2.permission.saved.list).toHaveBeenCalledWith({});
+  });
+
+  it("deleteSavedPermission removes by id (v2)", async () => {
+    FAKE_V2.permission.saved.remove.mockResolvedValue(undefined);
+    await makeV2Provider().deleteSavedPermission("rule-1");
+    expect(FAKE_V2.permission.saved.remove).toHaveBeenCalledWith({ id: "rule-1" });
+  });
+
+  it("non-v2 servers list nothing (the settings section shows its quiet note)", async () => {
+    FAKE_CLIENT.session.create.mockResolvedValue({ data: { id: "sess-1" } });
+    const rules = await new OpenCodeProvider({ fetchImpl: healthFetch(200) }).listSavedPermissions();
+    expect(rules).toEqual([]);
   });
 });

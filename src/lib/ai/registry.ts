@@ -23,6 +23,18 @@ import type { AiJobPhase, FeatureKind } from "./types";
 /** What the rest of the app can pass around as "an AI run kind". */
 export type AiFeatureTag = FeatureKind | "chat";
 
+/**
+ * Features whose runs can execute agentically TODAY (M13 chunk 5): the
+ * opencode agentic path serves these; the other features stay single-shot
+ * until phase 2 wires their agentic surfaces. The per-feature mode reader
+ * accepts modes for ANY feature — later phases only widen this set.
+ */
+export const AGENTIC_FEATURES: readonly AiFeatureTag[] = [
+  "chat",
+  "diagnose-workflow",
+  "diagnose-action",
+];
+
 /** The kinds synthesized from the user's custom prompt library. */
 export type CustomFeatureKind = `custom.${string}`;
 

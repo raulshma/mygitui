@@ -789,6 +789,7 @@ describe("AiStore streaming preference (registry-driven)", () => {
 
 import { AgenticRunController } from "./agenticRun.svelte";
 import type { AgenticRunResult } from "./opencode";
+import { AGENTIC_FEATURES } from "./registry";
 
 /** A fake runAgentic result (the shape the provider's method returns). */
 function fakeResult(controller: AgenticRunController, overrides?: Partial<AgenticRunResult>): AgenticRunResult {
@@ -1381,5 +1382,169 @@ describe("Agentic diagnose — fix round (chunk 4 review)", () => {
       }),
     ).rejects.toMatchObject({ kind: "unknown" });
     store.stateFor("r1").busy = false;
+  });
+});
+
+describe("Per-feature tri-state (chunk 5)", () => {
+  it("parses legacy booleans into modes (true → auto, false → off)", () => {
+    const config = parseAiConfig(
+      JSON.stringify({
+        backend: "opencode",
+        features: { "commit-message": true, "explain-hunk": false, "release-notes": "single-shot" },
+      }),
+    );
+    expect(config.features).toEqual({
+      "commit-message": "auto",
+      "explain-hunk": "off",
+      "release-notes": "single-shot",
+    });
+    // The mode reader sees the migrated rows.
+    const store = new AiStore({ storage: memStorage(), providers: {} });
+    store.config.features = config.features;
+    expect(store.featureMode("commit-message")).toBe("auto");
+    expect(store.featureMode("explain-hunk")).toBe("off");
+    expect(store.featureMode("release-notes")).toBe("single-shot");
+  });
+
+  it("unknown mode values normalize to auto (row kept)", () => {
+    const config = parseAiConfig(
+      JSON.stringify({ backend: "opencode", features: { "commit-message": "yolo" } }),
+    );
+    expect(config.features).toEqual({ "commit-message": "auto" });
+  });
+
+  it("featureMode defaults to auto; isFeatureEnabled keeps off-check parity", () => {
+    const { store } = makeHarness();
+    // Absent = "auto" for every feature + chat.
+    for (const kind of [
+      "commit-message",
+      "pr-title-body",
+      "explain-hunk",
+      "explain-selection",
+      "review-staged",
+      "stash-message",
+      "branch-name",
+      "explain-commit",
+      "explain-blame",
+      "diagnose-workflow",
+      "diagnose-action",
+      "conflict-assist",
+      "release-notes",
+      "chat",
+    ] as const) {
+      expect(store.featureMode(kind)).toBe("auto");
+      expect(store.isFeatureEnabled(kind)).toBe(true);
+    }
+    // "off" disables; "single-shot" keeps the feature enabled:
+    store.setFeatureMode("chat", "off");
+    expect(store.isFeatureEnabled("chat")).toBe(false);
+    store.setFeatureMode("chat", "single-shot");
+    expect(store.isFeatureEnabled("chat")).toBe(true);
+    expect(store.featureMode("chat")).toBe("single-shot");
+    // The master switch still gates everything:
+    store.setFeatureMode("chat", "auto");
+    store.setEnabled(false);
+    expect(store.isFeatureEnabled("chat")).toBe(false);
+  });
+
+  it("setFeatureMode round-trips through storage (auto removes the row)", () => {
+    const storage = memStorage();
+    const first = new AiStore({ storage, providers: {} });
+    first.setFeatureMode("chat", "single-shot");
+    first.setFeatureMode("diagnose-workflow", "off");
+    const second = new AiStore({ storage, providers: {} });
+    expect(second.featureMode("chat")).toBe("single-shot");
+    expect(second.featureMode("diagnose-workflow")).toBe("off");
+    second.setFeatureMode("chat", "auto");
+    expect(second.config.features?.chat).toBeUndefined();
+    // The agentic-eligible set covers exactly the shipped features:
+    expect(AGENTIC_FEATURES).toEqual(["chat", "diagnose-workflow", "diagnose-action"]);
+  });
+
+  it("the settings on/off toggle maps to auto/off through setFeatureEnabled", () => {
+    const { store } = makeHarness();
+    store.setFeatureEnabled("chat", false);
+    expect(store.featureMode("chat")).toBe("off");
+    store.setFeatureEnabled("chat", true);
+    expect(store.featureMode("chat")).toBe("auto");
+    expect(store.config.features?.chat).toBeUndefined();
+  });
+
+  it("agentic diagnose mode behaviors at store level", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    (opencode as unknown as { connection?: unknown }).connection = vi.fn(async () => ({
+      baseUrl: "http://x",
+      authHeader: null,
+      serverKind: "v2" as const,
+    }));
+    opencode.runAgentic.mockResolvedValue({
+      text: "agentic",
+      model: "m",
+      backend: "opencode",
+      elapsedMs: 1,
+      sessionID: "sess-t",
+    });
+    const fallback = vi.fn(async (): Promise<AiResult> => ({
+      text: "single",
+      model: "m",
+      backend: "opencode",
+      elapsedMs: 1,
+    }));
+
+    // auto: the agentic attempt runs (current chunk-4 flow):
+    expect(store.featureMode("diagnose-workflow")).toBe("auto");
+    const auto = await store.runAgenticWithFallback({
+      repoId: "r1",
+      prompt: "p",
+      feature: "diagnose-workflow",
+      fallback,
+    });
+    expect(auto.mode).toBe("agentic");
+
+    // single-shot pinned: the VIEW skips the probe and calls ai.run
+    // directly — at store level that means the helper is never entered;
+    // assert the reader the view branches on:
+    store.setFeatureMode("diagnose-workflow", "single-shot");
+    expect(store.featureMode("diagnose-workflow")).toBe("single-shot");
+    expect(store.isFeatureEnabled("diagnose-workflow")).toBe(true);
+
+    // off: the view hides the button; the reader drives it:
+    store.setFeatureMode("diagnose-action", "off");
+    expect(store.featureMode("diagnose-action")).toBe("off");
+    expect(store.isFeatureEnabled("diagnose-action")).toBe(false);
+  });
+});
+
+describe("Agentic chat — fix round (chunk 5 review)", () => {
+  it("chat mode off refuses the full chain (no agentic dispatch)", async () => {
+    const { store, opencode } = makeHarness();
+    store.setOptIn("r1", true);
+    (opencode as unknown as { connection?: unknown }).connection = vi.fn(async () => ({
+      baseUrl: "http://x",
+      authHeader: null,
+      serverKind: "v2" as const,
+    }));
+    opencode.runAgentic.mockResolvedValue({
+      text: "x",
+      model: "m",
+      backend: "opencode",
+      elapsedMs: 1,
+      sessionID: "sess-t",
+    });
+    store.setFeatureMode("chat", "off");
+    await expect(
+      store.sendChat({
+        repoId: "r1",
+        root: "/repo",
+        question: "q",
+        context: { staged: false, commits: false, path: null, pasted: null },
+        agentic: true,
+      }),
+    ).rejects.toMatchObject({ kind: "opt-in" });
+    // No agentic dispatch, no run, no binding.
+    expect(opencode.runAgentic).not.toHaveBeenCalled();
+    expect(store.jobs.history).toHaveLength(0);
+    expect(store.chat.sessionFor("/repo")).toBeNull();
   });
 });

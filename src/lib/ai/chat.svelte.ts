@@ -44,6 +44,7 @@ import type { AiBackend, AiResult, AiUsage } from "./types";
 import type { FeatureRouter } from "./features";
 import { budgetedDiffText } from "./diffBudget";
 import { formatFileDiff, gatherCommits } from "./features";
+import { aiFeatureLabel } from "./registry";
 import { describeError } from "$lib/errors";
 import { AiJobStore } from "./jobs.svelte";
 import type { AiJobTicket } from "./jobs.svelte";
@@ -209,6 +210,12 @@ export interface ChatStoreDeps {
   git?: ChatGitClient;
   /** Master-switch gate; `false` refuses sends (default: on). */
   enabled?: () => boolean;
+  /**
+   * Per-feature gate (chunk 5): `false` for "chat" refuses sends — the
+   * store-level guard so no surface can bypass a disabled feature.
+   * Absent = no per-feature gate (tests).
+   */
+  isFeatureEnabled?: (kind: "chat") => boolean;
   /** Per-repo opt-in gate (default: opted in — tests wire the real one). */
   isOptedIn?: (repoId: string) => boolean;
   /** Epoch-ms clock (tests). */
@@ -308,6 +315,7 @@ export class ChatStore {
   readonly #router: FeatureRouter;
   readonly #git: ChatGitClient | null;
   readonly #enabled: () => boolean;
+  readonly #isFeatureEnabled: ((kind: "chat") => boolean) | null;
   readonly #isOptedIn: (repoId: string) => boolean;
   readonly #now: () => number;
   readonly #mintId: () => string;
@@ -328,6 +336,7 @@ export class ChatStore {
     this.#mintId =
       deps.id ??
       (() => `chat-${Math.random().toString(36).slice(2, 10)}-${this.#now().toString(36)}`);
+    this.#isFeatureEnabled = deps.isFeatureEnabled ?? null;
     this.#agentic = deps.agentic ?? null;
     this.#deleteSession = deps.deleteSession ?? null;
     this.#model = deps.model ?? null;
@@ -376,6 +385,12 @@ export class ChatStore {
   async send(opts: ChatSendOptions): Promise<ChatMessage> {
     if (!this.#enabled()) {
       throw new AiError("opt-in", "AI features are turned off in AI settings", {});
+    }
+    // Per-feature mode gate (chunk 5): "off" refuses at the STORE level —
+    // no surface (panel, agent view) can dispatch a run for a feature the
+    // user switched off, agentic or single-shot.
+    if (this.#isFeatureEnabled !== null && !this.#isFeatureEnabled("chat")) {
+      throw new AiError("opt-in", `${aiFeatureLabel("chat")} is turned off in AI settings`, {});
     }
     if (!this.#isOptedIn(opts.repoId)) {
       throw new AiError(

@@ -69,6 +69,8 @@
 
   const enabled = $derived(ai.isEnabled());
   const optedIn = $derived(ai.isOptedIn(repoId));
+  /** Per-feature chat mode "off" hides the panel's affordances (chunk 5). */
+  const chatModeOff = $derived(ai.featureMode("chat") === "off");
 
   // --- chat state ----------------------------------------------------------------
 
@@ -88,9 +90,30 @@
   let pasteOpen = $state(false);
   /**
    * Agentic chip (per-run override, M13 chunk 3): default derives from the
-   * per-feature chat switch; toggling affects the next message only.
+   * per-feature chat MODE — "auto" starts the chip on, "single-shot" off,
+   * "off" hides chat entirely (the mode-off branch above).
+   *
+   * Reactive default sync (chunk 5): a settings flip auto ↔ single-shot
+   * re-syncs the chip WHILE THE TURN IS IDLE (the effect fires on the
+   * mode change and re-applies the default unless a turn is running).
+   * Semantics: the user's explicit toggle always wins until the next
+   * MODE change — composer typing does not reset it (the effect reads
+   * only the mode and the busy flag).
    */
-  let agentic = $state(ai.isFeatureEnabled("chat"));
+  let agentic = $state(ai.featureMode("chat") === "auto");
+  /** Last mode the chip default was synced to (user toggles win until the
+   * persisted MODE actually changes — busy flips never reset the chip). */
+  let syncedMode: "auto" | "single-shot" | "off" | null = null;
+  // Reactive default sync (chunk 5): a settings flip re-applies the mode
+  // default while no turn is running; composer typing never resets it.
+  $effect(() => {
+    const mode = ai.featureMode("chat");
+    if (mode === "off") return;
+    if (syncedMode === mode) return;
+    if (ai.chat.busy[root] === true) return;
+    agentic = mode === "auto";
+    syncedMode = mode;
+  });
 
   /** 1s ticker while a turn streams (elapsed label), idle-cost zero. */
   let now = $state(Date.now());
@@ -231,6 +254,22 @@
     <EmptyState
       title="AI is turned off."
       hint="Enable it again in AI settings to use the assistant and the AI features."
+    >
+      <Button
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        variant="secondary"
+        type="button"
+        onclick={() => emitUiEvent("open-ai-settings")}
+      >
+        Open AI settings
+      </Button>
+    </EmptyState>
+  {:else if chatModeOff}
+    <!-- Per-feature chat mode "off" (chunk 5): the affordances hide; the
+         path back in stays reachable. -->
+    <EmptyState
+      title="The assistant chat is turned off."
+      hint="Enable it again in AI settings (Features → Assistant) to use the chat."
     >
       <Button
         class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"

@@ -66,10 +66,13 @@ export interface AiConfig {
    */
   enabled?: boolean;
   /**
-   * Per-feature toggles (M13); absent or `true` = enabled. The settings
-   * UI renders one switch per `AI_FEATURES` registry entry.
+   * Per-feature execution modes (M13 chunk 5; glossary "Feature mode"):
+   * `"auto"` runs agentically when a v2 opencode path exists (else
+   * single-shot), `"single-shot"` never goes agentic, `"off"` disables the
+   * feature. Persisted as modes; the parser upgrades legacy booleans
+   * (`true` → `"auto"`, `false` → `"off"`) in place. Absent = `"auto"`.
    */
-  features?: Record<string, boolean>;
+  features?: Record<string, AiFeatureMode>;
   /** Show live AI job rows in the status bar; default `true`. */
   statusBar?: boolean;
   /**
@@ -119,6 +122,23 @@ export function resolveAgenticBudget(config: AiConfig): AgenticBudget {
         ? budget.maxToolCalls
         : AGENTIC_TOOL_CALLS_MAX,
   };
+}
+
+/**
+ * Per-feature execution mode (glossary "Feature mode"): `"auto"` runs
+ * agentically when the backend can serve it, `"single-shot"` pins the
+ * context-gathered path, `"off"` disables the feature.
+ */
+export type AiFeatureMode = "auto" | "single-shot" | "off";
+
+/** Normalizes one persisted features entry (legacy booleans, junk). */
+export function parseFeatureMode(value: unknown): AiFeatureMode {
+  if (value === false) return "off";
+  if (value === "single-shot" || value === "off") return value;
+  // `true`, "auto" and anything unknown normalize to the default ("auto"):
+  // the row is kept (the settings checkbox reads it) but never disables or
+  // pins a mode the app does not know.
+  return "auto";
 }
 
 /** opencode mode used when config does not say (managed = just works). */

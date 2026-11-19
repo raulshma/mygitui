@@ -37,8 +37,23 @@ import type { ManagedServe } from "./opencode";
 import { OpenRouterProvider } from "./openrouter";
 import { runFeature } from "./features";
 import type { AiRunHooks, FeatureCtx, FeatureDeps, FeatureGitClient, FeatureOutcome } from "./features";
-import { defaultAiConfig, AiError, isAiError, resolveAgenticBudget, resolveOpencode } from "./types";
-import type { AiAgenticBudget, AiBackend, AiConfig, AiResult, FeatureKind, OpencodeMode } from "./types";
+import {
+  defaultAiConfig,
+  AiError,
+  isAiError,
+  parseFeatureMode,
+  resolveAgenticBudget,
+  resolveOpencode,
+} from "./types";
+import type {
+  AiAgenticBudget,
+  AiBackend,
+  AiConfig,
+  AiFeatureMode,
+  AiResult,
+  FeatureKind,
+  OpencodeMode,
+} from "./types";
 import type { ProviderSet, ResolvedConnection, Unsubscribe } from "./provider";
 import { STALE_AFTER_MS } from "./connection";
 import { AiJobStore } from "./jobs.svelte";
@@ -48,6 +63,7 @@ import { modelChoice } from "./modelChoice.svelte";
 import { ChatStore } from "./chat.svelte";
 import type { ChatContextSelection, ChatMessage } from "./chat.svelte";
 import { aiFeatureLabel, featureWantsStreaming } from "./registry";
+import { AGENTIC_FEATURES } from "./registry";
 import type { AiFeatureTag } from "./registry";
 
 import { describeError } from "$lib/errors";
@@ -245,9 +261,14 @@ export function parseAiConfig(raw: string | null): AiConfig {
     }
   }
   if (typeof obj.features === "object" && obj.features !== null) {
+    // Modes since chunk 5; legacy boolean entries migrate in place
+    // (true → "auto", false → "off"). Unknown values normalize to "auto"
+    // (the row is kept — the settings toggle reads it — but never pins a
+    // mode the app does not know), matching the field-by-field drop
+    // style's effect without losing the row.
     for (const [kind, value] of Object.entries(obj.features as Record<string, unknown>)) {
-      if (typeof value === "boolean") {
-        (config.features ??= {})[kind] = value;
+      if (kind.length > 0) {
+        (config.features ??= {})[kind] = parseFeatureMode(value);
       }
     }
   }
@@ -333,6 +354,7 @@ export class AiStore {
         // and per-repo opt-in, read live so settings apply instantly.
         enabled: () => this.isEnabled(),
         isOptedIn: (repoId) => this.isOptedIn(repoId),
+        isFeatureEnabled: (kind) => this.isFeatureEnabled(kind),
         // Agentic chat (M13 chunk 3): the turn's ticket is adopted by the
         // runner (caller owns begin + settle); the thread binds one
         // opencode session 1:1 and the per-repo model choice applies.
@@ -500,15 +522,34 @@ export class AiStore {
    * the wide tag so `"chat"` reads the same per-feature fields.
    */
   isFeatureEnabled(kind: AiFeatureTag): boolean {
-    return this.isEnabled() && this.config.features?.[kind] !== false;
+    return this.isEnabled() && this.featureMode(kind) !== "off";
   }
 
-  /** Per-feature toggle (settings renders these from `AI_FEATURES`). */
-  setFeatureEnabled(kind: FeatureKind, enabled: boolean): void {
+  /**
+   * Per-feature execution mode (chunk 5): the persisted entry, or "auto"
+   * when absent. The reader accepts modes for ANY feature — agentic
+   * eligibility (the `AGENTIC_FEATURES` set) lives with the call sites,
+   * so phase-2 features already round-trip their modes.
+   */
+  featureMode(kind: AiFeatureTag): AiFeatureMode {
+    return this.config.features?.[kind] ?? "auto";
+  }
+
+  /** Persists one per-feature mode ("auto" removes the row = default). */
+  setFeatureMode(kind: AiFeatureTag, mode: AiFeatureMode): void {
     const features = (this.config.features ??= {});
-    if (enabled) delete features[kind];
-    else features[kind] = false;
+    if (mode === "auto") delete features[kind];
+    else features[kind] = mode;
     this.#persist();
+  }
+
+  /**
+   * Per-feature on/off toggle (the settings checkbox renders these from
+   * `AI_FEATURES`): on restores the default mode ("auto"), off pins
+   * "off". Mode-aware UIs use {@link setFeatureMode}.
+   */
+  setFeatureEnabled(kind: AiFeatureTag, enabled: boolean): void {
+    this.setFeatureMode(kind, enabled ? "auto" : "off");
   }
 
   /** Live AI job rows in the status bar (default on). */
