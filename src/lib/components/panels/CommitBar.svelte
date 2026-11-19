@@ -10,9 +10,14 @@
    * override, signing + hook status icons, a Fixup action, the Commit
    * button and a secondary Commit & Push button (spinner while the commit /
    * push op runs per the OpStore; disabled with no message unless amending).
-   * Controls sit in one dense row under the message (wrapping only when the
-   * sidebar gets too narrow): options left, Fixup + AI + Commit right. The
-   * author override fields expand as a full-width row under that.
+   * The AI sparkle rides the textarea's top-right corner (VS Code-style).
+   * Under the message sits one dense controls row: config left-to-right
+   * (options menu, Fixup, signing/hook status, per-run AI model picker)
+   * with the Commit & Push + Commit pair glued to the right edge. When the
+   * sidebar is too narrow the pair wraps to its own right-aligned line as
+   * a unit (only a truly tiny pane wraps the pair internally), so nothing
+   * ever scatters icon-by-icon. The author override fields expand as a
+   * full-width row under that.
    * Success clears the form, toasts the short sha and asks the owner to
    * refresh (`onCommitted` → RepoView refreshStatus). Failures render
    * inline next to the button; a push failure after a landed commit toasts
@@ -40,6 +45,7 @@
   import Icon from "$lib/components/icons/Icon.svelte";
   import { ai } from "$lib/ai/ai.svelte";
   import AiFeatureButton from "$lib/components/ai/AiFeatureButton.svelte";
+  import AiModelPicker from "$lib/components/ai/AiModelPicker.svelte";
   import { fixupMessage, hasStagedChanges, headCommitInPage } from "$lib/commit/commitBarModel";
   import {
     commitExtras,
@@ -173,6 +179,15 @@
       : showStagedHint
         ? "commit-staged-hint"
         : undefined,
+  );
+
+  /**
+   * Whether the AI sparkle rides the textarea's corner (the component hides
+   * itself when AI is switched off; the reserved padding follows so the
+   * message keeps its full width when there is no button).
+   */
+  const aiMessageVisible = $derived(
+    ai.isEnabled() && ai.isFeatureEnabled("commit-message"),
   );
 
   $effect(() => {
@@ -491,11 +506,11 @@
       </div>
     {/if}
     <label class="sr-only" for="commit-message">Commit message</label>
-    <div class="message-wrap relative w-full min-w-0">
+    <div class="message-wrap relative w-full min-w-0 overflow-hidden">
       <Hint label="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)">
         {#snippet child({ props })}
           <Textarea
-            class="message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background"
+            class={`message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background ${aiMessageVisible ? "pr-7" : ""}`}
             placeholder="Commit message… Ctrl+↵"
             aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
             rows={1}
@@ -508,6 +523,37 @@
           />
         {/snippet}
       </Hint>
+      {#if aiMessageVisible}
+        <!-- The AI sparkle rides the textarea's top-right corner: the
+            generator belongs to the draft it fills, and keeping it out of
+            the controls row frees the row for the picker + commit buttons
+            at sidebar widths where everything used to wrap and scatter.
+            The confirm/fail overlays are fixed-position and clamped to the
+            viewport, so the textarea ancestor cannot clip them. -->
+        <div class="absolute right-0.5 top-0.5 z-1">
+          <AiFeatureButton
+            {repoId}
+            kind="commit-message"
+            icon
+            gateVisibility={false}
+            rootClass="ai-commit"
+            label="Generate commit message"
+            title="Generate a commit message from the staged diff"
+            ariaLabel="Generate commit message with AI"
+            confirmText={"Send the staged diff to {backend} to draft a commit message?"}
+            errorPrefix="AI commit message failed"
+            successToast="Commit message generated — review before committing"
+            disabled={commitBusy || committing}
+            run={(opts) => ai.generateCommitMessage(repoId, undefined, opts)}
+            onResult={(outcome) => {
+              const m = outcome.message ?? { subject: outcome.result.text, body: "" };
+              message = m.body ? `${m.subject}
+
+${m.body}` : m.subject;
+            }}
+          />
+        </div>
+      {/if}
       <!-- Wrap ruler: a static 1px guide at the per-repo commit-width column.
            The box pads px-2 and the text is monospace, so the column lands at
            `padding + width × 1ch` (see rulerLeftCss). Overlay only — no
@@ -519,8 +565,8 @@
       ></div>
     </div>
 
-    <div class="controls flex items-center flex-wrap gap-x-[0.375rem] gap-y-1 w-full min-w-0">
-      <div class="opt-switches flex items-center gap-0.5 min-w-0">
+    <div class="controls flex items-center flex-wrap gap-x-ui-375 gap-y-1 w-full min-w-0">
+      <div class="opt-switches flex items-center gap-x-1 min-w-0">
         {#if anyOption}
           <Hint label="Active commit options">
             {#snippet child({ props })}
@@ -545,6 +591,30 @@
             >
               <Icon icon={iconOptions} size={16} />
             </Button>
+          {/snippet}
+        </Hint>
+
+        <Hint label={fixupHint}>
+          {#snippet child({ props })}
+            <!-- The hint trigger is the wrapper: a disabled button swallows
+                 pointer events, so the "why is this off" text would never
+                 show if the tooltip rode on the button itself. -->
+            <span
+              {...props}
+              class="inline-flex flex-none"
+            >
+              <Button
+                class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                aria-label="Fixup into HEAD"
+                disabled={!canFixup}
+                onclick={() => void doFixup()}
+              >
+                <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
+              </Button>
+            </span>
           {/snippet}
         </Hint>
 
@@ -587,94 +657,53 @@
         {/if}
       </div>
 
-      <div class="actions ml-auto flex items-center flex-wrap justify-end gap-1 min-w-0 max-w-full">
-        <Hint label={fixupHint}>
+      <!-- Per-run AI model choice: the sparkle that uses it lives in the
+           message box's corner; the picker follows the repo tools so the
+           row reads config-left, actions-right, and it wraps onto its
+           own line (never clips) on a very narrow sidebar. -->
+      <AiModelPicker {repoId} disabled={commitBusy || committing} />
+
+      <!-- Commit actions are one glued unit: on a narrow sidebar the whole
+           pair wraps to its own right-aligned line instead of scattering
+           button by button (or splitting Commit from its push twin). Only
+           a truly tiny pane wraps the pair internally, still end-aligned. -->
+      <span class="commit-actions ml-auto inline-flex flex-wrap justify-end items-center gap-x-ui-375 gap-y-1 max-w-full">
+        <Hint label="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)">
           {#snippet child({ props })}
-            <!-- The hint trigger is the wrapper: a disabled button swallows
-                 pointer events, so the "why is this off" text would never
-                 show if the tooltip rode on the button itself. -->
-            <span
+            <Button
+              class="h-7 gap-ui-35 rounded-full px-3 text-xs"
+              variant="secondary"
+              type="button"
               {...props}
-              class="inline-flex flex-none"
+              aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
+              aria-describedby={stagedHintId}
+              disabled={!canCommitPush}
+              onclick={() => void doCommit(true)}
             >
-              <Button
-                class={`text-[var(--app-added)] hover:bg-accent hover:text-accent-foreground ${fixing ? "[&_svg]:animate-spin" : ""}`}
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Fixup into HEAD"
-                disabled={!canFixup}
-                onclick={() => void doFixup()}
-              >
-                <Icon icon={fixing ? iconProgress : iconFixup} size={16} />
-              </Button>
-            </span>
+              <Icon icon={iconPush} size={14} />
+              <span>{pushing ? "Pushing…" : "Commit & Push"}</span>
+            </Button>
           {/snippet}
         </Hint>
 
-        <!-- Wraps (instead of overflowing the panel edge) when the column is
-             too narrow for the whole cluster: primary actions stay visible. -->
-        <div class="primary inline-flex flex-wrap items-center justify-end gap-x-ui-375 gap-y-1 min-w-0 max-w-full">
-          <AiFeatureButton
-            {repoId}
-            kind="commit-message"
-            icon
-            gateVisibility={false}
-            rootClass="ai-commit"
-            modelPicker
-            label="Generate commit message"
-            title="Generate a commit message from the staged diff"
-            ariaLabel="Generate commit message with AI"
-            confirmText={"Send the staged diff to {backend} to draft a commit message?"}
-            errorPrefix="AI commit message failed"
-            successToast="Commit message generated — review before committing"
-            disabled={commitBusy || committing}
-            run={(opts) => ai.generateCommitMessage(repoId, undefined, opts)}
-            onResult={(outcome) => {
-              const m = outcome.message ?? { subject: outcome.result.text, body: "" };
-              message = m.body ? `${m.subject}
-
-${m.body}` : m.subject;
-            }}
-          />
-
-          <Hint label="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)">
-            {#snippet child({ props })}
-              <Button
-                class="h-7 gap-ui-35 rounded-full px-3 text-xs"
-                variant="secondary"
-                type="button"
-                {...props}
-                aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
-                aria-describedby={stagedHintId}
-                disabled={!canCommitPush}
-                onclick={() => void doCommit(true)}
-              >
-                <Icon icon={iconPush} size={14} />
-                <span>{pushing ? "Pushing…" : "Commit & Push"}</span>
-              </Button>
-            {/snippet}
-          </Hint>
-
-          <Hint label={commitHint}>
-            {#snippet child({ props })}
-              <Button
-                class="h-7 min-w-[5.25rem] gap-ui-35 rounded-full px-4 text-xs"
-                {...props}
-                type="submit"
-                aria-describedby={stagedHintId}
-                disabled={!canCommit}
-              >
-                {#if commitBusy || committing}
-                  <span>Committing…</span>
-                {:else}
-                  <span>Commit</span>
-                {/if}
-              </Button>
-            {/snippet}
-          </Hint>
-        </div>
-      </div>
+        <Hint label={commitHint}>
+          {#snippet child({ props })}
+            <Button
+              class="h-7 min-w-[4.5rem] gap-ui-35 rounded-full px-3 text-xs"
+              {...props}
+              type="submit"
+              aria-describedby={stagedHintId}
+              disabled={!canCommit}
+            >
+              {#if commitBusy || committing}
+                <span>Committing…</span>
+              {:else}
+                <span>Commit</span>
+              {/if}
+            </Button>
+          {/snippet}
+        </Hint>
+      </span>
     </div>
   </div>
 
