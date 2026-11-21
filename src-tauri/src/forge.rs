@@ -3,12 +3,20 @@
 //!
 //! Every GitHub interaction shells out to the **user's** `gh` CLI in JSON
 //! mode with the repository workdir as cwd — mygitui stores no GitHub tokens
-//! and never talks to the API itself; `gh` brings its own auth. Process
-//! rules (mirrors `actions.rs`/`cli.rs` discipline): argv arrays only (no
-//! shell), piped streams drained concurrently (a chatty child must never
-//! block on a full pipe), and a hard timeout — the waiter polls `try_wait`
-//! and kills at the deadline (version probe 3 s, `auth status` 10 s,
-//! list/checks 30–60 s, `pr create` 120 s).
+//! and never talks to the API itself; `gh` brings its own auth. Repos on a
+//! device (SSH tabs) keep that contract with "user's machine" = the DEVICE:
+//! [`ForgeRepo`] routes gh through the SSH exec channel (`cd <device root>
+//! && gh …`, the device's PATH/config/auth) and reads the repo bits forge
+//! needs (remote URL, branch, HEAD, upstream state) with short `git` execs —
+//! a device repo therefore works with whatever gh the device has, exactly
+//! like a local repo works with the local gh. Body payloads travel as
+//! `--body-file -` + exec stdin on devices (the local temp-file path does
+//! not exist there). Process rules (mirrors `actions.rs`/`cli.rs`
+//! discipline): argv arrays only (no shell), piped streams drained
+//! concurrently (a chatty child must never block on a full pipe), and a
+//! hard timeout — the waiter polls `try_wait` and kills at the deadline
+//! (version probe 3 s, `auth status` 10 s, list/checks 30–60 s,
+//! `pr create` 120 s).
 //!
 //! The process runner ([`run_program`]) is generic over the program name so
 //! `forge_tests` can exercise the timeout kill and spawn-failure paths with
@@ -21,10 +29,14 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::remote::quoting::{shell_quote, shell_quote_all};
+use crate::remote::transport::DeviceSession;
 
 /// The `gh` binary probed on PATH (production runner target).
 const GH: &str = "gh";
@@ -515,6 +527,136 @@ fn recv_lossy(rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> String {
     match rx.recv_timeout(READER_GRACE) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(_) => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Remote runner: gh on the device over SSH
+//
+// Remote repos keep the exact contract "shells out to the user's gh with the
+// repository workdir as cwd" — the user's machine being the DEVICE: gh runs
+// there with the device's PATH, config, token helpers and auth, so nothing
+// about the gh command surface changes, only where it executes.
+// ---------------------------------------------------------------------------
+
+/// `cd '<root>' && gh <args…>` — the device-side command line (pure; argv is
+/// shell-quoted because russh `exec` sends one string the remote shell
+/// parses — see `remote::quoting`).
+pub fn remote_gh_command(root: &str, args: &[String]) -> String {
+    format!("cd {} && {}", shell_quote(root), shell_quote_all(args))
+}
+
+/// Map one remote exec onto the local [`ProcOutcome`] shape so every gh
+/// parser/classifier below runs unchanged for device repos. Transport
+/// failures are NOT "gh missing" (they must not surface as the install
+/// banner): they come back as a failed run with the message on stderr, so
+/// the normal failure classification applies (an unreachable device hits
+/// the offline markers). A cancelled/timed-out exec maps to `timed_out`.
+pub(crate) fn exec_outcome(
+    outcome: Result<crate::remote::transport::ExecOutput, String>,
+) -> ProcOutcome {
+    match outcome {
+        Ok(out) => ProcOutcome {
+            stdout: out.stdout_str(),
+            stderr: out.stderr_str(),
+            code: Some(i32::try_from(out.exit_code).unwrap_or(1)),
+            timed_out: false,
+            spawn_error: None,
+        },
+        Err(err) if err.contains("timed out") || err.contains("cancelled") => ProcOutcome {
+            timed_out: true,
+            ..ProcOutcome::default()
+        },
+        Err(err) => ProcOutcome {
+            stderr: format!("device: {err}"),
+            ..ProcOutcome::default()
+        },
+    }
+}
+
+/// Run one gh invocation on a device over SSH: `cd '<root>' && gh <args>`
+/// with an optional stdin payload (body files travel as `--body-file -`),
+/// `timeout` as the hard kill (the exec's own deadline). Bridge note: the
+/// caller is a `spawn_blocking`/scoped thread, so `block_on` here follows
+/// the remote engine's sync-bridge idiom.
+fn run_remote_gh(
+    session: &Arc<DeviceSession>,
+    root: &str,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> ProcOutcome {
+    let cmd = remote_gh_command(root, args);
+    let outcome = tauri::async_runtime::block_on(session.exec_with_stdin(
+        &cmd,
+        stdin.map(Vec::from),
+        timeout,
+    ));
+    exec_outcome(outcome)
+}
+
+/// One device-side git read (`git --no-optional-locks -C <root> <args>`,
+/// stderr-tailed error on non-zero). Same sync-bridge idiom as gh above.
+fn remote_git_out(
+    session: &Arc<DeviceSession>,
+    root: &str,
+    args: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let cmd = crate::remote::engine::git_command(root, args);
+    let out = tauri::async_runtime::block_on(session.exec(&cmd, timeout))?.checked("git")?;
+    Ok(out.stdout_str())
+}
+
+/// Where one forge command's repository lives: the local machine (gh cwd +
+/// git2 reads) or a remote device (gh and git run there — the device's own
+/// gh config and auth; mygitui stores no tokens either way). The IPC layer
+/// builds one per command from the repo handle.
+#[derive(Clone)]
+pub struct ForgeRepo {
+    /// Workdir root: a local path, or the device-side POSIX path (remote
+    /// repos keep `RepoHandle::root` = device path).
+    pub root: PathBuf,
+    /// Remote backend; `None` = local.
+    pub remote: Option<Arc<crate::repo::RemoteHandle>>,
+}
+
+impl ForgeRepo {
+    /// A local repo (tests, non-IPC callers).
+    #[cfg(test)]
+    pub fn local(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            remote: None,
+        }
+    }
+
+    /// Run gh for this repo (no stdin).
+    pub fn run_gh(&self, args: &[String], timeout: Duration) -> ProcOutcome {
+        self.run_gh_stdin(args, None, timeout)
+    }
+
+    /// Run gh for this repo with an optional stdin payload (`--body-file -`
+    /// on devices). Local runs keep the spawn; device runs exec over SSH.
+    pub fn run_gh_stdin(
+        &self,
+        args: &[String],
+        stdin: Option<&[u8]>,
+        timeout: Duration,
+    ) -> ProcOutcome {
+        match &self.remote {
+            None => run_program(GH, Some(&self.root), args, timeout),
+            Some(remote) => run_remote_gh(&remote.session, &remote.root, args, stdin, timeout),
+        }
+    }
+
+    /// One device-side git read; `Err` for local repos (callers only reach
+    /// this when `remote` is `Some`).
+    pub(crate) fn remote_git(&self, args: &str, timeout: Duration) -> Result<String, String> {
+        match &self.remote {
+            None => Err("not a remote repository".to_string()),
+            Some(remote) => remote_git_out(&remote.session, &remote.root, args, timeout),
+        }
     }
 }
 
@@ -1355,6 +1497,21 @@ fn trim_message(text: &str) -> String {
 // Sync orchestrators (IPC commands wrap these in spawn_blocking)
 // ---------------------------------------------------------------------------
 
+/// Shared tail of the gh probes: version + auth verdict + host-cache
+/// refresh (both an authed run — which lists accounts — and an unauthed one
+/// still print host context). Callers degrade to the unavailable default on
+/// a failed probe first (local: not on PATH; device: transport failure).
+fn status_from_probes(probe: ProcOutcome, auth: ProcOutcome) -> ForgeStatus {
+    let authed = !auth.timed_out && auth.code == Some(0);
+    let hosts = gh_auth_hosts(&format!("{}\n{}", auth.stdout, auth.stderr));
+    cache_authed_hosts(hosts);
+    ForgeStatus {
+        available: true,
+        version: version_from_output(&probe.stdout),
+        authed,
+    }
+}
+
 /// Body of `forge_status` (no repository needed): PATH probe + auth check.
 /// A successful auth probe also refreshes the authed-host cache (plan §9.1:
 /// hosts refresh on auth-state change).
@@ -1363,23 +1520,41 @@ pub fn status_sync() -> ForgeStatus {
     if probe.spawn_error.is_some() {
         return ForgeStatus::default();
     }
-    let version = version_from_output(&probe.stdout);
     let auth = run_program(
         GH,
         None,
         &["auth".to_string(), "status".to_string()],
         AUTH_TIMEOUT,
     );
-    let authed = !auth.timed_out && auth.code == Some(0);
-    // Host cache refresh rides the auth probe (both an authed run — which
-    // lists accounts — and an unauthed one still print host context).
-    let hosts = gh_auth_hosts(&format!("{}\n{}", auth.stdout, auth.stderr));
-    cache_authed_hosts(hosts);
-    ForgeStatus {
-        available: true,
-        version,
-        authed,
+    status_from_probes(probe, auth)
+}
+
+/// Body of `forge_status` for a repository on a device: gh is probed on the
+/// DEVICE (`cd <root>` is irrelevant for the probes but keeps one runner;
+/// the device's authed hosts merge into the same cache, so GHE remotes
+/// resolved from device repos parse like local ones).
+pub fn status_sync_remote(session: &Arc<DeviceSession>, root: &str) -> ForgeStatus {
+    let probe = run_remote_gh(
+        session,
+        root,
+        &["--version".to_string()],
+        None,
+        VERSION_TIMEOUT,
+    );
+    if probe.code.is_none() && !probe.timed_out {
+        // Transport failure (device unreachable / channel dead): not "gh
+        // missing", but no usable verdict either — the unavailable default
+        // keeps the panel in its install banner until the device responds.
+        return ForgeStatus::default();
     }
+    let auth = run_remote_gh(
+        session,
+        root,
+        &["auth".to_string(), "status".to_string()],
+        None,
+        AUTH_TIMEOUT,
+    );
+    status_from_probes(probe, auth)
 }
 
 /// A GitHub remote resolved from one open repository: the owner/repo pair
@@ -1392,14 +1567,15 @@ pub struct ResolvedRemote {
     pub repo: String,
 }
 
-/// Shared tail of context/snapshot resolution: open the repo (short-lived
-/// `git2::Repository`, a read that touches no shared engine state), find
-/// `remote` (default `origin`; the per-repo override wins) and parse it
-/// against the cached authed-host list. Failures are structured
-/// [`ForgeError`]s with kind `NotRepo` (missing remote / not GitHub) — the
-/// FE's degraded "off" chip shows the reason verbatim.
+/// Shared tail of context/snapshot resolution: find `remote` (default
+/// `origin`; the per-repo override wins) and parse it against the cached
+/// authed-host list. Local repos read through git2 (short-lived
+/// `git2::Repository`, a read that touches no shared engine state); device
+/// repos read `git config` over SSH — same errors, same shapes. Failures
+/// are structured [`ForgeError`]s with kind `NotRepo` (missing remote /
+/// not GitHub) — the FE's degraded "off" chip shows the reason verbatim.
 pub fn resolve_remote(
-    root: &Path,
+    repo: &ForgeRepo,
     remote_override: Option<&str>,
 ) -> Result<ResolvedRemote, ForgeError> {
     let remote_name = remote_override
@@ -1407,18 +1583,53 @@ pub fn resolve_remote(
         .filter(|name| !name.is_empty())
         .unwrap_or("origin")
         .to_owned();
-    let repo = git2::Repository::discover(root)
-        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
-    let remote = repo.find_remote(&remote_name).map_err(|_| ForgeError {
-        kind: KIND_NOT_REPO.to_string(),
-        message: format!("no `{remote_name}` remote configured — the GitHub flow needs one"),
-        url: None,
-    })?;
-    let remote_url = remote.url().map(str::to_owned).map_err(|_| ForgeError {
-        kind: KIND_NOT_REPO.to_string(),
-        message: format!("`{remote_name}` has no URL"),
-        url: None,
-    })?;
+    let remote_url = match &repo.remote {
+        None => {
+            let git = git2::Repository::discover(&repo.root)
+                .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+            let remote = git.find_remote(&remote_name).map_err(|_| ForgeError {
+                kind: KIND_NOT_REPO.to_string(),
+                message: format!(
+                    "no `{remote_name}` remote configured — the GitHub flow needs one"
+                ),
+                url: None,
+            })?;
+            remote.url().map(str::to_owned).map_err(|_| ForgeError {
+                kind: KIND_NOT_REPO.to_string(),
+                message: format!("`{remote_name}` has no URL"),
+                url: None,
+            })?
+        }
+        Some(_) => {
+            // The remote name rides a device shell string: quote the whole
+            // refname (remote/quoting's invariant — every user-controlled
+            // value goes through shell_quote).
+            let url = repo
+                .remote_git(
+                    &format!(
+                        "config --get {}",
+                        shell_quote(&format!("remote.{remote_name}.url"))
+                    ),
+                    Duration::from_secs(15),
+                )
+                .map(|out| out.trim().to_owned())
+                .map_err(|_| ForgeError {
+                    kind: KIND_NOT_REPO.to_string(),
+                    message: format!(
+                        "no `{remote_name}` remote configured — the GitHub flow needs one"
+                    ),
+                    url: None,
+                })?;
+            if url.is_empty() {
+                return Err(ForgeError {
+                    kind: KIND_NOT_REPO.to_string(),
+                    message: format!("`{remote_name}` has no URL"),
+                    url: None,
+                });
+            }
+            url
+        }
+    };
     let (owner, name) =
         parse_github_remote_with_hosts(&remote_url, &cached_hosts()).ok_or_else(|| ForgeError {
             kind: KIND_NOT_REPO.to_string(),
@@ -1433,35 +1644,49 @@ pub fn resolve_remote(
     })
 }
 
-/// Body of `forge_context`: owner/repo from the remote (git2) plus the
-/// current branch. `remote_override` selects a non-default remote (per-repo
-/// override, E1). Rejection is the structured [`ForgeError`] (`NotRepo` for
-/// remote problems) so the FE can render named degraded states.
+/// Body of `forge_context`: owner/repo from the remote plus the current
+/// branch (git2 locally, `git branch --show-current` on the device — empty
+/// output there means detached HEAD, matching the local check).
+/// `remote_override` selects a non-default remote (per-repo override, E1).
+/// Rejection is the structured [`ForgeError`] (`NotRepo` for remote
+/// problems) so the FE can render named degraded states.
 pub fn context_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     remote_override: Option<&str>,
 ) -> Result<ForgeContext, ForgeError> {
-    let resolved = resolve_remote(root, remote_override)?;
-    let repo = git2::Repository::discover(root)
-        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
-    if repo.head_detached().unwrap_or(false) {
+    let resolved = resolve_remote(repo, remote_override)?;
+    let branch = match &repo.remote {
+        None => {
+            let git = git2::Repository::discover(&repo.root)
+                .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+            if git.head_detached().unwrap_or(false) {
+                return Err(ForgeError::other(
+                    "detached HEAD — check out a branch to work with pull requests",
+                ));
+            }
+            let head = git
+                .head()
+                .map_err(|e| ForgeError::other(format!("repository has no HEAD: {e}")))?;
+            let shorthand = head.shorthand().map_err(|e| {
+                ForgeError::other(format!("current branch could not be determined: {e}"))
+            })?;
+            shorthand.to_owned()
+        }
+        Some(_) => repo
+            .remote_git("branch --show-current", Duration::from_secs(15))
+            .map_err(|e| ForgeError::other(format!("current branch could not be determined: {e}")))?
+            .trim()
+            .to_owned(),
+    };
+    if branch.is_empty() || branch == "HEAD" {
         return Err(ForgeError::other(
             "detached HEAD — check out a branch to work with pull requests",
         ));
     }
-    let head = repo
-        .head()
-        .map_err(|e| ForgeError::other(format!("repository has no HEAD: {e}")))?;
-    let branch = head
-        .shorthand()
-        .map_err(|e| ForgeError::other(format!("current branch could not be determined: {e}")))?;
-    if branch.is_empty() || branch == "HEAD" {
-        return Err(ForgeError::other("current branch could not be determined"));
-    }
     Ok(ForgeContext {
         owner: resolved.owner,
         repo: resolved.repo,
-        branch: branch.to_owned(),
+        branch,
         remote_url: resolved.remote_url,
     })
 }
@@ -1479,12 +1704,52 @@ fn write_body_file(body: &str) -> Result<PathBuf, ForgeError> {
     Ok(path)
 }
 
+/// Builds the `--body-file` argument pair for `repo` (empty when `body` is
+/// None/blank): local runs write the temp file — the caller removes it after
+/// the run — while device runs pass `-` and return the body as the exec
+/// stdin payload, because the local temp path does not exist on the device.
+/// What [`body_file_args`] returns: the `--body-file` argument pair, the
+/// exec stdin payload (device runs), and the temp file to remove (local
+/// runs).
+pub(crate) type BodyFileArgs = (Vec<String>, Option<Vec<u8>>, Option<PathBuf>);
+
+/// Returns `(args, stdin, temp_file_to_remove)`.
+pub(crate) fn body_file_args(
+    repo: &ForgeRepo,
+    body: Option<&str>,
+) -> Result<BodyFileArgs, ForgeError> {
+    let body = body.map(str::trim).filter(|b| !b.is_empty());
+    match body {
+        None => Ok((Vec::new(), None, None)),
+        Some(body) => match &repo.remote {
+            None => {
+                let path = write_body_file(body)?;
+                Ok((
+                    vec![
+                        "--body-file".to_string(),
+                        path.to_string_lossy().into_owned(),
+                    ],
+                    None,
+                    Some(path),
+                ))
+            }
+            Some(_) => Ok((
+                vec!["--body-file".to_string(), "-".to_string()],
+                Some(body.as_bytes().to_vec()),
+                None,
+            )),
+        },
+    }
+}
+
 /// Body of `pr_create`: `gh pr create --base <b> --title <t> --body-file
-/// <tmp> [--draft]` in the repo cwd, 120 s timeout, temp body file removed
-/// afterwards. Success is the PR URL line in the output; failures classify
+/// <tmp|-> [--draft]` in the repo cwd (the device's repo dir for device
+/// repos; the body travels through stdin there), 120 s timeout, temp body
+/// file removed afterwards. Success is the PR URL line in the output;
+/// failures classify
 /// via [`forge_failure`] (already-exists keeps the existing URL).
 pub fn pr_create_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     base: &str,
     title: &str,
     body: &str,
@@ -1498,7 +1763,7 @@ pub fn pr_create_sync(
     if title.is_empty() {
         return Err(ForgeError::other("title must not be empty"));
     }
-    let body_file = write_body_file(body)?;
+    let (body_args, stdin, body_file) = body_file_args(repo, Some(body))?;
     let mut args = vec![
         "pr".to_string(),
         "create".to_string(),
@@ -1506,14 +1771,15 @@ pub fn pr_create_sync(
         base.to_string(),
         "--title".to_string(),
         title.to_string(),
-        "--body-file".to_string(),
-        body_file.to_string_lossy().into_owned(),
     ];
+    args.extend(body_args);
     if draft {
         args.push("--draft".to_string());
     }
-    let outcome = run_program(GH, Some(root), &args, CREATE_TIMEOUT);
-    let _ = std::fs::remove_file(&body_file);
+    let outcome = repo.run_gh_stdin(&args, stdin.as_deref(), CREATE_TIMEOUT);
+    if let Some(path) = body_file {
+        let _ = std::fs::remove_file(&path);
+    }
 
     if let Some(err) = &outcome.spawn_error {
         return Err(forge_failure(Some(err), ""));
@@ -1567,9 +1833,9 @@ pub fn pr_list_args(state: &str) -> Result<Vec<String>, String> {
 }
 
 /// Body of `pr_list`: `gh pr list --state <state> --json … --limit 50`.
-pub fn pr_list_sync(root: &Path, state: &str) -> Result<Vec<PrInfo>, String> {
+pub fn pr_list_sync(repo: &ForgeRepo, state: &str) -> Result<Vec<PrInfo>, String> {
     let args = pr_list_args(state)?;
-    let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
+    let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
@@ -1583,12 +1849,23 @@ pub fn pr_list_sync(root: &Path, state: &str) -> Result<Vec<PrInfo>, String> {
 /// Shared runner for mutating gh commands: classify spawn failures, timeouts
 /// and non-zero exits; return trimmed stdout on success.
 fn run_gh_action(
-    root: &Path,
+    repo: &ForgeRepo,
     args: Vec<String>,
     label: &str,
     timeout: Duration,
 ) -> Result<String, ForgeError> {
-    let outcome = run_program(GH, Some(root), &args, timeout);
+    run_gh_action_stdin(repo, args, None, label, timeout)
+}
+
+/// [`run_gh_action`] with an optional stdin payload (device body files).
+fn run_gh_action_stdin(
+    repo: &ForgeRepo,
+    args: Vec<String>,
+    stdin: Option<&[u8]>,
+    label: &str,
+    timeout: Duration,
+) -> Result<String, ForgeError> {
+    let outcome = repo.run_gh_stdin(&args, stdin, timeout);
     if let Some(err) = &outcome.spawn_error {
         return Err(forge_failure(Some(err), ""));
     }
@@ -1606,8 +1883,8 @@ fn run_gh_action(
 }
 
 /// [`run_gh_action`] with the shared mutating-command budget.
-fn run_gh_mutating(root: &Path, args: Vec<String>, label: &str) -> Result<String, ForgeError> {
-    run_gh_action(root, args, label, ACTION_TIMEOUT)
+fn run_gh_mutating(repo: &ForgeRepo, args: Vec<String>, label: &str) -> Result<String, ForgeError> {
+    run_gh_action(repo, args, label, ACTION_TIMEOUT)
 }
 
 /// Arguments of `pr_merge`: method flag + optional `--delete-branch`/`--auto`.
@@ -1646,19 +1923,19 @@ pub fn pr_merge_args(
 /// Body of `pr_merge`: merge/squash/rebase, optional branch deletion and
 /// auto-merge (merges once required checks pass).
 pub fn pr_merge_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     method: &str,
     delete_branch: bool,
     auto: bool,
 ) -> Result<String, ForgeError> {
     let args = pr_merge_args(number, method, delete_branch, auto)?;
-    run_gh_mutating(root, args, "pr merge")
+    run_gh_mutating(repo, args, "pr merge")
 }
 
 /// Body of `pr_close`: close a PR, optionally leaving a comment.
 pub fn pr_close_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     comment: Option<&str>,
 ) -> Result<String, ForgeError> {
@@ -1667,12 +1944,12 @@ pub fn pr_close_sync(
         args.push("--comment".to_string());
         args.push(comment.to_string());
     }
-    run_gh_mutating(root, args, "pr close")
+    run_gh_mutating(repo, args, "pr close")
 }
 
 /// Body of `pr_reopen`: reopen a closed PR, optionally leaving a comment.
 pub fn pr_reopen_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     comment: Option<&str>,
 ) -> Result<String, ForgeError> {
@@ -1681,47 +1958,46 @@ pub fn pr_reopen_sync(
         args.push("--comment".to_string());
         args.push(comment.to_string());
     }
-    run_gh_mutating(root, args, "pr reopen")
+    run_gh_mutating(repo, args, "pr reopen")
 }
 
 /// Body of `pr_ready`: mark ready for review, or convert back to draft
 /// (`gh pr ready --undo`).
-pub fn pr_ready_sync(root: &Path, number: u64, ready: bool) -> Result<String, ForgeError> {
+pub fn pr_ready_sync(repo: &ForgeRepo, number: u64, ready: bool) -> Result<String, ForgeError> {
     let mut args = vec!["pr".to_string(), "ready".to_string(), number.to_string()];
     if !ready {
         args.push("--undo".to_string());
     }
-    run_gh_mutating(root, args, "pr ready")
+    run_gh_mutating(repo, args, "pr ready")
 }
 
-/// Body of `pr_checkout`: check out the PR's head branch locally.
-pub fn pr_checkout_sync(root: &Path, number: u64) -> Result<String, ForgeError> {
+/// Body of `pr_checkout`: check out the PR's head branch locally (on the
+/// device for device repos).
+pub fn pr_checkout_sync(repo: &ForgeRepo, number: u64) -> Result<String, ForgeError> {
     let args = vec!["pr".to_string(), "checkout".to_string(), number.to_string()];
-    run_gh_mutating(root, args, "pr checkout")
+    run_gh_mutating(repo, args, "pr checkout")
 }
 
-/// Body of `pr_comment`: post a comment (`gh pr comment --body-file`).
-pub fn pr_comment_sync(root: &Path, number: u64, body: &str) -> Result<String, ForgeError> {
+/// Body of `pr_comment`: post a comment (`gh pr comment --body-file`; stdin
+/// on devices).
+pub fn pr_comment_sync(repo: &ForgeRepo, number: u64, body: &str) -> Result<String, ForgeError> {
     let body = body.trim();
     if body.is_empty() {
         return Err(ForgeError::other("comment body must not be empty"));
     }
-    let body_file = write_body_file(body)?;
-    let args = vec![
-        "pr".to_string(),
-        "comment".to_string(),
-        number.to_string(),
-        "--body-file".to_string(),
-        body_file.to_string_lossy().into_owned(),
-    ];
-    let result = run_gh_mutating(root, args, "pr comment");
-    let _ = std::fs::remove_file(&body_file);
+    let (body_args, stdin, body_file) = body_file_args(repo, Some(body))?;
+    let mut args = vec!["pr".to_string(), "comment".to_string(), number.to_string()];
+    args.extend(body_args);
+    let result = run_gh_action_stdin(repo, args, stdin.as_deref(), "pr comment", ACTION_TIMEOUT);
+    if let Some(path) = body_file {
+        let _ = std::fs::remove_file(&path);
+    }
     result
 }
 
 /// Body of `pr_review`: approve, request changes, or leave a review comment.
 pub fn pr_review_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     action: &str,
     body: &str,
@@ -1746,16 +2022,9 @@ pub fn pr_review_sync(
         number.to_string(),
         flag.to_string(),
     ];
-    let body_file = if body.is_empty() {
-        None
-    } else {
-        Some(write_body_file(body)?)
-    };
-    if let Some(path) = &body_file {
-        args.push("--body-file".to_string());
-        args.push(path.to_string_lossy().into_owned());
-    }
-    let result = run_gh_mutating(root, args, "pr review");
+    let (body_args, stdin, body_file) = body_file_args(repo, Some(body))?;
+    args.extend(body_args);
+    let result = run_gh_action_stdin(repo, args, stdin.as_deref(), "pr review", ACTION_TIMEOUT);
     if let Some(path) = body_file {
         let _ = std::fs::remove_file(path);
     }
@@ -1764,17 +2033,17 @@ pub fn pr_review_sync(
 
 // -- PR edit + template ------------------------------------------------------
 
-/// Arguments of `pr_edit` (`gh pr edit <n> [--title <t>] [--body-file <f>]`).
-/// `body_file` is the temp file [`write_body_file`] produced for the new
-/// body; at least one of title/body must be present (gh rejects an empty
-/// edit).
+/// Arguments of `pr_edit` (`gh pr edit <n> [--title <t>] [--body-file …]`).
+/// `body_args` is the `--body-file` pair [`body_file_args`] produced for the
+/// new body; at least one of title/body must be present (gh rejects an
+/// empty edit).
 pub fn pr_edit_args(
     number: u64,
     title: Option<&str>,
-    body_file: Option<&Path>,
+    body_args: &[String],
 ) -> Result<Vec<String>, ForgeError> {
     let title = title.map(str::trim).filter(|t| !t.is_empty());
-    if title.is_none() && body_file.is_none() {
+    if title.is_none() && body_args.is_empty() {
         return Err(ForgeError::other(
             "nothing to edit — provide a title or a body",
         ));
@@ -1784,30 +2053,25 @@ pub fn pr_edit_args(
         args.push("--title".to_string());
         args.push(title.to_string());
     }
-    if let Some(path) = body_file {
-        args.push("--body-file".to_string());
-        args.push(path.to_string_lossy().into_owned());
-    }
+    args.extend(body_args.iter().cloned());
     Ok(args)
 }
 
 /// Body of `pr_edit`: update a PR's title and/or body (`gh pr edit`, the
-/// shared 120 s mutating budget; the body travels through the same temp
-/// file channel as `pr_create`, so quoting never matters). The temp file
-/// is removed on both success and failure paths.
+/// shared 120 s mutating budget; the body travels through the temp file
+/// locally and through stdin on devices, so quoting never matters). The
+/// temp file is removed on both success and failure paths.
 pub fn pr_edit_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     title: Option<&str>,
     body: Option<&str>,
 ) -> Result<String, ForgeError> {
     let title = title.map(str::trim).filter(|t| !t.is_empty());
-    let body_file = match body.map(str::trim).filter(|b| !b.is_empty()) {
-        Some(body) => Some(write_body_file(body)?),
-        None => None,
-    };
-    let result = pr_edit_args(number, title, body_file.as_deref())
-        .and_then(|args| run_gh_mutating(root, args, "pr edit"));
+    let (body_args, stdin, body_file) = body_file_args(repo, body)?;
+    let result = pr_edit_args(number, title, &body_args).and_then(|args| {
+        run_gh_action_stdin(repo, args, stdin.as_deref(), "pr edit", ACTION_TIMEOUT)
+    });
     if let Some(path) = body_file {
         let _ = std::fs::remove_file(path);
     }
@@ -1831,7 +2095,7 @@ pub fn pr_template_sync(root: &Path) -> Option<String> {
 /// Body of `pr_checks`: JSON mode first (`gh pr checks <n> --json
 /// name,state,bucket`); when that invocation fails (older gh, unknown flag),
 /// fall back to table output and parse the ✓/✗/- columns.
-pub fn pr_checks_sync(root: &Path, number: u64) -> Result<Vec<CheckInfo>, String> {
+pub fn pr_checks_sync(repo: &ForgeRepo, number: u64) -> Result<Vec<CheckInfo>, String> {
     let json_args = vec![
         "pr".to_string(),
         "checks".to_string(),
@@ -1839,7 +2103,7 @@ pub fn pr_checks_sync(root: &Path, number: u64) -> Result<Vec<CheckInfo>, String
         "--json".to_string(),
         "name,state,bucket".to_string(),
     ];
-    let outcome = run_program(GH, Some(root), &json_args, CHECKS_TIMEOUT);
+    let outcome = repo.run_gh(&json_args, CHECKS_TIMEOUT);
     if outcome.spawn_error.is_none() && outcome.code == Some(0) && !outcome.timed_out {
         let checks = parse_pr_checks_json(&outcome.stdout);
         if !checks.is_empty() {
@@ -1848,7 +2112,7 @@ pub fn pr_checks_sync(root: &Path, number: u64) -> Result<Vec<CheckInfo>, String
     }
     // Fallback: plain table output.
     let table_args = vec!["pr".to_string(), "checks".to_string(), number.to_string()];
-    let outcome = run_program(GH, Some(root), &table_args, CHECKS_TIMEOUT);
+    let outcome = repo.run_gh(&table_args, CHECKS_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
@@ -1892,15 +2156,15 @@ pub fn issue_list_args(state: &str) -> Result<Vec<String>, String> {
 }
 
 /// Body of `issue_list`: `gh issue list --state <state> --json … --limit 50`.
-pub fn issue_list_sync(root: &Path, state: &str) -> Result<Vec<ForgeIssue>, String> {
+pub fn issue_list_sync(repo: &ForgeRepo, state: &str) -> Result<Vec<ForgeIssue>, String> {
     let args = issue_list_args(state)?;
-    let output = read_gh(root, &args, LIST_TIMEOUT)?;
+    let output = read_gh(repo, &args, LIST_TIMEOUT)?;
     Ok(parse_issue_list_json(&output))
 }
 
 /// Body of `issue_view`: one issue with its body and comments
 /// (`gh issue view <n> --json …`).
-pub fn issue_view_sync(root: &Path, number: u64) -> Result<ForgeIssueDetail, String> {
+pub fn issue_view_sync(repo: &ForgeRepo, number: u64) -> Result<ForgeIssueDetail, String> {
     let args = vec![
         "issue".to_string(),
         "view".to_string(),
@@ -1908,14 +2172,14 @@ pub fn issue_view_sync(root: &Path, number: u64) -> Result<ForgeIssueDetail, Str
         "--json".to_string(),
         ISSUE_VIEW_JSON_FIELDS.to_string(),
     ];
-    let output = read_gh(root, &args, LIST_TIMEOUT)?;
+    let output = read_gh(repo, &args, LIST_TIMEOUT)?;
     parse_issue_view_json(&output)
         .ok_or_else(|| "could not parse `gh issue view --json` output".to_string())
 }
 
 /// Shared tail of issue close/reopen: `gh issue <verb> <n> [--comment c]`.
 fn issue_state_change(
-    root: &Path,
+    repo: &ForgeRepo,
     verb: &str,
     number: u64,
     comment: Option<&str>,
@@ -1925,52 +2189,49 @@ fn issue_state_change(
         args.push("--comment".to_string());
         args.push(comment.to_string());
     }
-    run_gh_mutating(root, args, &format!("issue {verb}"))
+    run_gh_mutating(repo, args, &format!("issue {verb}"))
 }
 
 /// Body of `issue_close`: close an issue, optionally leaving a comment.
 pub fn issue_close_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     comment: Option<&str>,
 ) -> Result<String, ForgeError> {
-    issue_state_change(root, "close", number, comment)
+    issue_state_change(repo, "close", number, comment)
 }
 
 /// Body of `issue_reopen`: reopen a closed issue, optionally leaving a
 /// comment.
 pub fn issue_reopen_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
     comment: Option<&str>,
 ) -> Result<String, ForgeError> {
-    issue_state_change(root, "reopen", number, comment)
+    issue_state_change(repo, "reopen", number, comment)
 }
 
-/// Body of `issue_create`: `gh issue create --title <t> [--body-file <tmp>]`
-/// (the body is optional). Success is the issue URL line in the output;
-/// failures classify via [`forge_failure`].
-pub fn issue_create_sync(root: &Path, title: &str, body: &str) -> Result<IssueCreated, ForgeError> {
+/// Body of `issue_create`: `gh issue create --title <t> [--body-file
+/// <tmp|->]` (the body is optional; stdin on devices). Success is the issue
+/// URL line in the output; failures classify via [`forge_failure`].
+pub fn issue_create_sync(
+    repo: &ForgeRepo,
+    title: &str,
+    body: &str,
+) -> Result<IssueCreated, ForgeError> {
     let title = title.trim();
     if title.is_empty() {
         return Err(ForgeError::other("title must not be empty"));
     }
-    let body_file = if body.trim().is_empty() {
-        None
-    } else {
-        Some(write_body_file(body)?)
-    };
+    let (body_args, stdin, body_file) = body_file_args(repo, Some(body))?;
     let mut args = vec![
         "issue".to_string(),
         "create".to_string(),
         "--title".to_string(),
         title.to_string(),
     ];
-    if let Some(path) = &body_file {
-        args.push("--body-file".to_string());
-        args.push(path.to_string_lossy().into_owned());
-    }
-    let outcome = run_program(GH, Some(root), &args, CREATE_TIMEOUT);
+    args.extend(body_args);
+    let outcome = repo.run_gh_stdin(&args, stdin.as_deref(), CREATE_TIMEOUT);
     if let Some(path) = body_file {
         let _ = std::fs::remove_file(path);
     }
@@ -2003,34 +2264,34 @@ pub fn issue_create_sync(root: &Path, title: &str, body: &str) -> Result<IssueCr
 
 /// Body of `notifications_list`: the user's unread notification threads
 /// (`gh api notifications`).
-pub fn notifications_list_sync(root: &Path) -> Result<Vec<ForgeNotification>, String> {
+pub fn notifications_list_sync(repo: &ForgeRepo) -> Result<Vec<ForgeNotification>, String> {
     let args = vec!["api".to_string(), "notifications".to_string()];
-    let output = read_gh(root, &args, NOTIFICATIONS_TIMEOUT)?;
+    let output = read_gh(repo, &args, NOTIFICATIONS_TIMEOUT)?;
     Ok(parse_notifications_json(&output))
 }
 
 /// Body of `notification_mark_read`: mark one thread read
 /// (`gh api threads/<id> -X PATCH`).
-pub fn notification_mark_read_sync(root: &Path, id: u64) -> Result<(), ForgeError> {
+pub fn notification_mark_read_sync(repo: &ForgeRepo, id: u64) -> Result<(), ForgeError> {
     let args = vec![
         "api".to_string(),
         format!("threads/{id}"),
         "-X".to_string(),
         "PATCH".to_string(),
     ];
-    run_gh_mutating(root, args, "api threads").map(|_| ())
+    run_gh_mutating(repo, args, "api threads").map(|_| ())
 }
 
 /// Body of `notifications_mark_all_read`: mark every thread read
 /// (`gh api notifications -X PUT`).
-pub fn notifications_mark_all_read_sync(root: &Path) -> Result<(), ForgeError> {
+pub fn notifications_mark_all_read_sync(repo: &ForgeRepo) -> Result<(), ForgeError> {
     let args = vec![
         "api".to_string(),
         "notifications".to_string(),
         "-X".to_string(),
         "PUT".to_string(),
     ];
-    run_gh_mutating(root, args, "api notifications").map(|_| ())
+    run_gh_mutating(repo, args, "api notifications").map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -2087,8 +2348,8 @@ pub fn workflow_runs_args(
 
 /// Run one read-only gh command in the repo cwd; errors are trimmed and
 /// spawn failures say the CLI is missing.
-fn read_gh(root: &Path, args: &[String], timeout: Duration) -> Result<String, String> {
-    let outcome = run_program(GH, Some(root), args, timeout);
+fn read_gh(repo: &ForgeRepo, args: &[String], timeout: Duration) -> Result<String, String> {
+    let outcome = repo.run_gh(args, timeout);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
@@ -2107,19 +2368,22 @@ fn read_gh(root: &Path, args: &[String], timeout: Duration) -> Result<String, St
 
 /// Body of `workflow_runs`: recent Actions runs, newest first.
 pub fn workflow_runs_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     limit: u32,
     branch: &str,
     status: &str,
     workflow: &str,
 ) -> Result<Vec<WorkflowRun>, String> {
     let args = workflow_runs_args(limit, branch, status, workflow)?;
-    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    let output = read_gh(repo, &args, RUNS_TIMEOUT)?;
     Ok(parse_workflow_runs_json(&output))
 }
 
 /// Body of `workflow_run_detail`: one run with its jobs and steps.
-pub fn workflow_run_detail_sync(root: &Path, run_id: u64) -> Result<WorkflowRunDetail, String> {
+pub fn workflow_run_detail_sync(
+    repo: &ForgeRepo,
+    run_id: u64,
+) -> Result<WorkflowRunDetail, String> {
     let args = vec![
         "run".to_string(),
         "view".to_string(),
@@ -2127,7 +2391,7 @@ pub fn workflow_run_detail_sync(root: &Path, run_id: u64) -> Result<WorkflowRunD
         "--json".to_string(),
         RUN_VIEW_JSON_FIELDS.to_string(),
     ];
-    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    let output = read_gh(repo, &args, RUNS_TIMEOUT)?;
     parse_workflow_run_detail_json(&output)
         .ok_or_else(|| "could not parse `gh run view --json` output".to_string())
 }
@@ -2169,12 +2433,12 @@ pub(crate) fn prefix_job_log(job_name: &str, text: &str) -> String {
 
 /// Fetch one completed job's log archive. `None` while GitHub has not
 /// published it yet (in-progress jobs return `404 BlobNotFound`).
-fn fetch_job_log(root: &Path, job_id: u64) -> Option<String> {
+fn fetch_job_log(repo: &ForgeRepo, job_id: u64) -> Option<String> {
     let api_args = vec![
         "api".to_string(),
         format!("repos/:owner/:repo/actions/jobs/{job_id}/logs"),
     ];
-    let outcome = run_program(GH, Some(root), &api_args, Duration::from_secs(30));
+    let outcome = repo.run_gh(&api_args, Duration::from_secs(30));
     if outcome.code == Some(0) && !outcome.stdout.trim().is_empty() {
         Some(strip_log_bom(&outcome.stdout))
     } else {
@@ -2200,7 +2464,7 @@ fn workflow_job_failed(job: &WorkflowJob) -> bool {
 /// live console on GitHub. Empty output while the run is active is a normal
 /// state, not an error.
 pub fn workflow_run_logs_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     run_id: u64,
     job_id: Option<u64>,
     failed_only: bool,
@@ -2211,7 +2475,7 @@ pub fn workflow_run_logs_sync(
         args.push(job_id.to_string());
     }
     args.push(if failed_only { "--log-failed" } else { "--log" }.to_string());
-    let output = read_gh(root, &args, LOGS_TIMEOUT);
+    let output = read_gh(repo, &args, LOGS_TIMEOUT);
     if let Ok(out) = &output {
         if !out.trim().is_empty() {
             return Ok(cap_log(strip_log_bom(out)));
@@ -2220,7 +2484,7 @@ pub fn workflow_run_logs_sync(
 
     // Live logs fallback for in-progress runs / pending archives. The detail
     // lookup also tells us whether an empty result is expected.
-    let detail = workflow_run_detail_sync(root, run_id).ok();
+    let detail = workflow_run_detail_sync(repo, run_id).ok();
     let run_active = detail
         .as_ref()
         .map(|detail| detail.run.status != "completed")
@@ -2230,7 +2494,7 @@ pub fn workflow_run_logs_sync(
         let job = detail
             .as_ref()
             .and_then(|detail| detail.jobs.iter().find(|job| job.database_id == job_id));
-        if let Some(log) = fetch_job_log(root, job_id) {
+        if let Some(log) = fetch_job_log(repo, job_id) {
             let name = job.map(|job| job.name.as_str()).unwrap_or("Logs");
             return Ok(cap_log(prefix_job_log(name, &log)));
         }
@@ -2248,7 +2512,7 @@ pub fn workflow_run_logs_sync(
             if failed_only && !workflow_job_failed(job) {
                 continue;
             }
-            if let Some(log) = fetch_job_log(root, job.database_id) {
+            if let Some(log) = fetch_job_log(repo, job.database_id) {
                 combined.push_str(&prefix_job_log(&job.name, &log));
             }
         }
@@ -2264,14 +2528,14 @@ pub fn workflow_run_logs_sync(
 }
 
 /// Body of `workflow_run_cancel`: cancel a queued or running run.
-pub fn workflow_run_cancel_sync(root: &Path, run_id: u64) -> Result<String, ForgeError> {
+pub fn workflow_run_cancel_sync(repo: &ForgeRepo, run_id: u64) -> Result<String, ForgeError> {
     let args = vec!["run".to_string(), "cancel".to_string(), run_id.to_string()];
-    run_gh_action(root, args, "run cancel", ACTION_TIMEOUT)
+    run_gh_action(repo, args, "run cancel", ACTION_TIMEOUT)
 }
 
 /// Body of `workflow_run_rerun`: rerun all jobs or only failed ones.
 pub fn workflow_run_rerun_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     run_id: u64,
     failed_only: bool,
 ) -> Result<String, ForgeError> {
@@ -2279,7 +2543,7 @@ pub fn workflow_run_rerun_sync(
     if failed_only {
         args.push("--failed".to_string());
     }
-    run_gh_action(root, args, "run rerun", ACTION_TIMEOUT)
+    run_gh_action(repo, args, "run rerun", ACTION_TIMEOUT)
 }
 
 /// Arguments of `workflow_dispatch`.
@@ -2315,17 +2579,17 @@ pub fn workflow_dispatch_args(
 
 /// Body of `workflow_dispatch`: trigger a `workflow_dispatch` run on a ref.
 pub fn workflow_dispatch_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     workflow: &str,
     git_ref: &str,
     inputs: &[WorkflowInput],
 ) -> Result<String, ForgeError> {
     let args = workflow_dispatch_args(workflow, git_ref, inputs)?;
-    run_gh_action(root, args, "workflow run", ACTION_TIMEOUT)
+    run_gh_action(repo, args, "workflow run", ACTION_TIMEOUT)
 }
 
 /// Body of `workflow_list`: workflow files, including disabled ones.
-pub fn workflow_list_sync(root: &Path) -> Result<Vec<WorkflowInfo>, String> {
+pub fn workflow_list_sync(repo: &ForgeRepo) -> Result<Vec<WorkflowInfo>, String> {
     let args = vec![
         "workflow".to_string(),
         "list".to_string(),
@@ -2335,7 +2599,7 @@ pub fn workflow_list_sync(root: &Path) -> Result<Vec<WorkflowInfo>, String> {
         "--limit".to_string(),
         "100".to_string(),
     ];
-    let output = read_gh(root, &args, RUNS_TIMEOUT)?;
+    let output = read_gh(repo, &args, RUNS_TIMEOUT)?;
     Ok(parse_workflow_list_json(&output))
 }
 
@@ -2746,7 +3010,7 @@ pub fn review_threads_args(slug: &str, number: u64) -> Vec<String> {
 
 /// Is HEAD reachable from the remote-tracking branch? `merge_base(head,
 /// remote) == head` answers it without a full walk. `None` = no tracking
-/// ref (never pushed).
+/// ref (never pushed). Local variant (git2).
 fn head_pushed(
     repo: &git2::Repository,
     remote_name: &str,
@@ -2767,10 +3031,49 @@ fn head_pushed(
     }
 }
 
+/// [`head_pushed`] for device repos: the same verdict over three short git
+/// reads (`rev-parse` the tracking ref, `merge-base` when they diverge).
+/// Refname and shas are shell-quoted — a device shell parses the line (see
+/// remote/quoting's invariant).
+fn head_pushed_remote(
+    repo: &ForgeRepo,
+    remote_name: &str,
+    branch: &str,
+    head_sha: &str,
+) -> Option<bool> {
+    let timeout = Duration::from_secs(15);
+    let tracking = shell_quote(&format!("refs/remotes/{remote_name}/{branch}"));
+    let remote_sha = repo
+        .remote_git(&format!("rev-parse -q --verify {tracking}"), timeout)
+        .ok()
+        .map(|out| out.trim().to_owned())
+        .filter(|sha| !sha.is_empty())?;
+    if remote_sha == head_sha {
+        return Some(true);
+    }
+    let base = repo
+        .remote_git(
+            &format!(
+                "merge-base {} {}",
+                shell_quote(head_sha),
+                shell_quote(&remote_sha)
+            ),
+            timeout,
+        )
+        .ok()
+        .map(|out| out.trim().to_owned())
+        .filter(|sha| !sha.is_empty())?;
+    Some(base == head_sha)
+}
+
 /// One snapshot gh read classified into [`ForgeError`] (snapshot parts carry
 /// structured kinds — the chips' degraded states).
-fn run_gh_part(cwd: &Path, args: Vec<String>, timeout: Duration) -> Result<String, ForgeError> {
-    let outcome = run_program(GH, Some(cwd), &args, timeout);
+fn run_gh_part(
+    repo: &ForgeRepo,
+    args: Vec<String>,
+    timeout: Duration,
+) -> Result<String, ForgeError> {
+    let outcome = repo.run_gh(&args, timeout);
     if let Some(err) = &outcome.spawn_error {
         return Err(forge_failure(Some(err), ""));
     }
@@ -2791,16 +3094,16 @@ fn run_gh_part(cwd: &Path, args: Vec<String>, timeout: Duration) -> Result<Strin
 /// normal state, not an error). Older gh versions that reject the
 /// `--head`/`--repo` combination fall back to the unfiltered list.
 pub fn snapshot_branch_pr_sync(
-    cwd: &Path,
+    repo: &ForgeRepo,
     slug: &str,
     branch: &str,
 ) -> Result<Option<PrInfo>, ForgeError> {
-    let outcome = run_gh_part(cwd, snapshot_pr_args(slug, branch), LIST_TIMEOUT);
+    let outcome = run_gh_part(repo, snapshot_pr_args(slug, branch), LIST_TIMEOUT);
     match outcome {
         Ok(stdout) => Ok(branch_pr_of(&parse_pr_list_json(&stdout), branch)),
         Err(err) if err.kind == KIND_OTHER => {
             // Retry once with the unfiltered list before surfacing the error.
-            let fallback = run_gh_part(cwd, snapshot_pr_list_args(slug), LIST_TIMEOUT);
+            let fallback = run_gh_part(repo, snapshot_pr_list_args(slug), LIST_TIMEOUT);
             match fallback {
                 Ok(stdout) => Ok(branch_pr_of(&parse_pr_list_json(&stdout), branch)),
                 Err(err) => Err(err),
@@ -2812,73 +3115,104 @@ pub fn snapshot_branch_pr_sync(
 
 /// Snapshot part: the latest Actions run of the branch (`None` = none).
 pub fn snapshot_branch_run_sync(
-    cwd: &Path,
+    repo: &ForgeRepo,
     slug: &str,
     branch: &str,
 ) -> Result<Option<WorkflowRun>, ForgeError> {
-    let stdout = run_gh_part(cwd, snapshot_run_args(slug, branch), RUNS_TIMEOUT)?;
+    let stdout = run_gh_part(repo, snapshot_run_args(slug, branch), RUNS_TIMEOUT)?;
     Ok(parse_workflow_runs_json(&stdout).into_iter().next())
 }
 
 /// Commit-level check-runs of one sha (the snapshot's HEAD/PR-head parts and
 /// the standalone `forge_commit_checks` command).
 pub fn commit_check_runs_sync(
-    cwd: &Path,
+    repo: &ForgeRepo,
     slug: &str,
     sha: &str,
 ) -> Result<Vec<CheckInfo>, ForgeError> {
-    let stdout = run_gh_part(cwd, commit_check_runs_args(slug, sha), CHECKS_TIMEOUT)?;
+    let stdout = run_gh_part(repo, commit_check_runs_args(slug, sha), CHECKS_TIMEOUT)?;
     Ok(parse_commit_check_runs_json(&stdout))
 }
 
-/// Body of `forge_snapshot`: resolve the remote, read branch/HEAD locally,
-/// then fan the GitHub reads out over at most 4 CONCURRENT gh calls (plan
-/// §9.3). Per-repo `remote_override` selects a non-default remote.
+/// Body of `forge_snapshot`: resolve the remote, read branch/HEAD (git2
+/// locally, short git reads on the device), then fan the GitHub reads out
+/// over at most 4 CONCURRENT gh calls (plan §9.3). Per-repo
+/// `remote_override` selects a non-default remote.
 pub fn forge_snapshot_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     remote_override: Option<&str>,
 ) -> Result<ForgeSnapshot, ForgeError> {
-    let resolved = resolve_remote(root, remote_override)?;
-    let repo = git2::Repository::discover(root)
-        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
-    let head = repo.head().ok();
-    let head_commit = head.as_ref().and_then(|h| h.peel_to_commit().ok());
-    let head_sha = head_commit.as_ref().map(|c| c.id().to_string());
-    let detached = repo.head_detached().unwrap_or(false);
-    let branch: Option<String> = if detached {
-        None
-    } else {
-        head.as_ref()
-            .and_then(|h| h.shorthand().ok())
-            .filter(|b| !b.is_empty() && *b != "HEAD")
-            .map(str::to_owned)
-    };
-    let pushed = match (&head_commit, &branch) {
-        (Some(commit), Some(branch_name)) => {
-            head_pushed(&repo, &resolved.remote_name, branch_name, &commit.id())
+    let resolved = resolve_remote(repo, remote_override)?;
+    // HEAD + branch + pushed-state: git2 locally; `rev-parse` /
+    // `branch --show-current` on the device (empty `--show-current` output
+    // = detached, matching the local branch=None case).
+    let (head_sha, branch) = match &repo.remote {
+        None => {
+            let git = git2::Repository::discover(&repo.root)
+                .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+            let head = git.head().ok();
+            let head_commit = head.as_ref().and_then(|h| h.peel_to_commit().ok());
+            let head_sha = head_commit.as_ref().map(|c| c.id().to_string());
+            let detached = git.head_detached().unwrap_or(false);
+            let branch: Option<String> = if detached {
+                None
+            } else {
+                head.as_ref()
+                    .and_then(|h| h.shorthand().ok())
+                    .filter(|b| !b.is_empty() && *b != "HEAD")
+                    .map(str::to_owned)
+            };
+            (head_sha, branch)
         }
+        Some(_) => {
+            let timeout = Duration::from_secs(15);
+            let head_sha = repo
+                .remote_git("rev-parse -q --verify HEAD", timeout)
+                .ok()
+                .map(|out| out.trim().to_owned())
+                .filter(|sha| !sha.is_empty());
+            let branch = repo
+                .remote_git("branch --show-current", timeout)
+                .ok()
+                .map(|out| out.trim().to_owned())
+                .filter(|b| !b.is_empty() && b != "HEAD");
+            (head_sha, branch)
+        }
+    };
+    let pushed = match (&head_sha, &branch) {
+        (Some(sha), Some(branch_name)) => match &repo.remote {
+            None => {
+                let git = git2::Repository::discover(&repo.root)
+                    .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+                let oid = git2::Oid::from_str(sha)
+                    .map_err(|e| ForgeError::other(format!("invalid HEAD sha: {e}")))?;
+                head_pushed(&git, &resolved.remote_name, branch_name, &oid)
+            }
+            Some(_) => head_pushed_remote(repo, &resolved.remote_name, branch_name, sha),
+        },
         _ => None,
     };
     let slug = format!("{}/{}", resolved.owner, resolved.repo);
 
     // Phase 1 — three independent reads in parallel (branch PR, HEAD checks,
     // latest run). Phase 2 — PR-head checks, which depend on phase 1's PR
-    // head sha; concurrent calls never exceed 4 (§9.3).
+    // head sha; concurrent calls never exceed 4 (§9.3). ForgeRepo clones are
+    // cheap (the remote backend rides an Arc).
     let (pr_part, head_checks_part, run_part) = std::thread::scope(|scope| {
         let pr = branch.clone().map(|branch_name| {
-            let cwd = root.to_path_buf();
+            let repo = repo.clone();
             let slug = slug.clone();
-            scope.spawn(move || snapshot_branch_pr_sync(&cwd, &slug, &branch_name))
+            scope.spawn(move || snapshot_branch_pr_sync(&repo, &slug, &branch_name))
         });
         let head_checks = head_sha.clone().map(|sha| {
-            let cwd = root.to_path_buf();
+            let repo = repo.clone();
             let slug = slug.clone();
-            scope.spawn(move || commit_check_runs_sync(&cwd, &slug, &sha))
+            scope.spawn(move || commit_check_runs_sync(&repo, &slug, &sha))
         });
         let run = branch.clone().map(|branch_name| {
-            let cwd = root.to_path_buf();
+            let repo = repo.clone();
             let slug = slug.clone();
-            scope.spawn(move || snapshot_branch_run_sync(&cwd, &slug, &branch_name))
+            scope.spawn(move || snapshot_branch_run_sync(&repo, &slug, &branch_name))
         });
         let pr_part = pr.map(|handle| {
             handle
@@ -2932,7 +3266,7 @@ pub fn forge_snapshot_sync(
         .filter(|sha| !sha.is_empty());
     let pr_head_checks: Option<Vec<CheckInfo>> = match (&pr_head_sha, &head_sha) {
         (Some(pr_sha), Some(local_sha)) if pr_sha != local_sha => {
-            match commit_check_runs_sync(root, &slug, pr_sha) {
+            match commit_check_runs_sync(repo, &slug, pr_sha) {
                 Ok(checks) => Some(checks),
                 Err(err) => {
                     errors.push(err);
@@ -2966,19 +3300,19 @@ pub fn forge_snapshot_sync(
 
 /// Body of `forge_commit_checks`: commit-level check-runs for an arbitrary
 /// sha (E2's commit surfaces; also the snapshot's part reader).
-pub fn forge_commit_checks_sync(root: &Path, sha: &str) -> Result<Vec<CheckInfo>, String> {
-    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+pub fn forge_commit_checks_sync(repo: &ForgeRepo, sha: &str) -> Result<Vec<CheckInfo>, String> {
+    let resolved = resolve_remote(repo, None).map_err(|e| e.to_string())?;
     let slug = format!("{}/{}", resolved.owner, resolved.repo);
-    commit_check_runs_sync(root, &slug, sha.trim()).map_err(|e| e.to_string())
+    commit_check_runs_sync(repo, &slug, sha.trim()).map_err(|e| e.to_string())
 }
 
 /// Body of `forge_pr_files`: the PR's changed files with their patches
 /// (E2's PR diff view).
-pub fn forge_pr_files_sync(root: &Path, number: u64) -> Result<Vec<ForgePrFile>, String> {
-    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+pub fn forge_pr_files_sync(repo: &ForgeRepo, number: u64) -> Result<Vec<ForgePrFile>, String> {
+    let resolved = resolve_remote(repo, None).map_err(|e| e.to_string())?;
     let slug = format!("{}/{}", resolved.owner, resolved.repo);
     let args = pr_files_args(&slug, number);
-    let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
+    let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
@@ -2992,13 +3326,13 @@ pub fn forge_pr_files_sync(root: &Path, number: u64) -> Result<Vec<ForgePrFile>,
 /// Body of `forge_pr_review_threads`: the PR's review threads, read-only
 /// (E2's review-thread panel).
 pub fn forge_pr_review_threads_sync(
-    root: &Path,
+    repo: &ForgeRepo,
     number: u64,
 ) -> Result<Vec<ForgeReviewThread>, String> {
-    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+    let resolved = resolve_remote(repo, None).map_err(|e| e.to_string())?;
     let slug = format!("{}/{}", resolved.owner, resolved.repo);
     let args = review_threads_args(&slug, number);
-    let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
+    let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
         return Err(format!("gh CLI not found on PATH ({err})"));
     }

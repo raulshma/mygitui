@@ -92,7 +92,7 @@ describe("openWithApps openWithEntry (launch + persistence)", () => {
     await openWithEntry("/tmp/repo", { id: "explorer", name: "Explorer" });
 
     await vi.waitFor(() =>
-      expect(mocks.openWith).toHaveBeenCalledWith("/tmp/repo", "explorer"),
+      expect(mocks.openWith).toHaveBeenCalledWith("/tmp/repo", "explorer", undefined),
     );
     expect(mocks.openWithCustom).not.toHaveBeenCalled();
     expect(localStorage.getItem("mygitui.openwith.last")).toBe("explorer");

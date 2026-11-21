@@ -137,8 +137,15 @@
     ];
   });
 
-  /** More than one chip = the row renders (single-scope callers see none). */
-  const multiScope = $derived(scopeList.length > 1);
+  /**
+   * Chips row visibility: every StatusPanel caller passes `scopes`, and the
+   * commit target must ALWAYS be labeled — with a submodule in the tree you
+   * can otherwise no longer tell whether the composer commits the main repo
+   * or the module (the VS Code complaint: one input, unclear owner). So the
+   * row renders even for a lone scope; only callers that pass no `scopes`
+   * (the single-scope agent view) get no row.
+   */
+  const showScopes = $derived(scopes !== undefined && scopes.length > 0);
 
   let activeScopeId = $state("main");
   /** Per-scope draft messages (switching a chip preserves the drafts). */
@@ -232,15 +239,34 @@
   /** Commit & Push shares Commit's preconditions plus the push phase. */
   const canCommitPush = $derived(canCommit && !pushBusy && !pushing);
 
+  /**
+   * The repo the composer currently targets (the active chip's label; ""
+   * for the fallback scope when the caller named none). It rides the
+   * placeholder and the commit hint so the target stays unambiguous even
+   * when the chips row is scrolled or hidden.
+   */
+  const targetLabel = $derived(activeScope.label);
+  const placeholder = $derived(
+    targetLabel
+      ? `Commit message (${targetLabel})… Ctrl+↵`
+      : "Commit message… Ctrl+↵",
+  );
+
   /** Explains what the primary button will do (title/cursor affordance). */
   const commitHint = $derived(
     !hasMessage && !amend
       ? "Write a commit message to enable Commit"
       : needsStaged
-        ? "Stage a change before committing"
+        ? targetLabel
+          ? `Stage a change before committing to ${targetLabel}`
+          : "Stage a change before committing"
         : amend
-          ? "Amend the previous commit (Ctrl+Enter)"
-          : "Commit staged changes (Ctrl+Enter)",
+          ? targetLabel
+            ? `Amend the previous commit on ${targetLabel} (Ctrl+Enter)`
+            : "Amend the previous commit (Ctrl+Enter)"
+          : targetLabel
+            ? `Commit staged changes to ${targetLabel} (Ctrl+Enter)`
+            : "Commit staged changes (Ctrl+Enter)",
   );
 
   /**
@@ -601,10 +627,12 @@
     void doCommit();
   }}
 >
-  {#if multiScope}
+  {#if showScopes}
     <!-- Scope chips (plan §6.1): owning repo + every dirty submodule with
-         its change count. Horizontally scrollable (§6.7): overflow scrolls,
-         chips never shrink into illegibility. -->
+         its change count — always shown (even single-scope) so the commit
+         target stays legible next to the message box. Horizontally
+         scrollable (§6.7): overflow scrolls, chips never shrink into
+         illegibility. -->
     <div
       class="scopes flex flex-none items-center gap-1 min-w-0 overflow-x-auto pb-0.5"
       role="group"
@@ -662,7 +690,7 @@
         {#snippet child({ props })}
           <Textarea
             class={`message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background ${aiMessageVisible ? "pr-13" : ""}`}
-            placeholder="Commit message… Ctrl+↵"
+            placeholder={placeholder}
             aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
             rows={1}
             bind:ref={messageEl}

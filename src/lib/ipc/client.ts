@@ -1774,9 +1774,14 @@ async function callForge<T>(
   }
 }
 
-/** Detects `gh` on PATH and whether the user is authenticated. */
-export function forgeStatus(): Promise<ForgeStatus> {
-  return call<ForgeStatus>("forge_status", {});
+/**
+ * Detects `gh` and whether the user is authenticated. Without `repoId` (and
+ * for local repos) the probe runs on this machine; a repo that lives on a
+ * device probes the DEVICE's gh over SSH — remote GitHub features work with
+ * the device's own auth.
+ */
+export function forgeStatus(repoId?: string): Promise<ForgeStatus> {
+  return call<ForgeStatus>("forge_status", { repo_id: repoId ?? null });
 }
 
 /**
@@ -2429,9 +2434,21 @@ export async function detectEditors(): Promise<EditorApp[]> {
   return call<EditorApp[]>("detect_editors", {});
 }
 
-/** Opens the repository root in the app with the given id. */
-export function openWith(repoRoot: string, appId: string): Promise<void> {
-  return call<void>("open_with", { repo_root: repoRoot, app_id: appId });
+/**
+ * Opens the repository root in the app with the given id. For a repo that
+ * lives on a device (`deviceId` set) the path is device-side and the launch
+ * goes through the editor's SSH-remote integration (VS Code family only).
+ */
+export function openWith(
+  repoRoot: string,
+  appId: string,
+  deviceId?: string | null,
+): Promise<void> {
+  return call<void>("open_with", {
+    repo_root: repoRoot,
+    app_id: appId,
+    device_id: deviceId ?? null,
+  });
 }
 
 /**

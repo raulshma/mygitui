@@ -315,7 +315,10 @@
     untrack(() => void forgeStore.loadReviewThreads(targetRepo, number));
   });
 
-  const banner = $derived(statusBanner(forgeStore.status));
+  // gh status of the repo's machine (the device for device repos).
+  const ghStatus = $derived(forgeStore.statusFor(repoId));
+  const ghStatusLoading = $derived(forgeStore.statusLoadingFor(repoId));
+  const banner = $derived(statusBanner(ghStatus));
   const context = $derived(forgeStore.contextFor(repoId));
   const contextError = $derived(forgeStore.contextErrorFor(repoId));
   const prs = $derived(forgeStore.prsFor(repoId));
@@ -1461,9 +1464,8 @@
         Notifications
       </button>
     </div>
-    {#if forgeStore.status?.available}
-      {@const ghStatus = forgeStore.status}
-      <Hint label="GitHub CLI version">
+    {#if ghStatus?.available}
+      <Hint label={ghStatus.authed ? "GitHub CLI version" : "GitHub CLI version (not authenticated)"}>
         {#snippet child({ props })}
           <span class="gh-meta text-ui-micro text-muted-foreground" {...props}>gh {ghStatus.version}</span>
         {/snippet}
@@ -1484,10 +1486,10 @@
       </select>
       <Button class={tb} variant="outline"
         type="button"
-        onclick={() => void forgeStore.refreshStatus()}
-        disabled={forgeStore.statusLoading}
+        onclick={() => void forgeStore.refreshStatus(repoId)}
+        disabled={ghStatusLoading}
       >
-        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+        {ghStatusLoading ? "Checking…" : "Re-check gh"}
       </Button>
       <Button class={tb} variant="outline" type="button" onclick={refresh} disabled={prsLoading}>
         {prsLoading ? "Loading…" : "Refresh"}
@@ -1513,10 +1515,10 @@
       </select>
       <Button class={tb} variant="outline"
         type="button"
-        onclick={() => void forgeStore.refreshStatus()}
-        disabled={forgeStore.statusLoading}
+        onclick={() => void forgeStore.refreshStatus(repoId)}
+        disabled={ghStatusLoading}
       >
-        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+        {ghStatusLoading ? "Checking…" : "Re-check gh"}
       </Button>
       <Button class={tb} variant="outline" type="button" onclick={refreshIssues} disabled={issuesLoading}>
         {issuesLoading ? "Loading…" : "Refresh"}
@@ -1532,10 +1534,10 @@
     {:else if tab === "notifications"}
       <Button class={tb} variant="outline"
         type="button"
-        onclick={() => void forgeStore.refreshStatus()}
-        disabled={forgeStore.statusLoading}
+        onclick={() => void forgeStore.refreshStatus(repoId)}
+        disabled={ghStatusLoading}
       >
-        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+        {ghStatusLoading ? "Checking…" : "Re-check gh"}
       </Button>
       <Button class={tb} variant="outline" type="button" onclick={refreshNotifications} disabled={notificationsLoading}>
         {notificationsLoading ? "Loading…" : "Refresh"}
@@ -1588,10 +1590,10 @@
       </select>
       <Button class={tb} variant="outline"
         type="button"
-        onclick={() => void forgeStore.refreshStatus()}
-        disabled={forgeStore.statusLoading}
+        onclick={() => void forgeStore.refreshStatus(repoId)}
+        disabled={ghStatusLoading}
       >
-        {forgeStore.statusLoading ? "Checking…" : "Re-check gh"}
+        {ghStatusLoading ? "Checking…" : "Re-check gh"}
       </Button>
       <Button class={tb} variant="outline"
         type="button"

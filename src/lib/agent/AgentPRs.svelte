@@ -35,7 +35,8 @@
     void forgeStore.ensure(repoId);
   });
 
-  const banner = $derived(statusBanner(forgeStore.status));
+  // gh status of the repo's machine (the device for device repos).
+  const banner = $derived(statusBanner(forgeStore.statusFor(repoId)));
   const contextError = $derived(forgeStore.contextErrorFor(repoId));
   const prs = $derived(forgeStore.prsFor(repoId));
   const prsLoading = $derived(forgeStore.prsLoadingFor(repoId));

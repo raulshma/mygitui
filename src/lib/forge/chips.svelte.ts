@@ -102,8 +102,9 @@ export class ForgeChipsStore {
    * Syncs the snapshot lanes with the open tabs (called from a reactive
    * context — the caller's `$effect` tracks `tabStore.tabs`, `activeId` and
    * the cadence setting; everything else here is untracked). The ACTIVE
-   * local repo gets the configurable cadence (0 = off), inactive-open repos
-   * the fixed 5-minute rate, remote tabs none.
+   * repo gets the configurable cadence (0 = off), inactive-open repos the
+   * fixed 5-minute rate. Device tabs poll the same way — their gh runs on
+   * the device, so the snapshot works there like anywhere else.
    */
   syncLanes(): void {
     const activeIntervalMs = untrack(() =>
@@ -111,7 +112,6 @@ export class ForgeChipsStore {
     );
     const wanted = new Map<string, number>();
     for (const tab of tabStore.tabs) {
-      if (tab.deviceId !== null) continue; // remote projects: no GitHub flow
       const isActive = tab.id === tabStore.activeId;
       const intervalMs = isActive ? activeIntervalMs : FORGE_INACTIVE_SNAPSHOT_MS;
       if (intervalMs > 0) wanted.set(tab.id, intervalMs);
@@ -158,24 +158,20 @@ export class ForgeChipsStore {
   /**
    * One repo's three chip states + the worst-state collapse (§9.2). Reads
    * the forge store + the scheduler lanes reactively — callers re-derive
-   * whenever any input moves.
+   * whenever any input moves. Device repos read their device's gh status
+   * (the snapshot itself runs there, so a device gh outage degrades the
+   * chips like a local outage does).
    */
   chipsFor(repoId: string, nowMs: number = Date.now()): ForgeChips {
-    const tab = this.#tabFor(repoId);
-    const status = forgeStore.status;
+    const status = forgeStore.statusFor(repoId);
     const failureKind = forgeStore.snapshotFailureKindFor(repoId);
     // Stale-on-error: a failed refresh keeps the last-known chips visible.
     const snapshot = forgeStore.snapshotStaleFor(repoId);
     const state = forgeStore.snapshotStateFor(repoId);
     const lane = this.laneFor(repoId);
 
-    let degraded = repoDegraded(status, failureKind, snapshot);
-    let degradedMessage = forgeStore.snapshotErrorFor(repoId) ?? "";
-    if (tab?.deviceId !== null && tab?.deviceId !== undefined) {
-      // Remote projects have no local gh flow (the panel shows the same note).
-      degraded = "not-repo";
-      degradedMessage = "Remote projects do not sync GitHub state.";
-    }
+    const degraded = repoDegraded(status, failureKind, snapshot);
+    const degradedMessage = forgeStore.snapshotErrorFor(repoId) ?? "";
     const retryInMs =
       degraded === "rate-limited" && lane?.erroring ? lane.backoffMs : null;
     const loading =
@@ -203,11 +199,11 @@ export class ForgeChipsStore {
 
   /**
    * Repo-tab attention badge inputs (`null` = no badge — the repo never
-   * attempted a snapshot, e.g. remote tabs).
+   * attempted a snapshot).
    */
   attentionFor(repoId: string, nowMs: number = Date.now()): TabAttention | null {
     const tab = this.#tabFor(repoId);
-    if (tab === null || tab.deviceId !== null) return null;
+    if (tab === null) return null;
     if (!this.#registered.has(repoId)) return null;
     const chips = this.chipsFor(repoId, nowMs);
     const worst = chips.worst;

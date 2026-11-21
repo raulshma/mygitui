@@ -190,11 +190,11 @@ describe("snapshot lanes (syncLanes)", () => {
     expect(pollScheduler.intervalOf(snapshotLaneKey("r2"))).toBe(5 * 60_000);
   });
 
-  it("remote tabs get no lane", () => {
+  it("remote tabs poll the same lanes (gh runs on the device)", () => {
     tabStore.tabs = [tab({ id: "r1", deviceId: "dev-1" })];
     tabStore.activeId = "r1";
     forgeChips.syncLanes();
-    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeUndefined();
+    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeDefined();
   });
 
   it("the lane work fetches the snapshot and a failure backs the lane off", async () => {
@@ -297,11 +297,19 @@ describe("chip derivation + tab attention", () => {
     // No lane has fetched yet (idle) and gh is healthy: loading, not degraded.
     expect(chips.pr.kind).toBe("loading");
 
+    // A device tab derives from ITS device's gh status (probed through the
+    // repo id), not the local machine's: no probe yet → no local-gh
+    // degradation, the chip waits on the snapshot like any repo.
     const remote = tab({ id: "r2", deviceId: "dev-1" });
     tabStore.tabs = [remote];
     tabStore.activeId = "r2";
     chips = forgeChips.chipsFor("r2");
-    expect(chips.pr).toMatchObject({ kind: "degraded", degraded: "not-repo" });
+    expect(chips.pr.kind).toBe("loading");
+
+    mockForgeStatus.mockResolvedValue({ available: true, version: "2.63.3", authed: false });
+    await forgeStore.refreshStatus("r2");
+    chips = forgeChips.chipsFor("r2");
+    expect(chips.pr).toMatchObject({ kind: "degraded", degraded: "not-authed" });
   });
 
   it("attention badges surface failing background repos with staleness", async () => {

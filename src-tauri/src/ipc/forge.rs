@@ -10,24 +10,48 @@
 
 use tauri::State;
 
+use std::sync::Arc;
+
 use crate::engine::types::RepoId;
 use crate::forge::{
-    self, CheckInfo, ForgeContext, ForgeError, ForgeSnapshot, ForgeStatus, PrCreated, PrInfo,
-    WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
+    self, CheckInfo, ForgeContext, ForgeError, ForgeRepo, ForgeSnapshot, ForgeStatus, PrCreated,
+    PrInfo, WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
 };
-use crate::repo::RepoManager;
+use crate::repo::{RepoHandle, RepoManager};
 
 use super::{enqueue_remote_read, finish_op, get_handle};
 
-/// Detect `gh` on PATH and whether the user is authenticated (no repo).
-/// A panicking `spawn_blocking` task resolves as a real error (the FE's
-/// catch logs it and falls back to "unavailable") instead of the old
+/// The forge execution context of one open repo: local repos run gh with
+/// the workdir as cwd; device repos run gh and git ON THE DEVICE (the
+/// device's own gh config and auth) through [`ForgeRepo`].
+fn forge_repo_of(handle: &Arc<RepoHandle>) -> ForgeRepo {
+    ForgeRepo {
+        root: handle.root.clone(),
+        remote: handle.remote().map(Arc::clone),
+    }
+}
+
+/// Detect `gh` and whether the user is authenticated. Without `repo_id`
+/// (and for local repos) the probe runs on this machine; a repo on a device
+/// probes the DEVICE's gh (`gh --version` + `gh auth status` over SSH) —
+/// remote GitHub features work with the device's own auth. A panicking
+/// `spawn_blocking` task resolves as a real error (the FE's catch logs it
+/// and falls back to "unavailable") instead of the old
 /// `unwrap_or_default()`'s misleading `available: false`.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn forge_status() -> Result<ForgeStatus, String> {
-    tauri::async_runtime::spawn_blocking(forge::status_sync)
-        .await
-        .map_err(|e| format!("forge_status task failed: {e}"))
+pub async fn forge_status(
+    repo_id: Option<RepoId>,
+    state: State<'_, RepoManager>,
+) -> Result<ForgeStatus, String> {
+    let remote = repo_id
+        .and_then(|id| get_handle(&state, &id).ok())
+        .and_then(|handle| handle.remote().map(Arc::clone));
+    tauri::async_runtime::spawn_blocking(move || match remote {
+        Some(device) => Ok(forge::status_sync_remote(&device.session, &device.root)),
+        None => Ok(forge::status_sync()),
+    })
+    .await
+    .map_err(|e| format!("forge_status task failed: {e}"))?
 }
 
 /// Hosts `gh auth status` reports (manual refresh of the E1 host cache;
@@ -50,11 +74,8 @@ pub async fn forge_context(
     remote: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<ForgeContext, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::context_sync(&root, remote.as_deref()))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::context_sync(&repo, remote.as_deref()))
         .await
         .map_err(|e| ForgeError::other(format!("forge_context task failed: {e}")))?
 }
@@ -72,12 +93,9 @@ pub async fn forge_snapshot(
     remote: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<ForgeSnapshot, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::forge_snapshot_sync(&root, remote.as_deref())
+        forge::forge_snapshot_sync(&repo, remote.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("forge_snapshot task failed: {e}")))?
@@ -90,8 +108,8 @@ pub async fn forge_commit_checks(
     sha: String,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<CheckInfo>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::forge_commit_checks_sync(&root, &sha))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::forge_commit_checks_sync(&repo, &sha))
         .await
         .map_err(|e| format!("forge_commit_checks task failed: {e}"))?
 }
@@ -103,8 +121,8 @@ pub async fn forge_pr_files(
     number: u64,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<forge::ForgePrFile>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_files_sync(&root, number))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_files_sync(&repo, number))
         .await
         .map_err(|e| format!("forge_pr_files task failed: {e}"))?
 }
@@ -116,8 +134,8 @@ pub async fn forge_pr_review_threads(
     number: u64,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<forge::ForgeReviewThread>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_review_threads_sync(&root, number))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_review_threads_sync(&repo, number))
         .await
         .map_err(|e| format!("forge_pr_review_threads task failed: {e}"))?
 }
@@ -134,12 +152,9 @@ pub async fn pr_create(
     draft: bool,
     state: State<'_, RepoManager>,
 ) -> Result<PrCreated, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_create_sync(&root, &base, &title, &body, draft)
+        forge::pr_create_sync(&repo, &base, &title, &body, draft)
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_create task failed: {e}")))?
@@ -152,9 +167,9 @@ pub async fn pr_list(
     state_filter: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<PrInfo>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
     let filter = state_filter.unwrap_or_else(|| "open".to_string());
-    tauri::async_runtime::spawn_blocking(move || forge::pr_list_sync(&root, &filter))
+    tauri::async_runtime::spawn_blocking(move || forge::pr_list_sync(&repo, &filter))
         .await
         .map_err(|e| format!("pr_list task failed: {e}"))?
 }
@@ -168,8 +183,8 @@ pub async fn pr_checks(
     number: u64,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<CheckInfo>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::pr_checks_sync(&root, number))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::pr_checks_sync(&repo, number))
         .await
         .map_err(|e| format!("pr_checks task failed: {e}"))?
 }
@@ -185,12 +200,9 @@ pub async fn pr_merge(
     auto: bool,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_merge_sync(&root, number, &method, delete_branch, auto)
+        forge::pr_merge_sync(&repo, number, &method, delete_branch, auto)
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_merge task failed: {e}")))?
@@ -204,12 +216,9 @@ pub async fn pr_close(
     comment: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_close_sync(&root, number, comment.as_deref())
+        forge::pr_close_sync(&repo, number, comment.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_close task failed: {e}")))?
@@ -223,12 +232,9 @@ pub async fn pr_reopen(
     comment: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_reopen_sync(&root, number, comment.as_deref())
+        forge::pr_reopen_sync(&repo, number, comment.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_reopen task failed: {e}")))?
@@ -242,11 +248,8 @@ pub async fn pr_ready(
     ready: bool,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::pr_ready_sync(&root, number, ready))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::pr_ready_sync(&repo, number, ready))
         .await
         .map_err(|e| ForgeError::other(format!("pr_ready task failed: {e}")))?
 }
@@ -258,11 +261,8 @@ pub async fn pr_checkout(
     number: u64,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::pr_checkout_sync(&root, number))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::pr_checkout_sync(&repo, number))
         .await
         .map_err(|e| ForgeError::other(format!("pr_checkout task failed: {e}")))?
 }
@@ -275,11 +275,8 @@ pub async fn pr_comment(
     body: String,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::pr_comment_sync(&root, number, &body))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::pr_comment_sync(&repo, number, &body))
         .await
         .map_err(|e| ForgeError::other(format!("pr_comment task failed: {e}")))?
 }
@@ -293,12 +290,9 @@ pub async fn pr_review(
     body: String,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_review_sync(&root, number, &action, &body)
+        forge::pr_review_sync(&repo, number, &action, &body)
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_review task failed: {e}")))?
@@ -313,12 +307,9 @@ pub async fn pr_edit(
     body: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::pr_edit_sync(&root, number, title.as_deref(), body.as_deref())
+        forge::pr_edit_sync(&repo, number, title.as_deref(), body.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("pr_edit task failed: {e}")))?
@@ -367,9 +358,9 @@ pub async fn issue_list(
     state_filter: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<forge::ForgeIssue>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
     let filter = state_filter.unwrap_or_else(|| "open".to_string());
-    tauri::async_runtime::spawn_blocking(move || forge::issue_list_sync(&root, &filter))
+    tauri::async_runtime::spawn_blocking(move || forge::issue_list_sync(&repo, &filter))
         .await
         .map_err(|e| format!("issue_list task failed: {e}"))?
 }
@@ -381,8 +372,8 @@ pub async fn issue_view(
     number: u64,
     state: State<'_, RepoManager>,
 ) -> Result<forge::ForgeIssueDetail, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::issue_view_sync(&root, number))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::issue_view_sync(&repo, number))
         .await
         .map_err(|e| format!("issue_view task failed: {e}"))?
 }
@@ -396,11 +387,8 @@ pub async fn issue_create(
     body: String,
     state: State<'_, RepoManager>,
 ) -> Result<forge::IssueCreated, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::issue_create_sync(&root, &title, &body))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::issue_create_sync(&repo, &title, &body))
         .await
         .map_err(|e| ForgeError::other(format!("issue_create task failed: {e}")))?
 }
@@ -413,12 +401,9 @@ pub async fn issue_close(
     comment: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::issue_close_sync(&root, number, comment.as_deref())
+        forge::issue_close_sync(&repo, number, comment.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("issue_close task failed: {e}")))?
@@ -432,12 +417,9 @@ pub async fn issue_reopen(
     comment: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::issue_reopen_sync(&root, number, comment.as_deref())
+        forge::issue_reopen_sync(&repo, number, comment.as_deref())
     })
     .await
     .map_err(|e| ForgeError::other(format!("issue_reopen task failed: {e}")))?
@@ -452,8 +434,8 @@ pub async fn notifications_list(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<forge::ForgeNotification>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::notifications_list_sync(&root))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::notifications_list_sync(&repo))
         .await
         .map_err(|e| format!("notifications_list task failed: {e}"))?
 }
@@ -465,11 +447,8 @@ pub async fn notification_mark_read(
     id: u64,
     state: State<'_, RepoManager>,
 ) -> Result<(), ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::notification_mark_read_sync(&root, id))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::notification_mark_read_sync(&repo, id))
         .await
         .map_err(|e| ForgeError::other(format!("notification_mark_read task failed: {e}")))?
 }
@@ -480,11 +459,8 @@ pub async fn notifications_mark_all_read(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
 ) -> Result<(), ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::notifications_mark_all_read_sync(&root))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::notifications_mark_all_read_sync(&repo))
         .await
         .map_err(|e| ForgeError::other(format!("notifications_mark_all_read task failed: {e}")))?
 }
@@ -502,13 +478,13 @@ pub async fn workflow_runs(
     workflow: Option<String>,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<WorkflowRun>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
     let limit = limit.unwrap_or(forge::RUN_LIST_LIMIT);
     let branch = branch.unwrap_or_default();
     let status = status_filter.unwrap_or_default();
     let workflow = workflow.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        forge::workflow_runs_sync(&root, limit, &branch, &status, &workflow)
+        forge::workflow_runs_sync(&repo, limit, &branch, &status, &workflow)
     })
     .await
     .map_err(|e| format!("workflow_runs task failed: {e}"))?
@@ -521,8 +497,8 @@ pub async fn workflow_run_detail(
     run_id: u64,
     state: State<'_, RepoManager>,
 ) -> Result<WorkflowRunDetail, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_detail_sync(&root, run_id))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_detail_sync(&repo, run_id))
         .await
         .map_err(|e| format!("workflow_run_detail task failed: {e}"))?
 }
@@ -537,9 +513,9 @@ pub async fn workflow_run_logs(
     failed_only: bool,
     state: State<'_, RepoManager>,
 ) -> Result<String, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::workflow_run_logs_sync(&root, run_id, job_id, failed_only)
+        forge::workflow_run_logs_sync(&repo, run_id, job_id, failed_only)
     })
     .await
     .map_err(|e| format!("workflow_run_logs task failed: {e}"))?
@@ -552,11 +528,8 @@ pub async fn workflow_run_cancel(
     run_id: u64,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
-    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_cancel_sync(&root, run_id))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_run_cancel_sync(&repo, run_id))
         .await
         .map_err(|e| ForgeError::other(format!("workflow_run_cancel task failed: {e}")))?
 }
@@ -569,12 +542,9 @@ pub async fn workflow_run_rerun(
     failed_only: bool,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::workflow_run_rerun_sync(&root, run_id, failed_only)
+        forge::workflow_run_rerun_sync(&repo, run_id, failed_only)
     })
     .await
     .map_err(|e| ForgeError::other(format!("workflow_run_rerun task failed: {e}")))?
@@ -589,12 +559,9 @@ pub async fn workflow_dispatch(
     inputs: Vec<WorkflowInput>,
     state: State<'_, RepoManager>,
 ) -> Result<String, ForgeError> {
-    let root = get_handle(&state, &repo_id)
-        .map_err(ForgeError::other)?
-        .root
-        .clone();
+    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
     tauri::async_runtime::spawn_blocking(move || {
-        forge::workflow_dispatch_sync(&root, &workflow, &git_ref, &inputs)
+        forge::workflow_dispatch_sync(&repo, &workflow, &git_ref, &inputs)
     })
     .await
     .map_err(|e| ForgeError::other(format!("workflow_dispatch task failed: {e}")))?
@@ -607,8 +574,8 @@ pub async fn workflow_list(
     repo_id: RepoId,
     state: State<'_, RepoManager>,
 ) -> Result<Vec<WorkflowInfo>, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::workflow_list_sync(&root))
+    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
+    tauri::async_runtime::spawn_blocking(move || forge::workflow_list_sync(&repo))
         .await
         .map_err(|e| format!("workflow_list task failed: {e}"))?
 }

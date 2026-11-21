@@ -445,6 +445,79 @@ fn to_native_path(path: &Path) -> PathBuf {
     }
 }
 
+// -- remote devices ------------------------------------------------------------
+
+/// Editor ids whose CLI opens a folder living on an SSH device through their
+/// Remote-SSH integration (`--remote ssh-remote+<host> <path>`); the VS Code
+/// forks (VSCodium, Cursor, Windsurf) share the flag.
+const REMOTE_SSH_EDITORS: [&str; 5] = [
+    "vscode",
+    "vscode-insiders",
+    "vscodium",
+    "cursor",
+    "windsurf",
+];
+
+/// The Remote-SSH host label of one device profile: `[user@]host`, plus
+/// `:port` only when the port is not 22 (this label forms
+/// `ssh-remote+<label>`; the Remote-SSH extension parses `[user@]host[:port]`
+/// and dials `ssh [user@]host -p port`).
+fn ssh_host_label(username: &str, host: &str, port: u16) -> String {
+    let host = host.trim();
+    let base = match username.trim() {
+        "" => host.to_string(),
+        user => format!("{user}@{host}"),
+    };
+    if port == 0 || port == 22 {
+        base
+    } else {
+        format!("{base}:{port}")
+    }
+}
+
+/// argv that opens a device-side folder in one Remote-SSH editor (pure).
+/// The path is the DEVICE-side workdir; the editor dials the device itself.
+fn remote_launch_args(root: &str, host_label: &str) -> Vec<String> {
+    vec![
+        "--remote".to_string(),
+        format!("ssh-remote+{host_label}"),
+        root.to_string(),
+    ]
+}
+
+/// Whether this editor id can open folders on an SSH device (pure).
+fn supports_remote_ssh(id: &str) -> bool {
+    REMOTE_SSH_EDITORS.contains(&id)
+}
+
+/// Spawns a detected editor with a folder on a device over SSH. Only the
+/// VS Code family supports remote folders; every other detected app gets a
+/// named error (the FE toasts it) instead of a silently broken local launch
+/// against a path that does not exist on this machine.
+fn open_remote_with(
+    app: &AppEntry,
+    device_name: &str,
+    root: &str,
+    host_label: &str,
+) -> Result<(), String> {
+    if !supports_remote_ssh(&app.id) {
+        return Err(format!(
+            "{} cannot open repositories on the device \"{}\" — opening a remote folder needs an editor with SSH remote support (VS Code, VSCodium, Cursor, or Windsurf)",
+            app.name, device_name
+        ));
+    }
+    let mut cmd = crate::process::command(&app.path);
+    for arg in remote_launch_args(root, host_label) {
+        cmd.arg(arg);
+    }
+    // Same environment as the local launch (sanitized + login-shell overlay).
+    crate::cli::apply_sanitized_env(&mut cmd);
+    crate::shell_env::apply_resolved(&mut cmd);
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("failed to launch {}: {e}", app.name))
+}
+
 /// Spawns `app` with the repository root. The app entry must come from
 /// [`detect_apps`] (the Tauri command re-detects to enforce that), so the
 /// spawned path is machine-verified, not frontend input.
@@ -494,14 +567,31 @@ pub async fn detect_editors() -> Result<Vec<AppEntry>, String> {
 
 /// Opens the repository root in the app with the given id. The id must
 /// resolve through a fresh detection (so only machine-verified paths spawn).
+/// `device_id` selects a remote-device repo: the path is device-side and the
+/// launch goes through the editor's Remote-SSH integration (VS Code family
+/// only; the device profile supplies the `[user@]host[:port]` label).
 #[tauri::command(rename_all = "snake_case")]
-pub async fn open_with(repo_root: String, app_id: String) -> Result<(), String> {
+pub async fn open_with(
+    repo_root: String,
+    app_id: String,
+    device_id: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let app = detect_apps()
+        let app_entry = detect_apps()
             .into_iter()
             .find(|a| a.id == app_id)
             .ok_or_else(|| format!("app {app_id:?} is not available"))?;
-        open_path_with(&app, Path::new(&repo_root))
+        match device_id {
+            None => open_path_with(&app_entry, Path::new(&repo_root)),
+            Some(device_id) => {
+                let profile = crate::remote::commands::device_store(&app)
+                    .get(&device_id)
+                    .ok_or_else(|| format!("unknown device: {device_id}"))?;
+                let host_label = ssh_host_label(&profile.username, &profile.host, profile.port);
+                open_remote_with(&app_entry, &profile.name, &repo_root, &host_label)
+            }
+        }
     })
     .await
     .map_err(|e| format!("open_with failed: {e}"))?
@@ -788,6 +878,55 @@ mod tests {
         assert!(validate_command("").is_err());
         assert!(validate_command("   ").is_err());
         assert!(validate_command("code {path}").is_ok());
+    }
+
+    /// Remote-SSH host label: `[user@]host`, `:port` only when not 22.
+    #[test]
+    fn ssh_host_label_forms() {
+        assert_eq!(
+            super::ssh_host_label("u", "dev.example.com", 22),
+            "u@dev.example.com"
+        );
+        assert_eq!(
+            super::ssh_host_label("u", "dev.example.com", 2222),
+            "u@dev.example.com:2222"
+        );
+        assert_eq!(
+            super::ssh_host_label("", "dev.example.com", 22),
+            "dev.example.com"
+        );
+        assert_eq!(super::ssh_host_label("  ", "h", 0), "h", "port 0 = unset");
+    }
+
+    /// Remote launch argv: the VS Code family gets `--remote ssh-remote+<label>`
+    /// plus the DEVICE-side path; other apps are refused with a named error
+    /// (never a broken local launch).
+    #[test]
+    fn remote_open_targets_only_vscode_family() {
+        let args = super::remote_launch_args("/home/u/repo", "u@dev:2222");
+        assert_eq!(
+            args,
+            vec!["--remote", "ssh-remote+u@dev:2222", "/home/u/repo"]
+        );
+
+        assert!(super::supports_remote_ssh("vscode"));
+        assert!(super::supports_remote_ssh("vscode-insiders"));
+        assert!(super::supports_remote_ssh("vscodium"));
+        assert!(super::supports_remote_ssh("cursor"));
+        assert!(super::supports_remote_ssh("windsurf"));
+        assert!(!super::supports_remote_ssh("zed"));
+        assert!(!super::supports_remote_ssh("explorer"));
+        assert!(!super::supports_remote_ssh("idea"));
+
+        let entry = |id: &str, name: &str| AppEntry {
+            id: id.into(),
+            name: name.into(),
+            path: "unused".into(),
+        };
+        // Refusal happens before any spawn (so it is safely testable).
+        let err = super::open_remote_with(&entry("zed", "Zed"), "dev", "/r", "u@dev").unwrap_err();
+        assert!(err.contains("Zed"), "the error names the editor: {err}");
+        assert!(err.contains("SSH remote support"), "unexpected: {err}");
     }
 
     /// The repo root must exist and be a directory; this fires before any

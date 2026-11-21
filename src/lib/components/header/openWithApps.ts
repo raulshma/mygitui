@@ -118,16 +118,20 @@ export function currentEntry(apps: EditorApp[]): OpenEntry | undefined {
 /**
  * Launches the repository root in `entry`, remembering it as last-used
  * (launch failures toast; the last-used choice still sticks, mirroring the
- * old split button's flow).
+ * old split button's flow). `deviceId` marks a repo that lives on a device:
+ * the backend routes the launch through the editor's SSH-remote integration
+ * (VS Code family; unsupported editors toast a named error instead of
+ * opening a path that does not exist locally).
  */
 export async function openWithEntry(
   root: string,
   entry: OpenEntry,
+  deviceId?: string | null,
 ): Promise<void> {
   persistLast(entry.id);
   const pending = entry.custom
     ? openWithCustom(root, entry.custom)
-    : openWith(root, entry.id);
+    : openWith(root, entry.id, deviceId);
   try {
     await pending;
   } catch (err: unknown) {

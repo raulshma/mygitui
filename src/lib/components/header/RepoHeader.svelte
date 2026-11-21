@@ -48,6 +48,7 @@
     type OpenEntry,
   } from "./openWithApps";
   import { appIcons } from "./appIcons";
+  import { tabStore } from "$lib/stores/tabs.svelte";
 
   let {
     repoId,
@@ -176,11 +177,24 @@
 
   const openWithCurrent = $derived(currentEntry(apps));
   const openWithCustoms = $derived(customEntries());
+  /** The device tab strip entry (a device repo opens through SSH remote). */
+  const openWithDeviceId = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.deviceId ?? null,
+  );
+  /**
+   * Detected apps that cannot open a device-side folder (no SSH-remote
+   * support): disabled in the menu with a why-tooltip on device tabs,
+   * instead of a toast after a failed launch. Custom apps stay enabled —
+   * the user's own command lines may well know how to reach the device.
+   */
+  const SSH_REMOTE_APPS = ["vscode", "vscode-insiders", "vscodium", "cursor", "windsurf"];
+  const appNeedsLocal = (id: string): boolean =>
+    openWithDeviceId !== null && !SSH_REMOTE_APPS.includes(id);
 
   async function launch(entry: OpenEntry): Promise<void> {
     if (launching) return;
     launching = true;
-    await openWithEntry(root, entry);
+    await openWithEntry(root, entry, openWithDeviceId);
     launching = false;
   }
 </script>
@@ -300,7 +314,10 @@
             {#each apps as app (app.id)}
               <DropdownMenu.Item
                 class="cursor-pointer gap-ui-3"
-                disabled={launching}
+                disabled={launching || appNeedsLocal(app.id)}
+                title={appNeedsLocal(app.id)
+                  ? `${app.name} cannot open repositories on the device — it has no SSH remote support (VS Code, VSCodium, Cursor, and Windsurf do)`
+                  : undefined}
                 onclick={() => void launch({ id: app.id, name: app.name })}
               >
                 <span class="pointer-events-none inline-flex flex-none items-center justify-center">

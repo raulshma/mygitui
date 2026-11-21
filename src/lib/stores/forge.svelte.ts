@@ -72,6 +72,7 @@ import type {
 } from "$lib/ipc/client";
 import type { RepoId } from "$lib/ipc/types";
 import { AsyncMap } from "$lib/state/async.svelte";
+import { tabStore } from "$lib/stores/tabs.svelte";
 
 /** Storage key for one PR's checks. */
 export function checksKey(repoId: RepoId, number: number): string {
@@ -111,8 +112,13 @@ export function runLogsKey(
   return `${repoId}:${runId}:${jobId ?? "all"}:${failedOnly ? "failed" : "full"}`;
 }
 
-/** Cache key for the process-global `gh` status probe. */
+/** Cache key for the local machine's `gh` status probe. */
 const STATUS_KEY = "gh-status";
+
+/** Cache key of one device's `gh` status probe (remote repos run gh there). */
+function deviceStatusKey(deviceId: string): string {
+  return `device:${deviceId}`;
+}
 
 /** What a failed status probe degrades to (the panel shows "unavailable"). */
 const GH_UNAVAILABLE: ForgeStatus = {
@@ -122,7 +128,11 @@ const GH_UNAVAILABLE: ForgeStatus = {
 };
 
 export class ForgeStore {
-  /** `gh` status probe (global, not per repo): one entry under {@link STATUS_KEY}. */
+  /**
+   * `gh` status probe per machine: the local machine under
+   * {@link STATUS_KEY}, each device under `device:<id>` (a device repo's
+   * GitHub features run the device's own gh).
+   */
   #status = new AsyncMap<ForgeStatus>();
 
   /** Forge context per repo id. */
@@ -340,16 +350,46 @@ export class ForgeStore {
     return map.get(key).state === "loading";
   }
 
-  /** Probes `gh` status (once per call; panels call this on mount). */
-  async refreshStatus(): Promise<ForgeStatus | null> {
-    return this.#status.run(STATUS_KEY, async () => {
+  /**
+   * Probes `gh` status (once per call; panels call this on mount). Without
+   * `repoId` — and for local repos — this machine is probed; a repo that
+   * lives on a device probes that device, so the panel and chips speak for
+   * the machine the repo actually runs on.
+   */
+  async refreshStatus(repoId?: RepoId): Promise<ForgeStatus | null> {
+    const tab =
+      repoId !== undefined
+        ? (tabStore.tabs.find((tab) => tab.id === repoId) ?? null)
+        : null;
+    const key = tab?.deviceId ? deviceStatusKey(tab.deviceId) : STATUS_KEY;
+    return this.#status.run(key, async () => {
       try {
-        return await forgeStatus();
+        return await forgeStatus(tab?.deviceId ? repoId : undefined);
       } catch (err) {
         console.warn("[forge] status probe failed:", err);
         return GH_UNAVAILABLE;
       }
     });
+  }
+
+  /** The status entry key for one repo (its device, or the local machine). */
+  #statusKeyFor(repoId?: RepoId): string {
+    if (repoId === undefined) return STATUS_KEY;
+    const tab = tabStore.tabs.find((tab) => tab.id === repoId) ?? null;
+    return tab?.deviceId ? deviceStatusKey(tab.deviceId) : STATUS_KEY;
+  }
+
+  /**
+   * `gh` availability/auth for one repo's machine (local status when the
+   * repo is local), or null before the first probe lands.
+   */
+  statusFor(repoId?: RepoId): ForgeStatus | null {
+    return this.#readyData(this.#status, this.#statusKeyFor(repoId));
+  }
+
+  /** True while the repo's machine's status probe is in flight. */
+  statusLoadingFor(repoId?: RepoId): boolean {
+    return this.#mapLoading(this.#status, this.#statusKeyFor(repoId));
   }
 
   /** Refreshes (or clears) one repo's forge context. */
@@ -819,16 +859,17 @@ export class ForgeStore {
   }
 
   /**
-   * Panel mount bundle: status (global, skipped when already known),
-   * context and PR list for `repoId` — in parallel. Ensure semantics with a
-   * short TTL so every tab switch with the panel mounted doesn't respawn
-   * the `forge_context` + `pr_list` subprocesses for data that just landed;
-   * mutations and explicit refreshes still bypass it via the refresh* calls.
+   * Panel mount bundle: status (the repo's machine — device repos probe
+   * their device; skipped when already known), context and PR list for
+   * `repoId` — in parallel. Ensure semantics with a short TTL so every tab
+   * switch with the panel mounted doesn't respawn the `forge_context` +
+   * `pr_list` subprocesses for data that just landed; mutations and
+   * explicit refreshes still bypass it via the refresh* calls.
    */
   static readonly PANEL_ENSURE_TTL_MS = 3_000;
   async ensure(repoId: RepoId): Promise<void> {
     const jobs: Promise<unknown>[] = [this.ensureContext(repoId), this.ensurePrs(repoId)];
-    if (this.status === null) jobs.push(this.refreshStatus());
+    if (this.statusFor(repoId) === null) jobs.push(this.refreshStatus(repoId));
     await Promise.all(jobs);
   }
 
@@ -855,12 +896,16 @@ export class ForgeStore {
 
   // -- read helpers ---------------------------------------------------------
 
-  /** `gh` availability/auth (global), or null before the first probe lands. */
+  /**
+   * `gh` availability/auth on THIS machine, or null before the first probe
+   * lands. Repo-scoped consumers use {@link statusFor} (device repos have
+   * their own probe).
+   */
   get status(): ForgeStatus | null {
     return this.#readyData(this.#status, STATUS_KEY);
   }
 
-  /** True while the status probe is in flight. */
+  /** True while the local status probe is in flight. */
   get statusLoading(): boolean {
     return this.#mapLoading(this.#status, STATUS_KEY);
   }

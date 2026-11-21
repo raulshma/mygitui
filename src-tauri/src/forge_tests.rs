@@ -187,11 +187,17 @@ fn pr_merge_args_map_methods_and_flags() {
 #[test]
 fn pr_edit_args_build_title_and_body_flags() {
     // Title only.
-    let title_only = pr_edit_args(7, Some("New title"), None).unwrap();
+    let title_only = pr_edit_args(7, Some("New title"), &[]).unwrap();
     assert_eq!(title_only, vec!["pr", "edit", "7", "--title", "New title"]);
 
-    // Body only (the temp-file path travels as argv; no shell anywhere).
-    let body_only = pr_edit_args(7, None, Some(std::path::Path::new("/tmp/b.md"))).unwrap();
+    // Body only: the `--body-file` pair from [`body_file_args`] (the local
+    // temp-file path travels as argv; a device run passes `-` + stdin).
+    let body_only = pr_edit_args(
+        7,
+        None,
+        &["--body-file".to_string(), "/tmp/b.md".to_string()],
+    )
+    .unwrap();
     assert_eq!(
         body_only,
         vec!["pr", "edit", "7", "--body-file", "/tmp/b.md"]
@@ -201,7 +207,7 @@ fn pr_edit_args_build_title_and_body_flags() {
     let both = pr_edit_args(
         12,
         Some("  Both  "),
-        Some(std::path::Path::new("/tmp/b2.md")),
+        &["--body-file".to_string(), "/tmp/b2.md".to_string()],
     )
     .unwrap();
     assert_eq!(
@@ -218,7 +224,7 @@ fn pr_edit_args_build_title_and_body_flags() {
     );
 
     // Blank title counts as absent.
-    let blank = pr_edit_args(1, Some("   "), None).unwrap_err();
+    let blank = pr_edit_args(1, Some("   "), &[]).unwrap_err();
     assert_eq!(blank.kind, KIND_OTHER);
     assert!(blank.message.contains("nothing to edit"));
 }
@@ -1418,4 +1424,73 @@ fn forge_failure_maps_rate_limit_and_offline() {
     // A plain 403 refusal still classifies by its markers (Other here).
     let refusal = forge_failure(None, "gh: Resource not accessible by integration");
     assert_eq!(refusal.kind, KIND_OTHER);
+}
+
+// ---------------------------------------------------------------------------
+// Remote repos: gh and git run on the device over SSH
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remote_gh_command_quotes_root_and_args() {
+    use crate::forge::remote_gh_command;
+    let cmd = remote_gh_command(
+        "/home/u/my repo",
+        &[
+            "pr".to_string(),
+            "list".to_string(),
+            "--state".to_string(),
+            "it's".to_string(),
+        ],
+    );
+    // The device shell parses one string: every argv element stays inside
+    // its own single-quoted region (injection-inert, same as remote/quoting).
+    assert_eq!(
+        cmd,
+        "cd '/home/u/my repo' && 'pr' 'list' '--state' 'it'\\''s'"
+    );
+}
+
+#[test]
+fn body_file_args_local_uses_temp_file() {
+    use crate::forge::{body_file_args, ForgeRepo};
+    let local = ForgeRepo::local(std::path::Path::new("/r"));
+    let (args, stdin, temp) = body_file_args(&local, Some("body text")).unwrap();
+    assert_eq!(args[0], "--body-file");
+    assert!(stdin.is_none(), "local bodies travel as argv, not stdin");
+    let path = temp.expect("local bodies write the temp file");
+    assert_eq!(args[1], path.to_string_lossy());
+    assert!(path.is_file());
+    let _ = std::fs::remove_file(&path);
+
+    // Blank/absent bodies produce no argument, no stdin, no file.
+    let (args, stdin, temp) = body_file_args(&local, Some("   ")).unwrap();
+    assert!(args.is_empty() && stdin.is_none() && temp.is_none());
+}
+
+#[test]
+fn exec_outcome_maps_transport_failures_without_no_gh() {
+    use crate::forge::exec_outcome;
+    use crate::remote::transport::ExecOutput;
+
+    // A normal (failing) remote run keeps its streams and exit code.
+    let out = exec_outcome(Ok(ExecOutput {
+        exit_code: 1,
+        stdout: b"o".to_vec(),
+        stderr: b"e".to_vec(),
+    }));
+    assert_eq!(out.code, Some(1));
+    assert!(!out.timed_out);
+    assert!(out.spawn_error.is_none());
+
+    // A cancelled/timed-out exec maps onto the same timeout kill the local
+    // runner reports.
+    let out = exec_outcome(Err("remote command timed out".into()));
+    assert!(out.timed_out);
+
+    // Transport failures must NOT read as "gh missing" (that classification
+    // rides spawn_error); they surface through stderr + a non-zero code.
+    let out = exec_outcome(Err("channel open failed: disconnect".into()));
+    assert!(out.spawn_error.is_none());
+    assert!(out.code != Some(0));
+    assert!(out.stderr.contains("device:"));
 }
