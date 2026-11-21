@@ -711,6 +711,47 @@
   {/snippet}
   <TitleBar tabs={!launching && tabsOpen ? repoTabs : undefined} />
   {#if popout}
+    <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
+    <main class="popout-view flex min-h-0 flex-1 [&>*]:min-h-0 [&>*]:flex-1">
+      {#if popout.panel === "history"}
+        {#await import("$lib/components/panels/HistoryView.svelte") then HistoryViewModule}
+          <HistoryViewModule.default repoId={popout.repoId} />
+        {/await}
+      {:else if popout.panel === "filehistory"}
+        {#await import("$lib/components/panels/FileHistoryView.svelte") then FileHistoryViewModule}
+          <FileHistoryViewModule.default
+            repoId={popout.repoId}
+            path={popout.path ?? ""}
+          />
+        {/await}
+      {:else if popout.panel === "workflowrun"}
+        {#await import("$lib/components/forge/WorkflowRunView.svelte") then WorkflowRunViewModule}
+          <WorkflowRunViewModule.default
+            repoId={popout.repoId}
+            runId={popout.runId ?? 0}
+          />
+        {/await}
+      {:else if popout.panel === "actionrun"}
+        {#await import("$lib/components/actions/ActionRunView.svelte") then ActionRunViewModule}
+          <ActionRunViewModule.default
+            repoId={popout.repoId}
+            runId={popout.actionRunId ?? ""}
+          />
+        {/await}
+      {:else if popout.panel === "commitdetail"}
+        {#await import("$lib/components/layout/PopoutCommitDetail.svelte") then PopoutCommitDetailModule}
+          <PopoutCommitDetailModule.default
+            repoId={popout.repoId}
+            sha={popout.sha ?? ""}
+          />
+        {/await}
+      {:else}
+        {#await import("$lib/components/layout/PopoutDiff.svelte") then PopoutDiffModule}
+          <PopoutDiffModule.default repoId={popout.repoId} />
+        {/await}
+      {/if}
+    </main>
+  {:else}
 
     {#if launching}
       <!-- Launch restore is still opening the stored repo: hold this frame

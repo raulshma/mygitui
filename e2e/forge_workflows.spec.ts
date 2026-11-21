@@ -188,7 +188,7 @@ async function setup(page: Page) {
 async function openActionsTab(page: Page): Promise<void> {
   await openRecentRepo(page);
   await openPanel(page, "GitHub");
-  await expect(page.locator(".panel-title")).toHaveText("GitHub");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("GitHub");
   await page.getByRole("tab", { name: "Actions" }).click();
   await expect(page.locator(".wf-runs")).toBeVisible();
 }

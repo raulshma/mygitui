@@ -38,20 +38,24 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(
     activity.getByRole("button", { name: "Status" }),
   ).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".panel-title")).toHaveText("Status");
+  // The compact `.panel-head` title is the activity-controlled sidebar's
+  // view title; panels keep their own PanelHeader titles (e.g. Status's
+  // "Source control") inside their keep-alive hosts, so the bare
+  // `.panel-title` is intentionally ambiguous now.
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Status");
   await expect(commitForm).toBeVisible();
   await expect(page.locator(".changes-panel .row").first()).toBeVisible();
   await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
 
   // Switching views keeps Status mounted (its draft/scroll state survives).
   await activity.getByRole("button", { name: "Branches" }).click();
-  await expect(page.locator(".panel-title")).toHaveText("Branches");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Branches");
   await expect(commitForm).toBeHidden();
   await expect(page.locator(".changes-panel")).toHaveCount(1);
 
   // A panel that is not in the layout yet is added on first click.
   await openPanel(page, "Repo");
-  await expect(page.locator(".panel-title")).toHaveText("Repo");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Repo");
   await expect(commitForm).toBeHidden();
 
   await activity.getByRole("button", { name: "Status" }).click();
@@ -79,7 +83,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   // the panels mounted, and gives the center editor the freed width.
   const sidebarWidth = (await editor.boundingBox())!.width;
   await activity.getByRole("button", { name: "Hide sidebar" }).click();
-  await expect(page.locator(".panel-title")).toBeHidden();
+  await expect(page.locator(".panel-head .panel-title")).toBeHidden();
   await expect(page.locator(".changes-panel")).toBeHidden();
   await expect(activity).toBeVisible();
   await expect
@@ -88,18 +92,18 @@ test("activity bar, sidebars and center editor share the workspace", async ({
 
   // The active activity icon re-expands the sidebar without losing the view.
   await activity.getByRole("button", { name: "Status" }).click();
-  await expect(page.locator(".panel-title")).toHaveText("Status");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Status");
   await expect(commitForm).toBeVisible();
   await expect(editor.locator(".dsummary").first()).toHaveText(
     "commit message 0",
   );
 
-  // Hiding history keeps it mounted (now as a §10 drawer: this spec runs at
-  // the 1280×720 default viewport = Medium, where history is an overlay
-  // drawer, open on boot) behind the right-edge rail and keeps the commit
-  // detail. A drawer overlays WITHOUT resizing splits, so the editor —
-  // which already fills the pane the docked history used to occupy — keeps
-  // its exact width; the primary sidebar must keep its exact size too.
+  // Hiding history keeps it mounted behind the right-edge rail; the editor
+  // expands and keeps the commit detail. The rail eats width from the tree,
+  // but only the rightmost pane may pay for it - the primary sidebar (and
+  // every other left-hand pane) must keep its exact size. (At this spec's
+  // 1280×720 default viewport the mode is Wide — drawers only appear below
+  // 1280 — so history is the docked right sidebar, not a §10 overlay.)
   const historyWidth = (await editor.boundingBox())!.width;
   const sidebarWidthBeforeRail = (await page
     .locator(".changes-panel")
@@ -115,7 +119,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(historyRail).toBeVisible();
   await expect
     .poll(async () => (await editor.boundingBox())?.width ?? 0)
-    .toBeCloseTo(historyWidth, 0);
+    .toBeGreaterThan(historyWidth);
   await expect
     .poll(async () =>
       Math.abs(
@@ -144,7 +148,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
     .getByRole("button", { name: "Hide history", exact: true })
     .click();
   await expect(activity).toBeVisible();
-  await expect(page.locator(".panel-title")).toBeHidden();
+  await expect(page.locator(".panel-head .panel-title")).toBeHidden();
   await expect(page.locator(".changes-panel")).toHaveCount(1);
   await expect(page.locator(".changes-panel")).toBeHidden();
   await expect(page.locator(".history")).toHaveCount(1);
@@ -207,6 +211,10 @@ async function openTextEditor(page: Page) {
 
 for (const destination of ["diff", "commit", "workflow"] as const) {
   test(`dirty CodeMirror text and undo survive the ${destination} view`, async ({ page }) => {
+    // Boot + the lazily compiled FileWorkspace/CodeMirror chunks exceed the
+    // 30s default on a cold/loaded dev server (same budget as the other
+    // lazy-panel specs).
+    test.setTimeout(90_000);
     const { mock, content, tracked } = await openTextEditor(page);
     await content.click();
     await page.keyboard.press("Control+End");
@@ -218,12 +226,9 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
       await page.getByRole("button", { name: "Open diff" }).click();
       await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
     } else if (destination === "commit") {
-      // §10 (Medium viewport): the history drawer yielded when the workdir
-      // file surfaced the editor — reopen it from the rail for the row click.
-      await page
-        .locator(".activity-bar")
-        .getByRole("button", { name: "History" })
-        .click();
+      // The default viewport (1280×720) is Wide: history stays the docked
+      // right sidebar when the workdir file surfaced the editor (no drawer
+      // yield below 1280), so the commit row is directly clickable.
       await page.locator("#commit-row-0").click();
       await expect(page.locator(".editor .dsummary").first()).toHaveText("commit message 0");
     } else {
@@ -237,12 +242,12 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
     await page.keyboard.press("Control+s");
 
     // Return through the natural affordances: the diff header's Edit button,
-    // or the file tree (§10 Medium: the FILES drawer re-opens from the rail
-    // — it yielded when the editor surfaced).
+    // or the file tree (switching the sidebar back to Files when needed —
+    // the workflow route left GitHub active in the sidebar).
     if (destination === "diff") {
       await page.getByRole("button", { name: "Edit", exact: true }).click();
     } else {
-      await openPanel(page, "Files");
+      if (destination === "workflow") await openPanel(page, "Files");
       await page.getByRole("treeitem", { name: /^app\.ts/ }).click();
     }
     await expect(content).toBeVisible();

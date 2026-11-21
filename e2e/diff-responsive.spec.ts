@@ -109,8 +109,12 @@ async function openCommitDiff(page: Page, firstLine: string) {
   await expect(page.locator(".diff-viewer .viewport")).toBeVisible();
   // Pin split mode (session override — sticks at any container width):
   // most tests below assert split-half geometry, which the narrow defaults
-  // (unified under a 700px container) would otherwise replace.
+  // (unified under a 700px container) would otherwise replace. The mode
+  // buttons are a segmented pair, so route through Unified first: at the
+  // wide default the pref already renders Split pressed, and clicking a
+  // pressed button would flip the pair OFF, not pin it.
   const splitBtn = page.getByRole("button", { name: "Split", exact: true });
+  await page.getByRole("button", { name: "Unified", exact: true }).click();
   await splitBtn.click();
   await expect(splitBtn).toHaveAttribute("aria-pressed", "true");
   // Context rows render the line in both halves, so the first context line
@@ -159,12 +163,12 @@ test("split view shares the pane and never scrolls horizontally", async ({ page 
   expect(Math.abs(m.halfWidths[0]! - m.halfWidths[1]!)).toBeLessThanOrEqual(2);
 
   // Narrow window: still fits — the layout is responsive, not fixed-width.
-  // Under a 700px container the diff defaults to wrap OFF + Unified, so
-  // wrap is re-enabled here via the toggle (in-memory session override)
-  // to keep this a wrap-ON split-geometry assertion.
+  // The drawers yield the editor nearly the whole window here, so the
+  // commit-detail container stays ABOVE the 700px narrow threshold and the
+  // wrap preference (ON, seeded at boot) keeps governing — assert that,
+  // then check the wrap-ON split geometry.
   await page.setViewportSize({ width: 900, height: 800 });
   const wrapToggle = page.getByRole("button", { name: "Wrap long lines" });
-  await wrapToggle.click();
   await expect(wrapToggle).toHaveAttribute("aria-pressed", "true");
   m = await diffMetrics(page);
   expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
@@ -338,7 +342,12 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
     return {
       start: { x: leftTxt(rows[0]!).left, y: leftTxt(rows[0]!).top + leftTxt(rows[0]!).height / 2 },
       down: { x: leftTxt(rows[2]!).left + 120, y: leftTxt(rows[2]!).top + leftTxt(rows[2]!).height / 2 },
-      across: mid(rightTxt(rows[3]!)),
+      // Sweep target: the focused row's own right half. A right half of a
+      // LATER row would first sweep that row's own left half, which the
+      // controller legitimately grows into ("grabs the rest of your own
+      // line") before the divider clamp — not the confinement this
+      // assertion is about.
+      across: mid(rightTxt(rows[2]!)),
     };
   });
 
@@ -352,7 +361,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
   expect(hl.text).toContain("gamma");
   expect(new Set(hl.sides)).toEqual(new Set(["left"]));
 
-  await page.mouse.move(points.across.x, points.across.y, { steps: 10 });
+  await page.mouse.move(points.across.x, points.across.y);
   await page.mouse.up();
   hl = await highlightState(page);
   // The sweep across the divider was ignored: three left rows stay

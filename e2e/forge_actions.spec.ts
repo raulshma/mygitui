@@ -56,7 +56,7 @@ test("PR metadata is visible and merge/review actions call gh commands", async (
   await openRecentRepo(page);
   await openPanel(page, "GitHub");
 
-  await expect(page.locator(".panel-title")).toHaveText("GitHub");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("GitHub");
   const card = page.locator(".card.current");
   await expect(card).toContainText("Add the compact source-control view");
   await expect(card).toContainText("by octocat");

@@ -181,7 +181,7 @@ test("layout preset opens from the header overflow with single clicks", async ({
   await page.getByRole("menuitem", { name: "Layout preset" }).click();
   try {
     await expect(
-      page.getByRole("menuitem", { name: "Default" }),
+      page.getByRole("menuitemradio", { name: "Default" }),
     ).toBeVisible({ timeout: 4_000 });
   } catch (err) {
     await dumpTrace(page);
@@ -189,7 +189,7 @@ test("layout preset opens from the header overflow with single clicks", async ({
   }
   // The submenu must STAY open — not dismiss on the click that opened it.
   await page.waitForTimeout(400);
-  await expect(page.getByRole("menuitem", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
@@ -238,7 +238,7 @@ test("layout preset submenu opens on a fast click (no dwell)", async ({
   await more.hover();
   await clickHere(page);
   await page.getByRole("menuitem", { name: "Layout preset" }).click();
-  await expect(page.getByRole("menuitem", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });

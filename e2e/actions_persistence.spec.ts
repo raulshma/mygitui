@@ -56,7 +56,9 @@ test("repo-scoped custom action survives a relaunch with a fresh repo id", async
   // The app restores the open repo and the last active panel (Actions was
   // active at shutdown), so the persisted defs must be visible without any
   // interaction — clicking the panel button again would toggle it closed.
-  await expect(page.getByText("/tmp/repo").first()).toBeVisible();
+  // (The header shows the repo NAME now — the full path lives in the
+  // Repository path popover — so restore state is asserted on the name.)
+  await expect(page.locator(".repo-header .repo-name")).toHaveText("repo");
   const nameBox = page.getByRole("textbox", { name: "Action name", exact: true });
   await expect(nameBox).toBeVisible();
   await expect(nameBox).toHaveValue("Persist check");

@@ -46,7 +46,7 @@ test("contribution heatmap lays out horizontally without a vertical scrollbar", 
   await openRecentRepo(page);
   await openPanel(page, "Stats");
 
-  await expect(page.locator(".panel-title")).toHaveText("Stats");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Stats");
   const table = page.locator(".heatmap");
   await expect(table).toBeVisible();
   await expect(table.locator("td")).toHaveCount(53 * 7);

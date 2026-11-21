@@ -41,6 +41,8 @@
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
  */
 
+import { untrack } from "svelte";
+
 /** Injectable timer surface (tests drive a fake clock through these). */
 export interface Clock {
   setTimeout(handler: () => void, ms: number): unknown;
@@ -119,29 +121,38 @@ export class PollScheduler {
    * cleared, state dropped) and re-registering the key starts fresh.
    */
   register(key: string, options: PollTaskOptions): () => void {
-    this.#stop(key);
-    this.#tasks.set(key, options);
-    const interval = clampInterval(options.intervalMs);
-    this.lanes = {
-      ...this.lanes,
-      [key]: { running: false, erroring: false, consecutiveErrors: 0, backoffMs: 0 },
-    };
-    if (options.enabled !== false) {
-      // First tick one interval out — callers own their on-open fetch.
-      this.#schedule(key, interval);
-    }
-    return () => this.unregister(key);
+    // Imperative API: the lanes state touched here must NEVER become a
+    // dependency of the calling effect. Both register and unregister READ
+    // `lanes` (the spread / the `in` check) while writing it — tracked,
+    // a caller's `$effect` would re-run on its own registration forever
+    // (read → write → dirty → read …) until the update depth blows up.
+    return untrack(() => {
+      this.#stop(key);
+      this.#tasks.set(key, options);
+      const interval = clampInterval(options.intervalMs);
+      this.lanes = {
+        ...this.lanes,
+        [key]: { running: false, erroring: false, consecutiveErrors: 0, backoffMs: 0 },
+      };
+      if (options.enabled !== false) {
+        // First tick one interval out — callers own their on-open fetch.
+        this.#schedule(key, interval);
+      }
+      return () => this.unregister(key);
+    });
   }
 
   /** Removes a lane entirely (timer + state). No-op when unknown. */
   unregister(key: string): void {
-    this.#stop(key);
-    this.#tasks.delete(key);
-    if (key in this.lanes) {
-      const next = { ...this.lanes };
-      delete next[key];
-      this.lanes = next;
-    }
+    untrack(() => {
+      this.#stop(key);
+      this.#tasks.delete(key);
+      if (key in this.lanes) {
+        const next = { ...this.lanes };
+        delete next[key];
+        this.lanes = next;
+      }
+    });
   }
 
   /** Stops every lane (teardown helper). */
@@ -156,11 +167,18 @@ export class PollScheduler {
    * lane's previous run is still in flight.
    */
   async refresh(key: string): Promise<void> {
-    const task = this.#tasks.get(key);
-    if (!task || this.#running.has(key)) return;
-    // One run at a time per lane; drop the pending tick — the run below
-    // reschedules from its own completion.
-    this.#clearTimer(key);
+    // Same tracking guard as register/unregister: refresh is invoked from
+    // reactive contexts (tab-switch promotion) and its synchronous prefix
+    // runs inside the caller's effect stack.
+    const task = untrack(() => {
+      const current = this.#tasks.get(key);
+      if (!current || this.#running.has(key)) return null;
+      // One run at a time per lane; drop the pending tick — the run below
+      // reschedules from its own completion.
+      this.#clearTimer(key);
+      return current;
+    });
+    if (!task) return;
     await this.#run(key, task);
   }
 
@@ -207,10 +225,14 @@ export class PollScheduler {
   }
 
   async #run(key: string, task: PollTaskOptions): Promise<void> {
-    const state = this.lanes[key];
+    // The synchronous prefix can run inside a caller's effect stack
+    // (refresh); keep the lanes read/write out of its dependencies.
+    const state = untrack(() => this.lanes[key]);
     if (!state || this.#running.has(key)) return;
     this.#running.add(key);
-    this.lanes[key] = { ...state, running: true };
+    untrack(() => {
+      this.lanes[key] = { ...state, running: true };
+    });
     let failed = false;
     try {
       await task.work();

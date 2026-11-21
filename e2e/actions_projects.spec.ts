@@ -50,7 +50,7 @@ test("detected project scripts are visible and runnable", async ({ page }) => {
   await openRecentRepo(page);
   await openPanel(page, "Actions");
 
-  await expect(page.locator(".panel-title")).toHaveText("Actions");
+  await expect(page.locator(".panel-head .panel-title")).toHaveText("Actions");
   const panelPadding = await page.locator(".actions-panel").evaluate((el) => {
     const style = getComputedStyle(el);
     return {
