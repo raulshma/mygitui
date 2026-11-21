@@ -94,10 +94,12 @@ test("activity bar, sidebars and center editor share the workspace", async ({
     "commit message 0",
   );
 
-  // Hiding history keeps it mounted behind the right-edge rail; the editor
-  // expands and keeps the commit detail. The rail eats width from the tree,
-  // but only the rightmost pane may pay for it - the primary sidebar (and
-  // every other left-hand pane) must keep its exact size.
+  // Hiding history keeps it mounted (now as a §10 drawer: this spec runs at
+  // the 1280×720 default viewport = Medium, where history is an overlay
+  // drawer, open on boot) behind the right-edge rail and keeps the commit
+  // detail. A drawer overlays WITHOUT resizing splits, so the editor —
+  // which already fills the pane the docked history used to occupy — keeps
+  // its exact width; the primary sidebar must keep its exact size too.
   const historyWidth = (await editor.boundingBox())!.width;
   const sidebarWidthBeforeRail = (await page
     .locator(".changes-panel")
@@ -113,7 +115,7 @@ test("activity bar, sidebars and center editor share the workspace", async ({
   await expect(historyRail).toBeVisible();
   await expect
     .poll(async () => (await editor.boundingBox())?.width ?? 0)
-    .toBeGreaterThan(historyWidth);
+    .toBeCloseTo(historyWidth, 0);
   await expect
     .poll(async () =>
       Math.abs(
@@ -216,6 +218,12 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
       await page.getByRole("button", { name: "Open diff" }).click();
       await expect(page.locator(".editor .file-editor .epath")).toHaveText("src/app.ts");
     } else if (destination === "commit") {
+      // §10 (Medium viewport): the history drawer yielded when the workdir
+      // file surfaced the editor — reopen it from the rail for the row click.
+      await page
+        .locator(".activity-bar")
+        .getByRole("button", { name: "History" })
+        .click();
       await page.locator("#commit-row-0").click();
       await expect(page.locator(".editor .dsummary").first()).toHaveText("commit message 0");
     } else {
@@ -229,11 +237,12 @@ for (const destination of ["diff", "commit", "workflow"] as const) {
     await page.keyboard.press("Control+s");
 
     // Return through the natural affordances: the diff header's Edit button,
-    // or the file tree (switching the sidebar back to Files when needed).
+    // or the file tree (§10 Medium: the FILES drawer re-opens from the rail
+    // — it yielded when the editor surfaced).
     if (destination === "diff") {
       await page.getByRole("button", { name: "Edit", exact: true }).click();
     } else {
-      if (destination === "workflow") await openPanel(page, "Files");
+      await openPanel(page, "Files");
       await page.getByRole("treeitem", { name: /^app\.ts/ }).click();
     }
     await expect(content).toBeVisible();

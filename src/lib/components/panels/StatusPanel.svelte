@@ -35,7 +35,7 @@
    * tag); modules with no status entry (uninitialized, broken) appear in the
    * Changes group so they can be initialized/updated from here.
    */
-  import { untrack } from "svelte";
+  import { untrack, tick } from "svelte";
   import type {
     ChangeKind,
     RepoStatus,
@@ -47,6 +47,8 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+  import PanelHeader from "$lib/components/layout/PanelHeader.svelte";
+  import OverflowMenu from "$lib/components/layout/OverflowMenu.svelte";
   import {
     closeRepo,
     checkpoints,
@@ -70,7 +72,9 @@
   import { sortNewestFirst } from "$lib/components/safety/safetyModel";
   import { openTab, parseSshUri, refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { normalizeRepoPath } from "$lib/stores/switcher.svelte";
-  import CommitBar from "$lib/components/panels/CommitBar.svelte";
+  import CommitBar, { type CommitScope } from "$lib/components/panels/CommitBar.svelte";
+  import { onUiEvent } from "$lib/palette/events";
+  import { shortcutsHintPrefs } from "./shortcutsHintPrefs.svelte";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { toast } from "$lib/toast";
   import { patternFor } from "./gitignore";
@@ -198,15 +202,26 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   type DisplaySection = StatusSectionView & { modules: SubmoduleInfo[] };
 
   let filterText = $state("");
+  /**
+   * PanelHeader filter toggle (plan §6.5): the input expands inline on
+   * toggle (Ctrl+F focuses it, routed by focus from `diff.find`) and
+   * turning it off drops the query.
+   */
+  let filterOn = $state(false);
+  let filterInputEl: HTMLInputElement | undefined = $state(undefined);
+  /** The panel root (Ctrl+F routing: only the focused panel reacts). */
+  let panelEl: HTMLElement | undefined = $state(undefined);
   let collapsed = $state<Record<SectionId, boolean>>({
     staged: false,
     changes: false,
   });
   /**
-   * Dismiss state of the keyboard-shortcuts hint row (re-showable from the
-   * toolbar's ⋮ menu). Per-session, not persisted.
+   * Dismiss state of the keyboard-shortcuts hint row, persisted
+   * (`shortcutsHintPrefs`, plan §6.4): shown on the first run, default off
+   * after the first dismissal, re-openable from the header overflow's
+   * "Keyboard shortcuts" item.
    */
-  let shortcutsHintDismissed = $state(false);
+  const shortcutsHintDismissed = $derived(shortcutsHintPrefs.dismissed);
 
   /** Roving focus: key of the focused row (null → first visible row). */
   let focusKey: string | null = $state(null);
@@ -327,6 +342,41 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         modules: extraModules,
       },
     ];
+  });
+
+  /**
+   * Composer scopes (plan §6.1): the owning repository first, then every
+   * DIRTY initialized submodule with its change count — these feed the
+   * sticky CommitBar's chips, so one composer serves the whole tree
+   * instead of one embedded composer per accordion. Clean submodules
+   * (nothing to commit) and modules whose backend id hasn't resolved yet
+   * stay out; a submodule becoming clean removes its chip again.
+   */
+  const commitScopes = $derived.by<CommitScope[]>(() => {
+    if (!repoId) return [];
+    const main: CommitScope = {
+      id: "main",
+      label: repoName || "repository",
+      repoId,
+      status,
+      path: root || undefined,
+    };
+    const dirtySubmodules: CommitScope[] = [];
+    for (const info of moduleList) {
+      if (!info.initialized) continue;
+      const sub = submodulesMap[info.path];
+      if (!sub?.repoId) continue;
+      const counts = submoduleChangeCounts(sub.status);
+      if (counts.total === 0) continue;
+      dirtySubmodules.push({
+        id: info.path,
+        label: splitPath(info.path).base,
+        repoId: sub.repoId,
+        status: sub.status,
+        path: sub.root,
+      });
+    }
+    return [main, ...dirtySubmodules];
   });
   /**
    * One submodule's embed state. The status fetch is its own machine per
@@ -1323,60 +1373,35 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
   // -- menus -----------------------------------------------------------------
 
-  function toolbarMenu(event: MouseEvent): void {
-    const entries: MenuEntry[] = [
-      {
-        id: "stage-all",
-        label: "Stage all changes",
-        icon: iconStageAll,
-        disabled: !canStageAll,
-        run: () => onStageAll(false),
-      },
-      {
-        id: "unstage-all",
-        label: "Unstage all changes",
-        icon: iconUnstageAll,
-        disabled: !canUnstageAll,
-        run: () => onStageAll(true),
-      },
-    ];
-    if (repoId) {
-      entries.push(
-        { separator: true },
-        {
-          id: "ignore-templates",
-          label: "Ignore templates…",
-          icon: iconTemplates,
-          run: () => (galleryOpen = true),
-        },
-        {
-          id: "refresh",
-          label: "Refresh changes",
-          icon: iconRefresh,
-          run: refreshAll,
-        },
-      );
-    }
-    entries.push(
-      { separator: true },
-      {
-        id: "keyboard-shortcuts",
-        label: "Keyboard shortcuts",
-        icon: iconInfo,
-        run: () => (shortcutsHintDismissed = false),
-      },
-    );
-    entries.push({ separator: true });
-    for (const option of FILE_ICON_THEMES) {
-      entries.push({
-        id: `file-icons-${option.id}`,
-        label: `${fileIconPreferences.theme === option.id ? "✓ " : ""}${option.label} file icons`,
-        icon: iconPalette,
-        run: () => fileIconPreferences.setTheme(option.id),
-      });
-    }
-    showMenuAt(event, entries);
+  // -- PanelHeader filter (plan §6.5) ------------------------------------------
+
+  /** Shows the filter input (if hidden) and focuses it once mounted. */
+  async function openFilter(): Promise<void> {
+    filterOn = true;
+    await tick();
+    filterInputEl?.focus();
   }
+
+  /** PanelHeader filter toggle: off also drops the query. */
+  async function toggleFilter(next: boolean): Promise<void> {
+    filterOn = next;
+    if (!next) {
+      filterText = "";
+      return;
+    }
+    await openFilter();
+  }
+
+  // Ctrl+F follows focus (the keybinds engine owns the combo globally —
+  // see the `diff.find` command): inside this panel it filters changes.
+  // Keep-alive mounting means several instances are live, so the focus
+  // guard picks the one the user is working in.
+  $effect(() => {
+    return onUiEvent("status-filter", () => {
+      if (!panelEl?.contains(document.activeElement)) return;
+      void openFilter();
+    });
+  });
 
   /**
    * Right-click, kebab button and Menu-key entry point share one menu. VS
@@ -1897,8 +1922,21 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
     }
   }
 
-  /** ArrowDown in the filter box selects and focuses the first row. */
+  /**
+   * ArrowDown in the filter box selects and focuses the first row;
+   * Escape clears the query (and closes the input when already empty,
+   * matching the FILES panel).
+   */
   function onFilterKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      if (query !== "") {
+        filterText = "";
+      } else {
+        filterOn = false;
+      }
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "ArrowDown" && visibleRows.length > 0) {
       event.preventDefault();
       const row = visibleRows[0]!;
@@ -1982,96 +2020,125 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
 
 <aside
   aria-label="Source control"
-  class="flex flex-1 flex-col h-full min-h-0 min-w-0 overflow-hidden bg-background text-foreground text-ui-base"
+  class="source-control flex flex-1 flex-col h-full min-h-0 min-w-0 overflow-hidden bg-background text-foreground text-ui-base"
+  bind:this={panelEl}
 >
   {#if status}
-    <div class="toolbar flex items-center gap-0.5 px-2 py-1 flex-none bg-card border-b border-border">
-      <span class="relative flex-1 min-w-0 flex items-center text-muted-foreground">
-        <span class="absolute left-1.5 inline-flex pointer-events-none opacity-75">
-          <Icon icon={iconSearch} size={14} />
-        </span>
-        <Input
-          class="h-6 rounded-sm bg-background dark:bg-background px-6 text-xs md:text-xs placeholder:text-muted-foreground/80"
-          type="text"
-          placeholder="Filter changes"
-          aria-label="Filter changed files by path"
-          bind:value={filterText}
-          onkeydown={onFilterKeydown}
-        />
-        {#if filterText}
-          <Hint label="Clear filter">
-            {#snippet child({ props })}
-              <Button
-                {...props}
-                class="absolute right-0.5 size-5 rounded-full p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
-                variant="ghost"
-                size="icon-xs"
-                type="button"
-                aria-label="Clear filter"
-                onclick={() => (filterText = "")}
-              >
-                <Icon icon={iconClear} size={12} />
-              </Button>
-            {/snippet}
-          </Hint>
-        {/if}
-      </span>
-      <Button
-        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="Stage all files"
-        title="Stage every file in Changes"
-        disabled={!canStageAll}
-        onclick={() => onStageAll(false)}
-      >
-        <Icon icon={iconStageAll} size={16} />
-      </Button>
-      <Button
-        class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="Unstage all files"
-        title="Unstage every file in Staged Changes (all sections)"
-        disabled={!canUnstageAll}
-        onclick={() => onStageAll(true)}
-      >
-        <Icon icon={iconUnstageAll} size={16} />
-      </Button>
-      <Button
-        class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${mutating || moduleLoading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-4`}
-        variant="ghost"
-        size="icon-xs"
-        type="button"
-        aria-label="Refresh changes"
-        title="Refresh changes and submodule state"
-        disabled={!repoId || mutating || moduleLoading}
-        onclick={refreshAll}
-      >
-        <Icon icon={iconRefresh} size={16} />
-      </Button>
-      <Hint label="More actions">
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
-            variant="ghost"
-            size="icon-xs"
-            type="button"
-            aria-label="More source-control actions"
-            onclick={(event) => toolbarMenu(event)}
+    <!-- Workstream B §6.5: one PanelHeader row (title + filter-match count +
+         inline filter + refresh + overflow) replaced the toolbar/filter
+         stack. Stage/unstage-all + ignore templates + the shortcuts-hint
+         reopen live in the overflow; refresh stays visible (same grammar
+         as the FILES panel). -->
+    <PanelHeader
+      title="Source control"
+      count={query !== "" ? visibleRows.length : undefined}
+      filterOn={filterOn}
+      onFilterToggle={(next) => void toggleFilter(next)}
+      class="bg-card"
+    >
+      {#snippet filterInput()}
+        {#if filterOn}
+          <div
+            class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-px text-muted-foreground"
+            role="search"
           >
-            <Icon icon={iconMore} size={16} />
-          </Button>
-        {/snippet}
-      </Hint>
-    </div>
+            <Icon icon={iconSearch} size={14} />
+            <!-- svelte-ignore a11y_autofocus -->
+            <Input
+              type="text"
+              bind:ref={filterInputEl}
+              class="h-auto min-w-0 flex-1 rounded-none border-none bg-transparent px-0 py-0 text-xs md:text-xs text-foreground shadow-none outline-none focus-visible:ring-0 dark:bg-transparent placeholder:text-muted-foreground"
+              placeholder="Filter changes"
+              bind:value={filterText}
+              aria-label="Filter changed files by path"
+              onkeydown={onFilterKeydown}
+            />
+            {#if filterText}
+              <span class="fcount flex-none text-ui-micro tabular-nums text-muted-foreground">{visibleRows.length}</span>
+            {/if}
+          </div>
+        {/if}
+      {/snippet}
+      {#snippet trailing()}
+        <Hint label="Refresh changes">
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              class={`relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground ${mutating || moduleLoading ? "[&_svg]:animate-spin" : ""} [&_svg:not([class*='size-'])]:size-3.5`}
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Refresh changes"
+              title="Refresh changes and submodule state"
+              disabled={!repoId || mutating || moduleLoading}
+              onclick={refreshAll}
+            >
+              <Icon icon={iconRefresh} size={16} />
+            </Button>
+          {/snippet}
+        </Hint>
+        <OverflowMenu label="More source-control actions">
+          {#snippet content()}
+            <DropdownMenu.Item
+              class="cursor-pointer gap-ui-3"
+              disabled={!canStageAll}
+              onclick={() => onStageAll(false)}
+            >
+              <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+                <Icon icon={iconStageAll} size={16} />
+              </span>
+              Stage all changes
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="cursor-pointer gap-ui-3"
+              disabled={!canUnstageAll}
+              onclick={() => onStageAll(true)}
+            >
+              <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+                <Icon icon={iconUnstageAll} size={16} />
+              </span>
+              Unstage all changes
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Item
+              class="cursor-pointer gap-ui-3"
+              disabled={!repoId}
+              onclick={() => (galleryOpen = true)}
+            >
+              <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+                <Icon icon={iconTemplates} size={16} />
+              </span>
+              Ignore templates…
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              class="cursor-pointer gap-ui-3"
+              onclick={() => shortcutsHintPrefs.reopen()}
+            >
+              <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+                <Icon icon={iconInfo} size={16} />
+              </span>
+              Keyboard shortcuts
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            {#each FILE_ICON_THEMES as option (option.id)}
+              <DropdownMenu.CheckboxItem
+                class="cursor-pointer"
+                checked={fileIconPreferences.theme === option.id}
+                onCheckedChange={(next) => fileIconPreferences.setTheme(option.id)}
+              >
+                {option.label} file icons
+              </DropdownMenu.CheckboxItem>
+            {/each}
+          {/snippet}
+        </OverflowMenu>
+      {/snippet}
+    </PanelHeader>
 
     {#if !shortcutsHintDismissed}
       <!-- Dismissible hint banner (same pattern as ReflogPanel's hint);
-           re-showable via the ⋮ menu's "Keyboard shortcuts" entry. -->
+           persisted via shortcutsHintPrefs (plan §6.4: on for the first
+           run, off after the first dismissal), re-openable via the header
+           overflow's "Keyboard shortcuts" item. -->
       <div
         class="kbd-hint flex shrink-0 items-center gap-1 border-b border-border bg-primary/10 px-2 py-1 pr-1 text-ui-meta text-foreground"
         role="note"
@@ -2096,7 +2163,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               size="icon-xs"
               type="button"
               aria-label="Dismiss keyboard shortcuts hint"
-              onclick={() => (shortcutsHintDismissed = true)}
+              onclick={() => shortcutsHintPrefs.dismiss()}
             >
               <Icon icon={iconClear} size={12} />
             </Button>
@@ -2240,7 +2307,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                 {#snippet child({ props })}
                   <span
                     {...props}
-                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
                   >
                     {display.tag}
                   </span>
@@ -2427,7 +2494,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   {#snippet child({ props })}
                     <span
                       {...props}
-                      class="branch-pill shrink-0 inline-flex items-center gap-ui-2 px-ui-35 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
+                      class="branch-pill shrink-0 inline-flex items-center gap-ui-2 px-ui-35 py-px rounded-full bg-muted text-muted-foreground text-ui-micro font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
                     >
                       <Icon icon={iconBranch} size={12} />
                       <span>{mainBranchLabel(status)}</span>
@@ -2436,7 +2503,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                 </Hint>
               {/if}
               {#if index && index.total > 0}
-                <span class="count-pill shrink-0 min-w-4 px-ui-35 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{index.total}</span>
+                <span class="count-pill shrink-0 min-w-4 px-ui-35 rounded-full bg-muted text-muted-foreground text-ui-micro font-semibold text-center tabular-nums">{index.total}</span>
               {/if}
             </button>
             <div class="header-actions flex items-center gap-ui-1 shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
@@ -2468,12 +2535,6 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           </div>
 
           {#if !mainRepoCollapsed}
-            {#if repoId}
-              <div class="embedded-commit-bar pt-ui-3 pb-ui-4 bg-background border-b border-border">
-                <CommitBar {repoId} {status} onCommitted={refreshAll} />
-              </div>
-            {/if}
-
             {#if index && index.total === 0}
               <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No changes in main repository</div>
             {:else if sections.length === 0 && filterText}
@@ -2490,7 +2551,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                 >
                   <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={sectionIndex > 0} style:background-color={dropSectionKey === `main:${section.id}` ? "var(--app-hover)" : null}>
                     <button
-                      class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                      class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-meta font-semibold px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                       type="button"
                       id={`main-section-${section.id}`}
                       aria-expanded={!collapsed[section.id]}
@@ -2505,7 +2566,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                         <Icon icon={iconChevron} size={14} />
                       </span>
                       <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
-                      <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length}</span>
+                      <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-micro font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length}</span>
                     </button>
                     {#if canMutate && (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
                       <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
@@ -2587,7 +2648,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   {#snippet child({ props })}
                     <span
                       {...props}
-                      class="branch-pill shrink-0 inline-flex items-center gap-ui-2 px-ui-35 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
+                      class="branch-pill shrink-0 inline-flex items-center gap-ui-2 px-ui-35 py-px rounded-full bg-muted text-muted-foreground text-ui-micro font-medium max-w-28 overflow-hidden text-ellipsis whitespace-nowrap"
                     >
                       <Icon icon={iconBranch} size={12} />
                       <span>{submoduleBranchLabel(info, sub?.status ?? null)}</span>
@@ -2599,7 +2660,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     {#snippet child({ props })}
                       <span
                         {...props}
-                        class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                        class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
                       >
                         {display.tag}
                       </span>
@@ -2607,7 +2668,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   </Hint>
                 {/if}
                 {#if info.initialized && counts.total > 0}
-                  <span class="count-pill shrink-0 min-w-4 px-ui-35 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums">{counts.total}</span>
+                  <span class="count-pill shrink-0 min-w-4 px-ui-35 rounded-full bg-muted text-muted-foreground text-ui-micro font-semibold text-center tabular-nums">{counts.total}</span>
                 {/if}
               </button>
               <div class="header-actions flex items-center gap-ui-1 shrink-0 opacity-0 transition-opacity group-hover/acc:opacity-100 group-focus-within/acc:opacity-100">
@@ -2723,17 +2784,6 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   {/snippet}
                 </Hint>
               {:else if sub?.status}
-                <div class="embedded-commit-bar pt-ui-3 pb-ui-4 bg-background border-b border-border">
-                  <CommitBar
-                    repoId={sub.repoId!}
-                    status={sub.status}
-                    onCommitted={() => {
-                      void loadSubmoduleStatus(info.path);
-                      refreshAll();
-                    }}
-                  />
-                </div>
-
                 {@const subFilteredSections = sub.index ? filterSections(sub.index, filterText) : []}
                 {#if counts.total === 0}
                   <div class="sub-clean-hint px-3 py-2 text-ui-meta text-muted-foreground italic">No changes in submodule</div>
@@ -2752,7 +2802,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                     >
                       <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={subSectionIndex > 0} style:background-color={dropSectionKey === `sub:${info.path}:${subSection.id}` ? "var(--app-hover)" : null}>
                         <button
-                          class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                          class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-meta font-semibold px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                           type="button"
                           id={`sub-${info.path}-${subSection.id}`}
                           aria-expanded={!subSecCollapsed}
@@ -2767,7 +2817,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                             <Icon icon={iconChevron} size={14} />
                           </span>
                           <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{subSection.label}</span>
-                          <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{subSection.rows.length}</span>
+                          <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-micro font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{subSection.rows.length}</span>
                         </button>
                         {#if sub.repoId && (subSection.id === "staged" || subSection.rows.some((row) => row.kind !== "conflicted"))}
                           <span class="section-action absolute right-[0.3rem] top-1/2 -translate-y-1/2 inline-flex opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100 pointer-coarse:static pointer-coarse:transform-none pointer-coarse:opacity-100 pointer-coarse:pr-1">
@@ -2838,7 +2888,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           >
             <div class="section-header group/header sticky top-0 z-2 flex items-center w-full h-6 box-border bg-card border-b border-border select-none" class:border-t={windowIndex > 0} style:background-color={dropSectionKey === section.id ? "var(--app-hover)" : null}>
               <button
-                class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-micro font-bold tracking-[0.045em] uppercase px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                class="section-toggle flex-1 min-w-0 flex items-center gap-ui-3 h-6 bg-transparent border-0 text-muted-foreground text-ui-meta font-semibold px-2 cursor-pointer text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 id={`section-${section.id}`}
                 aria-expanded={!collapsed[section.id]}
@@ -2854,7 +2904,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   <Icon icon={iconChevron} size={14} />
                 </span>
                 <span class="section-name min-w-0 overflow-hidden text-ellipsis whitespace-nowrap leading-[1.2]">{section.label}</span>
-                <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-tiny font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length + section.modules.length}</span>
+                <span class="count shrink-0 min-w-5 ml-auto px-1.5 rounded-full bg-muted text-muted-foreground text-ui-micro font-semibold text-center tabular-nums transition-opacity group-hover/header:opacity-0 group-focus-within/header:opacity-0 pointer-coarse:hidden">{section.rows.length + section.modules.length}</span>
               </button>
               {#if canMutate &&
                 (section.id === "staged" || section.rows.some((row) => row.kind !== "conflicted"))}
@@ -2957,7 +3007,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                                 {#snippet child({ props })}
                                   <span
                                     {...props}
-                                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-tiny leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
+                                    class={`module-tag shrink-0 max-w-[6.5rem] overflow-hidden text-ellipsis whitespace-nowrap text-ui-micro leading-[1.35] text-muted-foreground ${toneColorClass(display.tone)}`}
                                   >
                                     {display.tag}
                                   </span>
@@ -3057,6 +3107,15 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
       <Spinner class="size-4" role="presentation" aria-hidden="true" />
       <p class="empty-title m-0 text-ui-base font-medium text-foreground">Loading changes…</p>
     </div>
+  {/if}
+
+  {#if repoId}
+    <!-- The ONE sticky composer (plan §6.1): docked to the panel's bottom
+         edge while the changes list scrolls above; its scope chips
+         (owning repo + every dirty submodule) retarget the message draft,
+         staging context and commit action in place. Replaces the embedded
+         per-accordion composers. -->
+    <CommitBar {repoId} scopes={commitScopes} onCommitted={refreshAll} />
   {/if}
 </aside>
 

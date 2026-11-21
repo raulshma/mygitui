@@ -76,7 +76,7 @@
   {#if banner.kind === "missing"}
     <EmptyState title="GitHub CLI (gh) not found." hint={banner.text}>
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         variant="secondary"
         type="button"
         onclick={() => void openUrl(GH_INSTALL_DOCS_URL)}
@@ -89,7 +89,7 @@
       <div class="flex items-center gap-2">
         <code class="rounded-sm bg-muted px-2 py-px font-mono text-xs text-foreground">{GH_AUTH_COMMAND}</code>
         <Button
-          class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+          class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
           variant="secondary"
           type="button"
           onclick={() => void copyAuthCommand()}
@@ -112,7 +112,7 @@
         <div class="mb-2 flex items-center gap-2">
           <p class="m-0 min-w-0 flex-1 text-destructive [overflow-wrap:anywhere]" role="alert">{prsError}</p>
           <Button
-            class="h-auto flex-none whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            class="h-auto flex-none whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             variant="outline"
             type="button"
             onclick={refresh}

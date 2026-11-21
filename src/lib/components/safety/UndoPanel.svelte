@@ -269,11 +269,11 @@
                 {/snippet}
               </Hint>
               <span class="chips flex flex-wrap gap-1">
-                {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
+                {#if cp.branch}<Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-micro text-muted-foreground text-ellipsis whitespace-nowrap">{cp.branch}</Badge>{/if}
                 {#if cp.has_worktree_state}
                   <Hint label="Snapshot includes working-copy + index state">
                     {#snippet child({ props })}
-                      <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-tiny text-primary text-ellipsis whitespace-nowrap" {...props}>worktree</Badge>
+                      <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-micro text-primary text-ellipsis whitespace-nowrap" {...props}>worktree</Badge>
                     {/snippet}
                   </Hint>
                 {/if}
@@ -338,12 +338,12 @@
               <span class="chips flex flex-wrap gap-1">
                 <Hint label={entry.sha}>
                   {#snippet child({ props })}
-                    <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 font-mono text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>{entry.sha.slice(0, 7)}</Badge>
+                    <Badge variant="outline" class="chip sha-chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 font-mono text-ui-micro text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>{entry.sha.slice(0, 7)}</Badge>
                   {/snippet}
                 </Hint>
                 <Hint label="Deleted {formatDateTime(entry.deleted_at)}">
                   {#snippet child({ props })}
-                    <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-tiny text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>
+                    <Badge variant="outline" class="chip h-auto max-w-40 overflow-hidden rounded-full px-2 py-0 text-ui-micro text-muted-foreground text-ellipsis whitespace-nowrap" {...props}>
                       deleted {formatDateTime(entry.deleted_at)}
                     </Badge>
                   {/snippet}

@@ -135,6 +135,13 @@ export type { WorkflowJob } from "./gen/WorkflowJob";
 export type { WorkflowRunDetail } from "./gen/WorkflowRunDetail";
 export type { WorkflowInfo } from "./gen/WorkflowInfo";
 export type { WorkflowInput } from "./gen/WorkflowInput";
+/** E1: batched branch/PR/checks/run snapshot (footer chips). */
+export type { ForgeSnapshot } from "./gen/ForgeSnapshot";
+export type { ForgeSnapshotHashes } from "./gen/ForgeSnapshotHashes";
+/** E2 inputs (defined + implemented with the snapshot; consumed in E2). */
+export type { ForgePrFile } from "./gen/ForgePrFile";
+export type { ForgeReviewThread } from "./gen/ForgeReviewThread";
+export type { ForgeReviewComment } from "./gen/ForgeReviewComment";
 
 // FE-only: alias of the generated `CheckInfo["state"]` string-literal union
 // (the canonical check states; see docs/contracts.md M6).

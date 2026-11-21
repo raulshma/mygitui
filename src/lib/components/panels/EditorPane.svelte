@@ -32,7 +32,10 @@
   import { createImageLoader } from "$lib/components/diff/imageLoad";
   import Icon from "$lib/components/icons/Icon.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
+  import UnifiedTabStrip from "$lib/components/layout/UnifiedTabStrip.svelte";
+  import OverflowMenu from "$lib/components/layout/OverflowMenu.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Kbd } from "$lib/components/ui/kbd/index.js";
@@ -300,6 +303,15 @@
     const idx = path.lastIndexOf("/");
     return idx === -1 ? path : path.slice(idx + 1);
   }
+
+  /** Strip items for the multi-diff tab strip (UnifiedTabStrip, §5.7). */
+  const diffStripTabs = $derived(
+    diffTabs.map((tab) => ({
+      id: tab.entry.path,
+      label: basename(tab.entry.path),
+      scope: tab.scope,
+    })),
+  );
 </script>
 
 <div
@@ -401,41 +413,44 @@
   {:else if entry}
     <div class="file-editor flex min-h-0 min-w-0 flex-col">
       {#if diffTabs.length > 1}
-        <!-- Multi-diff tab strip (modeled on the file workspace's): the
-             close-all action lives OUTSIDE the scroll container so it
-             stays reachable no matter how many tabs are open. -->
+        <!-- Multi-diff tab strip: UnifiedTabStrip (§5.7 — one strip engine
+             everywhere). Cell markup keeps the dtab/tname/dscope/tclose
+             classes; the strip adds roving-tabindex keyboard nav, scroll
+             chrome and the hidden-tab "⋯". The row's trailing actions live
+             in the overflow menu. -->
         <div class="dtabs-row flex flex-none items-stretch border-b border-border bg-card">
-          <div
-            class="dtabs flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:thin]"
-            role="tablist"
-            aria-label="Open diffs"
+          <UnifiedTabStrip
+            tabs={diffStripTabs}
+            activeId={entry.path}
+            label="Open diffs"
+            class="flex-1"
+            stripClass="[scrollbar-width:thin]"
+            onActivate={(item) => onActivateDiffTab?.(item.id)}
+            overflowLabel="More open diffs"
           >
-            {#each diffTabs as tab (tab.entry.path)}
-              {@const isActive = tab.entry.path === entry.path}
-              <Hint label={tab.entry.path}>
+            {#snippet tab(item, cell)}
+              <Hint label={item.id}>
                 {#snippet child({ props })}
                   <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
                        handling lives on the diff header's buttons + prev/next -->
                   <div
                     {...props}
-                    class="dtab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {isActive
+                    {...cell.triggerProps}
+                    class="dtab flex h-8 max-w-56 cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {cell.active
                       ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
                       : 'text-muted-foreground hover:bg-accent'}"
-                    role="tab"
-                    aria-selected={isActive}
-                    tabindex="-1"
-                    onclick={() => onActivateDiffTab?.(tab.entry.path)}
+                    onclick={() => onActivateDiffTab?.(item.id)}
                     onauxclick={(event) => {
-                      if (event.button === 1) onCloseDiffTab?.(tab.entry.path);
+                      if (event.button === 1) onCloseDiffTab?.(item.id);
                     }}
                     onmousedown={(event) => {
                       // Middle only: suppress the browser's autoscroll.
                       if (event.button === 1) event.preventDefault();
                     }}
                   >
-                    <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(tab.entry.path)}</span>
+                    <span class="tname min-w-0 overflow-hidden text-ellipsis">{item.label}</span>
                     <Hint
-                      label={tab.scope === "staged"
+                      label={item.scope === "staged"
                         ? "Staged changes"
                         : "Unstaged changes"}
                     >
@@ -443,7 +458,7 @@
                         <span
                           {...dotProps}
                           tabindex="-1"
-                          class="dscope size-[7px] flex-none rounded-full {tab.scope === "staged"
+                          class="dscope size-[7px] flex-none rounded-full {item.scope === "staged"
                             ? "bg-primary"
                             : "bg-muted-foreground/60"}"
                         ></span>
@@ -457,11 +472,11 @@
                           variant="ghost"
                           size="icon-sm"
                           type="button"
-                          aria-label={`Close ${basename(tab.entry.path)}`}
+                          aria-label={`Close ${item.label}`}
                           tabindex={-1}
                           onclick={(event) => {
                             event.stopPropagation();
-                            onCloseDiffTab?.(tab.entry.path);
+                            onCloseDiffTab?.(item.id);
                           }}
                         >
                           <Icon icon={iconClose} size={12} />
@@ -471,25 +486,23 @@
                   </div>
                 {/snippet}
               </Hint>
-            {/each}
-          </div>
+            {/snippet}
+          </UnifiedTabStrip>
           <div class="dtactions flex flex-none items-center gap-0.5 border-l border-border bg-card px-1">
             {#if onClose}
-              <Hint label="Close all diffs">
-                {#snippet child({ props })}
-                  <Button
-                    {...props}
-                    class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-                    variant="ghost"
-                    size="icon-xs"
-                    type="button"
-                    aria-label="Close all diffs"
+              <OverflowMenu label="More diff actions">
+                {#snippet content()}
+                  <DropdownMenu.Item
+                    class="cursor-pointer gap-ui-3"
                     onclick={onClose}
                   >
-                    <Icon icon={iconClose} size={14} />
-                  </Button>
+                    <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+                      <Icon icon={iconClose} size={16} />
+                    </span>
+                    Close all diffs
+                  </DropdownMenu.Item>
                 {/snippet}
-              </Hint>
+              </OverflowMenu>
             {/if}
           </div>
         </div>
@@ -527,7 +540,7 @@
           <Hint label={`Repository / Submodule: ${repoName}`}>
             {#snippet child({ props })}
               <span
-                class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] text-muted-foreground"
+                class="echip chip-repo flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-micro leading-[1.5] text-muted-foreground"
                 {...props}
               >{repoName}</span>
             {/snippet}
@@ -540,7 +553,7 @@
         >
           {#snippet child({ props })}
             <span
-              class="echip flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-tiny leading-[1.5] {entry.index !==
+              class="echip flex-none whitespace-nowrap rounded-full bg-accent px-2 text-ui-micro leading-[1.5] {entry.index !==
               "unmodified"
                 ? "text-accent-foreground"
                 : "text-muted-foreground"}"
@@ -565,7 +578,7 @@
               <Icon icon={iconPrev} size={14} />
             </Button>
             <span
-              class="epos min-w-[3.2rem] whitespace-nowrap text-center text-ui-tiny tabular-nums text-muted-foreground"
+              class="epos min-w-[3.2rem] whitespace-nowrap text-center text-ui-micro tabular-nums text-muted-foreground"
               aria-label={`File ${entryIndex === null ? "?" : entryIndex + 1} of ${entryCount}`}
             >
               {(entryIndex ?? 0) + 1} / {entryCount}
@@ -617,21 +630,6 @@
             </Hint>
           {/if}
         {/if}
-        {#if onDiscardEntry && entry.worktree !== "unmodified"}
-          <Hint label="Discard this file's changes (a safety checkpoint is created first)">
-            {#snippet child({ props })}
-              <Button
-                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-                variant="destructive"
-                type="button"
-                {...props}
-                onclick={onDiscardEntry}
-              >
-                Discard
-              </Button>
-            {/snippet}
-          </Hint>
-        {/if}
         {#if onEditEntry}
           <Hint label="Edit this file in the file workspace">
             {#snippet child({ props })}
@@ -647,20 +645,31 @@
             {/snippet}
           </Hint>
         {/if}
-        {#if onPopoutDiff}
-          <Hint label="Open the diff panel in its own window">
-            {#snippet child({ props })}
-              <Button
-                class="h-5 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
-                variant="outline"
-                type="button"
-                {...props}
-                onclick={onPopoutDiff}
-              >
-                Pop out
-              </Button>
+        {#if (onDiscardEntry && entry.worktree !== "unmodified") || onPopoutDiff}
+          <!-- Workstream A §5.7: the secondary file actions (discard —
+               destructive and rare, pop out) live in the overflow; Stage/
+               Unstage, Edit and Close stay one-click. -->
+          <OverflowMenu label="More file actions">
+            {#snippet content()}
+              {#if onDiscardEntry && entry.worktree !== "unmodified"}
+                <DropdownMenu.Item
+                  class="cursor-pointer"
+                  variant="destructive"
+                  onclick={onDiscardEntry}
+                >
+                  Discard this file's changes…
+                </DropdownMenu.Item>
+              {/if}
+              {#if onPopoutDiff}
+                <DropdownMenu.Item
+                  class="cursor-pointer"
+                  onclick={onPopoutDiff}
+                >
+                  Pop out diff
+                </DropdownMenu.Item>
+              {/if}
             {/snippet}
-          </Hint>
+          </OverflowMenu>
         {/if}
         {#if onClose}
           <Hint label="Close diff">
@@ -753,6 +762,7 @@
               initialScrollTop={diffInitialScroll ?? undefined}
               initialRow={diffInitialRow ?? undefined}
               onScrollChange={onDiffScroll}
+              onOpenInEditor={onEditEntry ?? undefined}
             />
           {/key}
         {/if}

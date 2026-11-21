@@ -22,16 +22,31 @@
   import type { CommitSignature } from "$lib/ipc/types";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
+  import { appIcon } from "$lib/components/icons/library.svelte";
+
+  const iconVerified = $derived(appIcon("verified")!);
+  const iconBad = $derived(appIcon("octagon-x")!);
+  const iconUnverifiable = $derived(appIcon("triangle-alert")!);
+  const iconUnsigned = $derived(appIcon("lock-open")!);
 
   let {
     repoId,
     sha,
     hideUnsigned = true,
+    variant = "badge",
   }: {
     repoId: string;
     sha: string;
     /** Render nothing for unsigned commits (default: hide). */
     hideUnsigned?: boolean;
+    /**
+     * `"badge"` (default) renders the labeled chip; `"icon"` renders a bare
+     * status glyph (plan §7.1's one-row meta summary keeps the signature
+     * reachable without spending a chip of width). Same null-when-hidden
+     * contract: unsigned+hide, loading and IPC failure render nothing.
+     */
+    variant?: "badge" | "icon";
   } = $props();
 
   let sig = $state<CommitSignature | null>(null);
@@ -113,14 +128,41 @@
 {#if view}
   <Hint label={view.title}>
     {#snippet child({ props })}
-      <Badge
-        {...props}
-        aria-label={view.title}
-        variant="outline"
-        class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
-          " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-tiny leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
-        data-sha={sha}
-      >{view.label}</Badge>
+      {#if variant === "icon"}
+        <span
+          {...props}
+          class={"sig-badge sig-icon inline-flex flex-none cursor-help items-center " +
+            (view.tone === "verified"
+              ? "text-[var(--app-added)]"
+              : view.tone === "bad"
+                ? "text-destructive"
+                : view.tone === "unverifiable"
+                  ? "text-[var(--app-modified)]"
+                  : "text-muted-foreground")}
+          aria-label={view.title}
+          data-sha={sha}
+        >
+          <Icon
+            icon={view.tone === "verified"
+              ? iconVerified
+              : view.tone === "bad"
+                ? iconBad
+                : view.tone === "unverifiable"
+                  ? iconUnverifiable
+                  : iconUnsigned}
+            size={14}
+          />
+        </span>
+      {:else}
+        <Badge
+          {...props}
+          aria-label={view.title}
+          variant="outline"
+          class={"sig-badge " + view.tone + " " + TONE_CLASS[view.tone] +
+            " h-auto flex-none items-center gap-1 rounded-full px-2 text-ui-micro leading-[1.5] tracking-[0.02em] whitespace-nowrap select-none"}
+          data-sha={sha}
+        >{view.label}</Badge>
+      {/if}
     {/snippet}
   </Hint>
 {/if}

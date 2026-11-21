@@ -105,24 +105,28 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import BisectBanner from "$lib/components/bisect/BisectBanner.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
+  import DialogShell from "$lib/components/safety/DialogShell.svelte";
   import { trapTab } from "$lib/components/safety/trapTab";
+  import { forgeStore } from "$lib/stores/forge.svelte";
+  import { forgeChips } from "$lib/forge/chips.svelte";
+  import {
+    hostOfRemoteUrl,
+    loadForgeRemote,
+    saveForgeRemote,
+  } from "$lib/forge/remotePrefs";
+  import { remotes as listRemotes } from "$lib/ipc/client";
+  import type { RemoteInfo } from "$lib/ipc/types";
   import { rebaseMonitor } from "$lib/components/rebase/rebaseStore.svelte";
-  import CommitBar from "$lib/components/panels/CommitBar.svelte";
   import EditorPane from "$lib/components/panels/EditorPane.svelte";
-  import Icon from "$lib/components/icons/Icon.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { Badge } from "$lib/components/ui/badge/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
-  import * as Select from "$lib/components/ui/select/index.js";
   import type { CompareResult } from "$lib/components/panels/compare";
   import type { HistoryCommitActions } from "$lib/components/panels/historySidebar";
   import AuthDialog from "$lib/components/AuthDialog.svelte";
   import CleanDialog from "$lib/components/actions/CleanDialog.svelte";
-  import OpenWithButton from "$lib/components/header/OpenWithButton.svelte";
-  import RepoQuickActions from "$lib/components/header/RepoQuickActions.svelte";
-  import BranchSwitcher from "$lib/components/header/BranchSwitcher.svelte";
+  import RepoHeader from "$lib/components/header/RepoHeader.svelte";
   // Startup: every panel that is not part of the first paint (status is the
-  // default tab; diff and CommitBar are always visible) is dynamically
+  // default tab; diff is always visible) is dynamically
   // imported inside its snippet below — hidden panels (terminal/xterm,
   // forge, stats, history's graph, …) and their dependency trees only load
   // when first activated, which keeps the launch-critical module graph
@@ -144,14 +148,40 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     leftSiblingOf,
     moveToLeftGroup,
     moveToRightGroup,
+    nodeById,
+    nodeIds,
     PANEL_META,
     rightSiblingOf,
+    setRatio,
     TREE_PANELS,
     visiblePanels,
+    type LayoutNode,
     type PanelGroupAction,
     type PanelId,
   } from "$lib/layout/layoutModel";
   import { layouts } from "$lib/layout/layout.svelte";
+  // §10 responsive matrix: per-mode overlay drawers + the reactive mode.
+  import { widthMode } from "$lib/layout/widthMode.svelte";
+  import {
+    drawerPanelLabel,
+    isDrawerPanel,
+    planDrawerPanels,
+    type DrawerBinding,
+    type DrawerPanel,
+    type DrawerSide,
+  } from "$lib/layout/drawerPlan";
+  import { workspaceDrawers } from "$lib/layout/workspaceDrawers.svelte";
+  // §10 Stacked (<800): the full-screen-route fallback plan + its store.
+  import {
+    STACKED_DEFAULT_VIEW,
+    STACKED_PRIMARY_VIEWS,
+    stackedMorePanels,
+    stackedViewLabel,
+  } from "$lib/layout/stackedPlan";
+  import { workspaceStacked } from "$lib/layout/workspaceStacked.svelte";
+  import StackedTabBar from "$lib/components/layout/StackedTabBar.svelte";
+  import { createWidthTracker } from "$lib/layout/containerWidth.svelte";
+  import { tick } from "svelte";
   import { actionsStore } from "$lib/stores/actions.svelte";
   import { stashActionRun } from "$lib/components/actions/runPopout";
   import { terminals } from "$lib/terminal/terminalStore.svelte";
@@ -179,10 +209,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import { railPins } from "$lib/stores/railPins.svelte";
   import { startAuthEvents, startOpsEvents } from "$lib/stores/ops.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
-  import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
-  import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+  import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
   let {
@@ -200,14 +230,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     deviceId?: string | null;
   } = $props();
 
-  const iconHistory = $derived(appIcon("history")!);
-  const iconCloud = $derived(appIcon("cloud")!);
+  // Icons for the header overflow menu; the header row's own glyphs live in
+  // `header/RepoHeader.svelte`.
   const iconBisect = $derived(appIcon("alt-route")!);
+  const iconForgeRemote = $derived(
+    appIcon("pull-request") ?? appIcon("merge-type")!,
+  );
   const iconSaveLayout = $derived(appIcon("save")!);
-  const iconTerminal = $derived(appIcon("terminal")!);
   const iconClean = $derived(appIcon("cleaning-services")!);
   const iconResetLayout = $derived(appIcon("restart-alt")!);
-  const iconMore = $derived(appIcon("more-horiz")!);
   const iconHome = $derived(appIcon("home-rounded")!);
 
   let selected: string[] = $state([]);
@@ -417,6 +448,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** Open (or focus) a workdir file in the center workspace. */
   async function openWorkdirFile(path: string): Promise<void> {
+    // The editor surfaces through the drawers' edges — yield both edge
+    // overlays so the opened file is unobstructed (§10 Medium/Narrow).
+    if (drawerPanelIds.has("files")) closeDrawer("files");
+    if (drawerPanelIds.has("history")) closeDrawer("history");
     const existing = openFiles.find((f) => f.path === path);
     if (existing) {
       activeFile = path;
@@ -461,6 +496,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   }
 
   function workdirDiffFor(path: string): void {
+    // Surfacing the editor yields the edge drawer overlays (§10).
+    if (drawerPanelIds.has("files")) closeDrawer("files");
+    if (drawerPanelIds.has("history")) closeDrawer("history");
     const entry =
       status?.entries.find((e) => e.path === path || e.old_path === path) ??
       null;
@@ -488,8 +526,6 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** The active layout for this repo (overlay > preset > default). */
   const resolved = $derived(layouts.active(root));
-  /** The preset's display name for the header select (`Select.Value`). */
-  const presetName = $derived(layouts.presetById(resolved.presetId)?.name ?? "Default");
   /** Resolved once per rule change, not once per painted graph row. */
   const branchRules = $derived(branchColorStore.rules(root));
   /** Panels not currently placed (candidates for "Add panel" menus). */
@@ -553,6 +589,160 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   );
   const historyPanels = $derived(historyNode ? visiblePanels(historyNode) : []);
 
+  // --- §10 responsive drawers (Medium/Narrow overlay conversion) ------------
+  //
+  // The matrix drawerizes FILES (Medium+Narrow, left), STATUS (Narrow,
+  // right) and HISTORY (Medium+Narrow, right). A drawer is the SAME
+  // keep-alive host element the docked pane renders, repositioned with
+  // `position: absolute` (see drawerPlan.drawerPaneClass) — docking and
+  // drawerizing only ever swap classes, never remount a panel, so mode
+  // flips preserve editor/scroll/keep-alive state (§10 mechanics).
+  //
+  // Stacked (<800) rides the same host machinery (see the stacked section
+  // below): the workspace shows ONE full-screen region at a time, selected
+  // through the bottom tab bar.
+
+  /** The reactive width mode (mirrors `<html data-width-mode>`). */
+  const currentWidthMode = $derived(widthMode.current);
+
+  // --- §10 Stacked (<800): full-screen routes over the same hosts ----------
+  //
+  // Below the floor the workspace stops splitting: ONE region is visible,
+  // chosen by the bottom tab bar (the ActivityBar's stacked replacement).
+  // Every visible panel is "stacked-bound" — its keep-alive host presents
+  // as a full-screen route (`stacked: true` bindings riding the SAME
+  // drawerPanes/drawerPanels channels as the Medium/Narrow drawers), so a
+  // mode flip swaps classes only and panels never remount. Views behind
+  // "More" are placed into the tree on selection, exactly like the rail
+  // does in the wider modes.
+
+  /**
+   * The active stacked view while the mode is Stacked (`null` otherwise —
+   * every stacked derivation keys off this one read of the store).
+   */
+  const stackedView = $derived(
+    currentWidthMode === "stacked" ? workspaceStacked.active : null,
+  );
+
+  /** One full-screen binding for a stacked view's host. */
+  function makeStackedBinding(panel: PanelId, key: string): DrawerBinding {
+    return {
+      key,
+      open: workspaceStacked.active === panel,
+      label: `${stackedViewLabel(panel)} view`,
+      // Stacked hosts have no Esc/edge semantics — the no-op handlers
+      // keep DrawerBinding's required shape without drawer behavior.
+      onKeydown: () => {},
+      onPointerdown: () => {},
+      stacked: true,
+    };
+  }
+
+  /** Pane bindings (leaf holders — the editor/history columns). */
+  const stackedPaneBindings = $derived.by(() => {
+    const out: DrawerBinding[] = [];
+    if (stackedView === null) return out;
+    for (const panel of visiblePanels(resolved.layout.main)) {
+      const holder = findPanelNode(resolved.layout.main, panel);
+      if (holder?.kind === "leaf") {
+        out.push(makeStackedBinding(panel, holder.id));
+      }
+    }
+    return out;
+  });
+
+  /** Panel bindings (tab-group members — the primary sidebar's group). */
+  const stackedTabBindings = $derived.by(() => {
+    const out: DrawerBinding[] = [];
+    if (stackedView === null) return out;
+    for (const panel of visiblePanels(resolved.layout.main)) {
+      const holder = findPanelNode(resolved.layout.main, panel);
+      if (holder?.kind === "tabs") {
+        out.push(makeStackedBinding(panel, panel));
+      }
+    }
+    return out;
+  });
+
+  /**
+   * Stacked selection (bottom tab bar / More menu / focus events): places
+   * the panel in the tree when the layout lacks it, keeps the underlying
+   * group's active tab in step (widening later shows the same panel), and
+   * switches the full-screen view.
+   */
+  function selectStackedView(panel: PanelId): void {
+    const holder = findPanelNode(resolved.layout.main, panel);
+    if (!holder) {
+      layouts.addPanel(
+        root,
+        panel,
+        activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined,
+      );
+    } else if (holder.kind === "tabs") {
+      layouts.setActiveTab(root, holder.id, holder.tabs.indexOf(panel));
+    }
+    workspaceStacked.setActive(panel);
+  }
+
+  /**
+   * The §10 matrix's bar inventory: the five primary views (fixed) plus
+   * every other activity-bar panel behind "More" — the rail's whole
+   * destination list stays reachable below the floor.
+   */
+  const stackedMorePanelsList = $derived.by(() =>
+    stackedMorePanels(activityPanels),
+  );
+
+  /**
+   * The mode's drawerized panels for the ACTIVE layout — the §10 plan
+   * guarded so the workspace always keeps docked content (empty in Wide
+   * and Stacked — Stacked drawerizes nothing, it stacks everything).
+   */
+  const drawerPanels = $derived(
+    planDrawerPanels(currentWidthMode, visiblePanels(resolved.layout.main)),
+  );
+
+  /**
+   * Overlay panel ids for membership checks (PanelId-keyed): the mode's
+   * drawerized panels, plus — in Stacked — every visible panel (each one
+   * presents as a full-screen route there).
+   */
+  const drawerPanelIds = $derived.by(() => {
+    const ids = new Set<PanelId>(drawerPanels.map(({ panel }) => panel));
+    if (stackedView !== null) {
+      for (const panel of visiblePanels(resolved.layout.main)) ids.add(panel);
+    }
+    return ids;
+  });
+
+  /** Per-panel drawer open state (persisted per mode; see workspaceDrawers). */
+  const drawerOpen = $derived.by(() => ({
+    files: workspaceDrawers.isOpen("files"),
+    status: workspaceDrawers.isOpen("status"),
+    history: workspaceDrawers.isOpen("history"),
+  }));
+
+  /**
+   * Holders of overlay-hosted panels. A collapsed pane hosting a drawer
+   * must DRAIN (zero flex basis, still mounted) instead of `display: none`,
+   * which would kill the absolutely-positioned drawer hosts inside. In
+   * Stacked every panel's holder hosts a full-screen route — same rule.
+   */
+  const drawerHolderIds = $derived.by(() => {
+    const ids = new Set<string>();
+    for (const { panel } of drawerPanels) {
+      const holder = findPanelNode(resolved.layout.main, panel);
+      if (holder) ids.add(holder.id);
+    }
+    if (stackedView !== null) {
+      for (const panel of visiblePanels(resolved.layout.main)) {
+        const holder = findPanelNode(resolved.layout.main, panel);
+        if (holder) ids.add(holder.id);
+      }
+    }
+    return ids;
+  });
+
   /**
    * Effective sidebar collapse state. The persisted flags express intent, but
    * a layout must never hide every pane: if both sidebars ask to collapse and
@@ -587,8 +777,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     return { left, right };
   });
 
-  /** Whether the history panel is actually on screen (not behind a rail/tab). */
+  /** Whether the history panel is actually on screen (not behind a rail/tab).
+   *  Drawerized history is "on screen" while its drawer is open (§10);
+   *  in Stacked it is on screen while it is the active full-screen view. */
   const historyVisible = $derived.by(() => {
+    if (stackedView !== null) return stackedView === "history";
+    if (drawerPanelIds.has("history")) return drawerOpen.history;
     if (!historyNode) return false;
     if (historyInActivityGroup) {
       return !collapsed.left && activityPanel === "history";
@@ -603,10 +797,20 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
     return true;
   });
-  /** Right-edge rail shown when the right sidebar is collapsed or absent. */
-  const showHistoryRail = $derived(
-    !historyNode || (historyInRightSidebar && collapsed.right),
-  );
+  /**
+   * Right-edge rail shown when the right sidebar is collapsed or absent.
+   * With history drawerized, the rail becomes the drawer's reopen
+   * affordance while the drawer is closed; while open the drawer overlays
+   * the rail's column, so the rail hides (the ActivityBar item stays).
+   * Stacked has no rail at all — the bottom tab bar owns every toggle.
+   */
+  const showHistoryRail = $derived.by(() => {
+    if (stackedView !== null) return false;
+    if (drawerPanelIds.has("history")) {
+      return !drawerOpen.history && historyInRightSidebar;
+    }
+    return !historyNode || (historyInRightSidebar && collapsed.right);
+  });
 
   /**
    * Can a sidebar collapse without emptying the workspace? Panels already
@@ -630,16 +834,37 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     );
   });
 
-  /** Hiding history must not empty the workspace either. */
+  /** Hiding history must not empty the workspace either. Closing a drawer
+   *  never can — drawerized history always hides safely (§10). */
   const canHideHistory = $derived(
-    historyInActivityGroup ? canCollapseLeft : canCollapseRight,
+    drawerPanelIds.has("history")
+      ? true
+      : historyInActivityGroup
+        ? canCollapseLeft
+        : canCollapseRight,
   );
 
-  /** Pane ids hidden by the two sidebar rails; mounted, just out of layout. */
+  /**
+   * Pane ids hidden by the two sidebar rails; mounted, just out of layout.
+   * Holders of drawerized panels are EXCLUDED — `display: none` would kill
+   * their absolutely-positioned drawer hosts — and drain instead (see
+   * `drainedIds`).
+   */
   const collapsedIds = $derived.by(() => {
     const ids: string[] = [];
-    if (collapsed.left && activityGroup) ids.push(activityGroup.id);
-    if (collapsed.right && historyNode && !ids.includes(historyNode.id)) {
+    if (
+      collapsed.left &&
+      activityGroup &&
+      !drawerHolderIds.has(activityGroup.id)
+    ) {
+      ids.push(activityGroup.id);
+    }
+    if (
+      collapsed.right &&
+      historyNode &&
+      !ids.includes(historyNode.id) &&
+      !drawerHolderIds.has(historyNode.id)
+    ) {
       ids.push(historyNode.id);
     }
     return ids;
@@ -647,9 +872,18 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /**
    * Re-opens history (adding the panel for layouts that predate it) and
-   * brings it to the front of whichever holder it lives in.
+   * brings it to the front of whichever holder it lives in. Drawerized
+   * history simply opens its drawer; Stacked makes it the active route.
    */
   function showHistory(): void {
+    if (stackedView !== null) {
+      selectStackedView("history");
+      return;
+    }
+    if (drawerPanelIds.has("history")) {
+      openDrawer("history");
+      return;
+    }
     if (!historyNode) {
       layouts.showRightPanel(root, "history", 0.68);
       layouts.setSidebarCollapsed(root, "right", false);
@@ -670,6 +904,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   }
 
   function hideHistory(): void {
+    if (stackedView !== null) {
+      // No hidden state below the floor: "hiding" history switches to the
+      // editor (§3 principle 4 — every view stays reachable via the bar).
+      if (workspaceStacked.active === "history") selectStackedView("diff");
+      return;
+    }
+    if (drawerPanelIds.has("history")) {
+      closeDrawer("history");
+      return;
+    }
     if (!historyNode) return;
     if (historyInActivityGroup) {
       if (canCollapseLeft) layouts.setSidebarCollapsed(root, "left", true);
@@ -683,8 +927,28 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     else showHistory();
   }
 
-  /** Activity bar: activate a panel, adding it to the sidebar when hidden. */
+  /** Activity bar: toggle a drawerized panel's drawer (§10), else activate
+   *  the panel in the primary sidebar, adding it when hidden. Stacked has
+   *  no rail — the same intent selects the full-screen route. */
   function selectActivityPanel(panel: PanelId): void {
+    if (stackedView !== null) {
+      selectStackedView(panel);
+      return;
+    }
+    if (isDrawerPanel(panel) && drawerPanelIds.has(panel)) {
+      toggleDrawer(panel);
+      return;
+    }
+    // Selecting a docked panel takes over the primary sidebar; when history
+    // shares that group as a drawer, mirror the wide-mode behavior where
+    // selecting another of the group's tabs hides it.
+    if (
+      drawerPanelIds.has("history") &&
+      drawerOpen.history &&
+      historyInActivityGroup
+    ) {
+      closeDrawer("history");
+    }
     const group = activityGroup;
     if (!collapsed.left && activityPanel === panel) {
       if (canCollapseLeft) layouts.setSidebarCollapsed(root, "left", true);
@@ -701,8 +965,17 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     layouts.addPanel(root, panel, group?.id);
   }
 
-  /** History rail: toggle the right sidebar (or activate it in-pane). */
+  /** History rail: toggle the drawer (§10), the right sidebar, or activate
+   *  it in-pane. (Stacked has no rail; the guard keeps the intent honest.) */
   function selectHistoryActivity(): void {
+    if (stackedView !== null) {
+      selectStackedView("history");
+      return;
+    }
+    if (drawerPanelIds.has("history")) {
+      toggleDrawer("history");
+      return;
+    }
     if (historyInActivityGroup) {
       selectActivityPanel("history");
       return;
@@ -724,6 +997,254 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     (panel) => panel !== "diff" && panel !== "history",
   );
 
+  // --- Drawer open/close + focus contract (OverlayDrawer parity, §11) -------
+
+  /** Elements a press inside the drawer may land on without stealing focus. */
+  const DRAWER_FOCUSABLE =
+    "a[href], button:not([disabled]), textarea, input, select, iframe, [tabindex]:not([tabindex='-1'])";
+
+  /**
+   * The element focus returns to on close (the invoking toggle), captured
+   * at open time like OverlayDrawer does.
+   */
+  let drawerReturnFocus: Partial<Record<DrawerPanel, HTMLElement | null>> = {};
+
+  function openDrawer(panel: DrawerPanel): void {
+    if (drawerOpen[panel]) return;
+    // One drawer per window edge: STATUS and HISTORY both anchor right in
+    // Narrow — opening one closes the other (FILES owns the left edge
+    // alone). The closed drawer's state persists like any toggle.
+    const side = drawerPanels.find((d) => d.panel === panel)?.side;
+    if (side !== undefined) {
+      for (const { panel: other, side: otherSide } of drawerPanels) {
+        if (other !== panel && otherSide === side && drawerOpen[other]) {
+          closeDrawer(other);
+        }
+      }
+    }
+    const active = document.activeElement;
+    drawerReturnFocus[panel] =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+    workspaceDrawers.setOpen(panel, currentWidthMode, true);
+    // Focus moves into the drawer on open. On the FIRST open the host may
+    // not exist yet (the panel mounts in the same flush), so the move waits
+    // a tick and re-checks that the drawer is still open.
+    void tick().then(() => {
+      if (!workspaceDrawers.isOpen(panel)) return;
+      document
+        .querySelector<HTMLElement>(`[data-overlay-drawer="${panel}"]`)
+        ?.focus();
+    });
+  }
+
+  function closeDrawer(panel: DrawerPanel): void {
+    if (!drawerOpen[panel]) return;
+    workspaceDrawers.setOpen(panel, currentWidthMode, false);
+    const back = drawerReturnFocus[panel] ?? null;
+    drawerReturnFocus[panel] = null;
+    back?.focus();
+  }
+
+  function toggleDrawer(panel: DrawerPanel): void {
+    if (drawerOpen[panel]) closeDrawer(panel);
+    else openDrawer(panel);
+  }
+
+  /**
+   * Host keydown: Esc closes (scoped — the event only reaches the host
+   * while focus is inside it, and nested floating layers mark Esc as
+   * handled); Tab wraps within the drawer via the shared trap.
+   */
+  function drawerHostKeydown(
+    panel: DrawerPanel,
+  ): (event: KeyboardEvent) => void {
+    return (event) => {
+      if (event.key === "Escape") {
+        if (event.defaultPrevented) return;
+        event.stopPropagation();
+        closeDrawer(panel);
+      } else if (event.key === "Tab") {
+        trapTab(event.currentTarget as HTMLElement, event);
+      }
+    };
+  }
+
+  /** Presses on the drawer's non-focusable surface anchor focus to the
+   *  host, so the Esc close can never strand on `<body>` (OverlayDrawer
+   *  parity). */
+  function drawerHostPointerdown(event: PointerEvent): void {
+    const target = event.target;
+    if (target instanceof Element && target.closest(DRAWER_FOCUSABLE)) return;
+    (event.currentTarget as HTMLElement).focus();
+  }
+
+  function makeDrawerBinding(
+    panel: DrawerPanel,
+    side: DrawerSide | undefined,
+    key: string,
+  ): DrawerBinding {
+    return {
+      key,
+      side,
+      open: workspaceDrawers.isOpen(panel),
+      label: drawerPanelLabel(panel),
+      onKeydown: drawerHostKeydown(panel),
+      onPointerdown: drawerHostPointerdown,
+    };
+  }
+
+  /**
+   * Drawer host bindings. A LEAF holder drawerizes its whole pane through
+   * SplitContainer (`drawerPanes` — the default layout's history column);
+   * a tab-group member drawerizes its keep-alive host through TabGroup
+   * (`drawerPanels` — FILES/STATUS in the default layout). Stacked mode
+   * substitutes its full-screen route bindings (see the stacked section).
+   */
+  const drawerPaneBindings = $derived.by(() => {
+    if (stackedView !== null) return stackedPaneBindings;
+    const out: DrawerBinding[] = [];
+    for (const { panel, side } of drawerPanels) {
+      const holder = findPanelNode(resolved.layout.main, panel);
+      if (holder?.kind === "leaf") {
+        out.push(makeDrawerBinding(panel, side, holder.id));
+      }
+    }
+    return out;
+  });
+
+  const drawerTabBindings = $derived.by(() => {
+    if (stackedView !== null) return stackedTabBindings;
+    const out: DrawerBinding[] = [];
+    for (const { panel, side } of drawerPanels) {
+      const holder = findPanelNode(resolved.layout.main, panel);
+      if (holder?.kind === "tabs") {
+        out.push(makeDrawerBinding(panel, side, panel));
+      }
+    }
+    return out;
+  });
+
+  /**
+   * Tab groups drained to zero flex basis (still mounted): their every
+   * panel drawerized, or they are collapsed while hosting a drawer —
+   * `display: none` would kill the drawer hosts, so the pane drains and
+   * the hosts escape through `position: absolute`. Stacked drains EVERY
+   * non-root node (the split wrappers too): no docked content remains, so
+   * no empty percentage-sized column may linger under the full-screen
+   * hosts.
+   */
+  const drainedIds = $derived.by(() => {
+    const ids: string[] = [];
+    for (const id of drawerHolderIds) {
+      const holder = nodeById(resolved.layout.main, id);
+      if (holder?.kind !== "tabs") continue; // leaf holders ARE the drawer
+      const everyDrawerized =
+        holder.tabs.length > 0 &&
+        holder.tabs.every((panel) => drawerPanelIds.has(panel));
+      const collapsedHere =
+        (collapsed.left && activityGroup?.id === id) ||
+        (collapsed.right && historyInRightSidebar && historyNode?.id === id);
+      if (everyDrawerized || collapsedHere) ids.push(id);
+    }
+    if (currentWidthMode === "stacked") {
+      const rootId = resolved.layout.main.id;
+      for (const id of nodeIds(resolved.layout.main)) {
+        if (id !== rootId && !ids.includes(id)) ids.push(id);
+      }
+    }
+    return ids;
+  });
+
+  /**
+   * Re-resolves the drawer open states when the width mode flips (per-mode
+   * persistence; the first run seeds the initial mode's states). Stacked
+   * hydrates its active view once (persisted, else the panel the user was
+   * just reading in the wider mode — a still-open drawer wins over the
+   * docked active tab).
+   */
+  const stackedFallbackView = $derived.by<PanelId>(() => {
+    if (drawerOpen.files) return "files";
+    if (drawerOpen.history) return "history";
+    return activityPanel ?? STACKED_DEFAULT_VIEW;
+  });
+
+  $effect(() => {
+    workspaceDrawers.refreshMode(widthMode.current);
+    workspaceStacked.refresh(stackedFallbackView);
+  });
+
+  /**
+   * A stacked view's panel must exist in the tree: a persisted view (or a
+   * "More" pick the layout lacks) is added to the primary sidebar group,
+   * exactly like the rail/focus paths do in the wider modes.
+   */
+  $effect(() => {
+    if (currentWidthMode !== "stacked") return;
+    const view = workspaceStacked.active;
+    if (findPanelNode(resolved.layout.main, view) !== null) return;
+    layouts.addPanel(
+      root,
+      view,
+      activityGroup?.id ?? firstTabsId(resolved.layout.main) ?? undefined,
+    );
+  });
+
+  // --- Mode transitions: a drawerized panel never stays the active tab ------
+  //
+  // When a group's active panel converts to a drawer (mode flip into
+  // Medium/Narrow), the docked pane would show an empty head for a panel
+  // that now floats as an overlay. Medium switches to the nearest docked
+  // sibling (STATUS stays docked there, so the sidebar keeps content);
+  // Narrow collapses the sidebar once per entry instead — the editor
+  // reclaims the width, mirroring the history auto-collapse below (a
+  // manual re-open always wins afterwards).
+
+  let narrowLeftAutoCollapsed = $state(false);
+
+  $effect(() => {
+    const mode = currentWidthMode;
+    if (mode !== "narrow") narrowLeftAutoCollapsed = false;
+    const group = activityGroup;
+    const panel = activityPanel;
+    if (
+      !group ||
+      group.kind !== "tabs" ||
+      panel === null ||
+      !drawerPanelIds.has(panel)
+    ) {
+      return;
+    }
+    if (mode === "narrow") {
+      if (!narrowLeftAutoCollapsed) {
+        narrowLeftAutoCollapsed = true;
+        layouts.setSidebarCollapsed(root, "left", true);
+      }
+      return;
+    }
+    // Medium: nearest docked sibling in tab order (after, else before).
+    const index = group.tabs.indexOf(panel);
+    let next: PanelId | null = null;
+    for (let i = index + 1; i < group.tabs.length; i++) {
+      if (!drawerPanelIds.has(group.tabs[i]!)) {
+        next = group.tabs[i]!;
+        break;
+      }
+    }
+    if (next === null) {
+      for (let i = index - 1; i >= 0; i--) {
+        if (!drawerPanelIds.has(group.tabs[i]!)) {
+          next = group.tabs[i]!;
+          break;
+        }
+      }
+    }
+    // No docked sibling means every tab drawerized — the pane drains on
+    // its own (drainedIds); there is nothing to switch to.
+    if (next !== null) {
+      layouts.setActiveTab(root, group.id, group.tabs.indexOf(next));
+    }
+  });
+
   // --- Narrow-viewport auto-collapse (UI review P1 #5) ----------------------
   //
   // Below 1200px the history sidebar would squeeze the diff into wrapping
@@ -731,9 +1252,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   // never auto-expands and a manual reopen is respected for the rest of the
   // session (the flag only resets while the workspace is wide, so the NEXT
   // narrowing may auto-collapse again — never this one).
+  //
+  // §10: Medium/Narrow drawerize history — there is no docked right sidebar
+  // to auto-collapse there, so the one-shot only applies to the docked
+  // tiers (Wide never matches the query; Stacked keeps today's behavior).
+
   let narrowAutoCollapsed = $state(false);
 
   $effect(() => {
+    if (drawerPanelIds.has("history")) return;
     const targetRoot = root;
     const mq = window.matchMedia("(max-width: 1199px)");
     const apply = (): void => {
@@ -758,6 +1285,59 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     return () => mq.removeEventListener("change", apply);
   });
 
+  // --- Medium sidebar clamp (§10: STATUS "docked, narrower") ----------------
+
+  /**
+   * Medium caps the primary sidebar's WIDTH (the docked STATUS column stays
+   * narrow next to the editor, whatever the window width within the tier).
+   * The cap converts to a ratio against the measured split box (container
+   * tracker, §4.2 convention) and is enforced on the rendered tree AND on
+   * drag writes so the divider stops at it; Wide and Narrow keep the
+   * persisted ratio untouched.
+   */
+  const MEDIUM_SIDEBAR_MAX_PX = 280;
+
+  const layoutAreaTracker = createWidthTracker();
+
+  /** Outermost split whose left subtree holds the primary sidebar. */
+  function outermostLeftSplitId(
+    tree: LayoutNode,
+    groupId: string,
+  ): string | null {
+    if (tree.kind !== "split") return null;
+    if (nodeById(tree.a, groupId) !== null) return tree.id;
+    return (
+      outermostLeftSplitId(tree.a, groupId) ??
+      outermostLeftSplitId(tree.b, groupId)
+    );
+  }
+
+  const sidebarSplitId = $derived.by(() => {
+    const group = activityGroup;
+    return group
+      ? outermostLeftSplitId(resolved.layout.main, group.id)
+      : null;
+  });
+
+  /** The ratio cap at the measured layout width (`null` = unmeasured/off). */
+  const mediumSidebarCap = $derived.by(() => {
+    if (currentWidthMode !== "medium") return null;
+    const width = layoutAreaTracker.width;
+    return width > 0 ? MEDIUM_SIDEBAR_MAX_PX / width : null;
+  });
+
+  /** The tree as rendered: the medium clamp applied (display-only overlay). */
+  const renderTree = $derived.by(() => {
+    const splitId = sidebarSplitId;
+    const cap = mediumSidebarCap;
+    if (splitId === null || cap === null) return resolved.layout.main;
+    const split = nodeById(resolved.layout.main, splitId);
+    if (!split || split.kind !== "split" || split.ratio <= cap) {
+      return resolved.layout.main;
+    }
+    return setRatio(resolved.layout.main, splitId, cap);
+  });
+
   /** Whether the tab group at `tabsId` has a group to its left. */
   function canMoveLeftFor(tabsId: string): boolean {
     return leftSiblingOf(resolved.layout.main, tabsId) !== null;
@@ -768,7 +1348,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   }
 
   function onRatio(splitId: string, ratio: number): void {
-    layouts.setRatio(root, splitId, ratio);
+    let next = ratio;
+    const cap = mediumSidebarCap;
+    if (splitId === sidebarSplitId && cap !== null && next > cap) {
+      next = cap;
+    }
+    layouts.setRatio(root, splitId, next);
   }
 
   function onActivateTab(tabsId: string, index: number): void {
@@ -831,8 +1416,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   }
 
   /** Header "＋ Terminal" button: focuses the terminal tab when the panel is
-   *  already placed, otherwise adds it into the primary sidebar. */
+   *  already placed, otherwise adds it into the primary sidebar. Stacked
+   *  makes the terminal the active full-screen route (placing it first). */
   function onNewTerminal(): void {
+    if (stackedView !== null) {
+      selectStackedView("terminal");
+      return;
+    }
     const holder = findPanelNode(resolved.layout.main, "terminal");
     if (holder) {
       layouts.setSidebarCollapsed(root, "left", false);
@@ -915,6 +1505,52 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   let cleanOpen = $state(false);
 
+  // --- GitHub remote override dialog (E1, plan §9.1) -------------------------
+  //
+  // The GitHub flow resolves owner/repo from one remote (`origin` default).
+  // Forks and mirrors pick another remote here; the choice persists per repo
+  // root (`mygitui.forge.remote.<root>`) and applies to the footer chips'
+  // snapshot lanes + the panel context. The dialog shows each remote's host
+  // and the resolved GitHub repo (or the off-reason).
+
+  let forgeRemoteOpen = $state(false);
+  let forgeRemoteList = $state<RemoteInfo[]>([]);
+  /** The override in effect when the dialog opened (for the reset row). */
+  let forgeRemoteCurrent = $state<string | null>(null);
+
+  async function openForgeRemoteDialog(): Promise<void> {
+    forgeRemoteCurrent = loadForgeRemote(root);
+    forgeRemoteOpen = true;
+    try {
+      forgeRemoteList = await listRemotes(repoId);
+    } catch {
+      forgeRemoteList = [];
+    }
+  }
+
+  /** The repo's resolved GitHub slug / off-reason (one status line). */
+  const forgeRemoteStatus = $derived.by(() => {
+    const context = forgeStore.contextFor(repoId);
+    if (context !== null) {
+      return `Using ${context.remote_url} — resolved to ${context.owner}/${context.repo}.`;
+    }
+    const kind = forgeStore.snapshotFailureKindFor(repoId);
+    const detail =
+      forgeStore.snapshotErrorFor(repoId) ??
+      (kind !== null ? `GitHub state is off (${kind}).` : "");
+    return detail === "" ? "GitHub state has not been fetched yet." : detail;
+  });
+
+  function chooseForgeRemote(remoteName: string | null): void {
+    saveForgeRemote(root, remoteName);
+    forgeRemoteOpen = false;
+    // The new remote changes everything the flow resolves: drop the cached
+    // context + snapshot; the chips' lanes and the panel refetch on demand.
+    forgeStore.dropSnapshot(repoId);
+    void forgeStore.refreshContext(repoId);
+    void forgeChips.refresh(repoId);
+  }
+
   // The assistant panel's active tab, bound two-way into the panel snippet
   // (`ai-open-activity` flips it before focusing so the panel — whether
   // fresh-mounted or already open — lands on the Activity tab).
@@ -949,6 +1585,15 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   });
 
   // --- Conflict banner state ---------------------------------------------
+
+  /**
+   * Sub-tab a `focus-panel { panel: "forge", tab }` event asked the forge
+   * panel to open (E2 run-view breadcrumb → runs list). Carries a sequence
+   * number so repeating the same tab still re-applies; consumed by the
+   * panel through the `requestedTab` prop.
+   */
+  let forgeTabRequest = $state<{ tab: string; n: number } | null>(null);
+  let forgeTabSeq = 0;
 
   /** ConflictEditor overlay open? */
   let conflictEditorOpen = $state(false);
@@ -1046,9 +1691,22 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   /**
    * Reveals a panel in the layout: activates its tab, opens the matching
    * sidebar, or adds the panel to the primary sidebar when hidden.
+   * `tab` (optional) additionally requests a sub-tab inside the panel —
+   * only the forge panel consumes one today. Stacked reveals = make the
+   * panel the active full-screen route (placed when the layout lacks it).
    */
-  function focusPanel(targetPanel: PanelId): void {
+  function focusPanel(targetPanel: PanelId, tab?: string): void {
+    if (stackedView !== null) {
+      if (targetPanel === "forge" && tab !== undefined) {
+        forgeTabRequest = { tab, n: ++forgeTabSeq };
+      }
+      selectStackedView(targetPanel);
+      return;
+    }
     if (targetPanel === "history") showHistory();
+    if (targetPanel === "forge" && tab !== undefined) {
+      forgeTabRequest = { tab, n: ++forgeTabSeq };
+    }
     const holder = findPanelNode(resolved.layout.main, targetPanel);
     if (holder) {
       if (holder.kind === "tabs") {
@@ -1069,9 +1727,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   $effect(() => {
     const unlisteners = [
-      onUiEvent("focus-panel", ({ panel, repoId: target }) => {
+      onUiEvent("focus-panel", ({ panel, repoId: target, tab }) => {
         if (target !== null && target !== repoId) return;
-        focusPanel(panel as PanelId);
+        focusPanel(panel as PanelId, tab);
       }),
       // Status-bar AI rows: reveal the assistant panel with its Activity
       // tab (job history + usage). The panel's tab is bound state, so this
@@ -1105,54 +1763,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     status ? new Set(status.entries.map((entry) => entry.path)).size : 0,
   );
 
-  // Remote repositories (device_id set) show a connection chip fed by the
-  // remote-devices store (`device-status` events keep it live); the forge
-  // panel is unavailable there (it shells out to a local `gh`).
+  // Remote repositories (device_id set): the forge panel is unavailable
+  // (it shells out to a local `gh`) and the connection state lives in the
+  // status bar (Workstream A moved the header chip there; remote tabs carry
+  // a cloud glyph).
   const isRemote = $derived(deviceId !== null);
-  const remoteStatus = $derived(
-    deviceId !== null ? remoteDevices.statusOf(deviceId) : null,
-  );
-
-  /** Header overflow: low-frequency repository tools. */
-  function openHeaderMenu(event: MouseEvent): void {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const entries: MenuEntry[] = [
-      {
-        id: "bisect",
-        label: "Start bisect…",
-        icon: iconBisect,
-        run: () => emitUiEvent("bisect-open-start"),
-      },
-      { separator: true },
-      {
-        id: "save-layout",
-        label: "Save layout as…",
-        icon: iconSaveLayout,
-        run: onSaveLayout,
-      },
-      {
-        id: "clean",
-        label: "Clean untracked files…",
-        icon: iconClean,
-        run: () => (cleanOpen = true),
-      },
-      {
-        id: "reset-layout",
-        label: "Reset layout to preset",
-        icon: iconResetLayout,
-        disabled: !resolved.hasOverlay,
-        run: onResetLayout,
-      },
-      { separator: true },
-      {
-        id: "recent-repos",
-        label: "Recent repositories",
-        icon: iconHome,
-        run: showRecentRepos,
-      },
-    ];
-    contextMenu.show(rect.right, rect.bottom, entries);
-  }
 
   /** Any mutation refreshed its repo: pull the fresh status into the tab. */
   function refresh(): void {
@@ -1218,8 +1833,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     pendingHistorySha = null;
     conflictEditorOpen = false;
     // Status-derived flags are repo-scoped too: a stale `hasSubmodules`
-    // from repo A would suppress repo B's CommitBar until the next status
-    // snapshot landed.
+    // from repo A would render repo A's submodule accordions against repo
+    // B's state until the next status snapshot landed.
     hasSubmodules = false;
     openFiles = [];
     activeFile = null;
@@ -1979,8 +2594,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   {/await}
 {/snippet}
 {#snippet statusPanel()}
-  <!-- VSCode-style source-control column: changes scroll above the pinned
-       commit box. -->
+  <!-- VSCode-style source-control column: the changes list scrolls above
+       the panel's own pinned composer (Workstream B §6.1 — the composer
+       lives inside StatusPanel so its scope chips can reach the
+       submodules too). -->
   <div
     class="changes-panel flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
   >
@@ -1990,15 +2607,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       {repoId}
       {root}
       repoName={name}
-      onOpenDiff={(e, subRepoId, subRoot, subName, scope) =>
-        void openDiff(e, subRepoId, subRoot, subName, scope)}
+      onOpenDiff={(e, subRepoId, subRoot, subName, scope) => {
+        // Opening a diff surfaces the editor through the drawer's edge —
+        // yield the overlay (§10 Narrow).
+        if (drawerPanelIds.has("status")) closeDrawer("status");
+        void openDiff(e, subRepoId, subRoot, subName, scope);
+      }}
       onAfterMutation={refresh}
       bind:selected
       bind:hasSubmodules
     />
-    {#if !hasSubmodules}
-      <CommitBar {repoId} onCommitted={refresh} />
-    {/if}
   </div>
 {/snippet}
 {#snippet editorPanel()}
@@ -2157,7 +2775,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     </Hint>
   {:else}
     {#await forgePanelImport() then ForgePanelModule}
-      <ForgePanelModule.default {repoId} />
+      <ForgePanelModule.default {repoId} requestedTab={forgeTabRequest} />
     {/await}
   {/if}
 {/snippet}
@@ -2196,143 +2814,84 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   class="repo-workspace flex h-full w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
   bind:this={workspaceEl}
 >
-  <header
-    class="repo-header flex min-w-0 flex-none flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-popover px-2.5 py-0.5 text-ui-base"
+  <!-- Header row: breadcrumb restyle, Workstream A §5.3 (path/preset/
+       open-with demoted into the header overflow, remote chip → StatusBar). -->
+  <RepoHeader
+    {repoId}
+    {name}
+    {root}
+    {status}
+    presetId={resolved.presetId}
+    {historyVisible}
+    {canHideHistory}
+    onMutated={refresh}
+    onToggleHistory={toggleHistory}
+    onNewTerminal={onNewTerminal}
   >
-    <span class="repo-identity flex min-w-0 flex-1 items-center gap-ui-4">
-      <Hint label={name}>
-        {#snippet child({ props })}
-          <span
-            class="repo-name max-w-[15rem] min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
-            {...props}
-          >{name}</span>
-        {/snippet}
-      </Hint>
-      {#if remoteStatus}
-        <!-- Remote repository: connection chip fed by the devices store. The
-             cloud glyph marks the repo itself as remote; its tint carries
-             the live status (label spells it out). -->
-        <Hint
-          label={remoteStatus === "connected"
-            ? "Remote repository — device connected"
-            : remoteStatus === "connecting"
-              ? "Remote repository — device connecting…"
-              : "Remote repository — device offline"}
-        >
-          {#snippet child({ props })}
-            <Badge
-              variant="secondary"
-              class="remote-chip flex-none gap-ui-3 rounded-full bg-accent px-2 py-px h-auto text-ui-micro {remoteStatus === 'connected' ? 'text-foreground' : 'text-muted-foreground'}"
-              {...props}
-              data-status={remoteStatus}
-            >
-              <span
-                class="remote-icon inline-flex flex-none items-center justify-center {remoteStatus === 'connected' ? 'text-primary' : remoteStatus === 'connecting' ? 'text-muted-foreground' : 'opacity-50'}"
-                aria-hidden="true"
-              >
-                <Icon icon={iconCloud} size={12} />
-              </span>
-              <span class="remote-label">
-                {remoteStatus === "connected"
-                  ? "connected"
-                  : remoteStatus === "connecting"
-                    ? "connecting…"
-                    : "offline"}
-              </span>
-            </Badge>
-          {/snippet}
-        </Hint>
-      {/if}
-      <BranchSwitcher {repoId} {status} onMutated={refresh} />
-      <RepoQuickActions {repoId} {status} onMutated={refresh} />
-      <Hint label={root}>
-        {#snippet child({ props })}
-          <span
-            class="repo-root max-[980px]:hidden min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap font-mono text-ui-micro text-muted-foreground"
-            {...props}
-          >{root}</span>
-        {/snippet}
-      </Hint>
-    </span>
-    <span class="layout-controls ml-auto flex flex-none items-center gap-1">
-      <OpenWithButton {root} />
-      <Button
-        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        aria-label={historyVisible ? "Hide history" : "Show history"}
-        aria-pressed={historyVisible}
-        title={historyVisible
-          ? canHideHistory
-            ? "Hide the history sidebar"
-            : "Expand the primary sidebar before hiding history"
-          : "Show the history sidebar"}
-        disabled={historyVisible && !canHideHistory}
-        onclick={toggleHistory}
+    {#snippet headerOverflow()}
+      <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        onclick={() => emitUiEvent("bisect-open-start")}
       >
-        <Icon icon={iconHistory} size={16} />
-      </Button>
-      <Select.Root
-        type="single"
-        value={resolved.presetId}
-        onValueChange={(value) => layouts.applyPreset(root, value)}
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconBisect} size={16} />
+        </span>
+        Start bisect…
+      </DropdownMenu.Item>
+      <!-- E1 (§9.1): the GitHub flow's remote override — which remote the
+           owner/repo resolution (and the footer chips) use. -->
+      <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        onclick={() => void openForgeRemoteDialog()}
       >
-        <Hint label="Layout preset" eager>
-          {#snippet child({ props })}
-            <Select.Trigger
-              class="preset-select max-[760px]:hidden max-w-[8.5rem] h-5 rounded-sm border-border bg-card dark:bg-card px-1 py-0 text-ui-micro text-card-foreground gap-1"
-              aria-label="Layout preset"
-              {...props}
-            >
-              <!-- The preset's display name, rendered directly: bits-ui's
-                   `<Select.Value />` falls back to the raw value (the
-                   lowercase preset id) until the listbox has mounted once
-                   and cached the item labels — the trigger visibly flipped
-                   from "default" to "Default" on the first click. -->
-              <Select.Value>{presetName}</Select.Value>
-            </Select.Trigger>
-          {/snippet}
-        </Hint>
-        <Select.Content>
-          {#each layouts.listPresets() as preset (preset.id)}
-            <Select.Item value={preset.id} label={preset.name} class="text-ui-micro" />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-      <Hint label="Open (or focus) this repository's terminal panel">
-        {#snippet child({ props })}
-          <Button
-            class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            variant="ghost"
-            size="icon-sm"
-            type="button"
-            {...props}
-            aria-label="Terminal"
-            onclick={onNewTerminal}
-          >
-            <Icon icon={iconTerminal} size={16} />
-          </Button>
-        {/snippet}
-      </Hint>
-      <Hint label="More repository actions">
-        {#snippet child({ props })}
-          <Button
-            class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            variant="ghost"
-            size="icon-sm"
-            type="button"
-            {...props}
-            aria-label="More repository actions"
-            aria-haspopup="menu"
-            onclick={openHeaderMenu}
-          >
-            <Icon icon={iconMore} size={16} />
-          </Button>
-        {/snippet}
-      </Hint>
-    </span>
-  </header>
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconForgeRemote} size={16} />
+        </span>
+        GitHub remote…
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator />
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        onclick={onSaveLayout}
+      >
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconSaveLayout} size={16} />
+        </span>
+        Save layout as…
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        onclick={() => (cleanOpen = true)}
+      >
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconClean} size={16} />
+        </span>
+        Clean untracked files…
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        disabled={!resolved.hasOverlay}
+        onclick={onResetLayout}
+      >
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconResetLayout} size={16} />
+        </span>
+        Reset layout to preset
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator />
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        onclick={showRecentRepos}
+      >
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconHome} size={16} />
+        </span>
+        Recent repositories
+      </DropdownMenu.Item>
+    {/snippet}
+  </RepoHeader>
 
   {#if opSource && (conflictCount > 0 || (opSource === "rebase" && rebaseMonitor.paused))}
     <div
@@ -2406,14 +2965,23 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   <!-- Width of the collapsed-history rail. SplitContainer reads it to keep
        the left panes at their size while the rail is out (see its rightRail
-       doc); the rail button itself uses the same variable. -->
+       doc); the rail button itself uses the same variable. `relative` makes
+       this frame the containing block for the §10 overlay drawers: their
+       hosts stay inside the split tree (keep-alive) but position against
+       this frame, below the repo header and beside the activity rail.
+       Stacked turns the frame into a column: panes above, the bottom tab
+       bar below (the rail's below-the-floor replacement). -->
   <div
-    class="main-area flex min-h-0 min-w-0 flex-1 [--history-rail-width:1.75rem]"
+    class="main-area relative flex min-h-0 min-w-0 flex-1 [--history-rail-width:1.75rem] wm-stacked:flex-col"
   >
     <ActivityBar
       panels={activityPanels}
       pinned={railPins.pins}
       active={activityPanel}
+      drawerActive={{
+        files: drawerPanelIds.has("files") && drawerOpen.files,
+        status: drawerPanelIds.has("status") && drawerOpen.status,
+      }}
       historyActive={historyVisible}
       historyCanHide={canHideHistory}
       collapsed={collapsed.left}
@@ -2424,12 +2992,18 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       onToggleCollapse={toggleLeftSidebar}
       onTogglePin={(panel) => railPins.toggle(panel)}
     />
-    <div class="layout-area flex min-h-0 min-w-0 flex-1">
+    <!-- Stacked (`wm-stacked:relative`): the panes' containing block for
+         the full-screen hosts — `inset-0` fills this area, which sits
+         above the bottom tab bar (a sibling inside .main-area's column). -->
+    <div class="layout-area flex min-h-0 min-w-0 flex-1 wm-stacked:relative" bind:this={layoutAreaTracker.el}>
       <SplitContainer
-        node={resolved.layout.main}
+        node={renderTree}
         renderPanel={renderPanel}
         {hiddenPanels}
         {collapsedIds}
+        {drainedIds}
+        drawerPanes={drawerPaneBindings}
+        drawerPanels={drawerTabBindings}
         hideTabsFor={activityGroup?.id ?? null}
         canMoveLeftFor={canMoveLeftFor}
         canMoveRightFor={canMoveRightFor}
@@ -2441,33 +3015,52 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       />
     </div>
     {#if showHistoryRail}
-      <Hint label="Show history sidebar" side="left">
-        {#snippet child({ props })}
-          <button
-            class="history-rail flex w-[var(--history-rail-width)] flex-none cursor-pointer flex-col items-center gap-2 border-l border-border bg-popover py-2 text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
-            type="button"
-            {...props}
-            aria-label="Show history sidebar"
-            onclick={showHistory}
-          >
-            <svg
-              class="h-4 w-4 flex-none"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
+      <!-- Workstream A §5.4: a compact edge toggle button replaced the
+           rotated-text rail — same 28px column (SplitContainer reads the
+           width var), same single-click "Show history sidebar" action. -->
+      <div
+        class="history-rail flex w-[var(--history-rail-width)] flex-none flex-col items-center border-l border-border bg-popover pt-2"
+      >
+        <Hint label="Show history sidebar" side="left">
+          {#snippet child({ props })}
+            <button
+              class="history-rail-toggle inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
+              type="button"
+              {...props}
+              aria-label="Show history sidebar"
+              onclick={showHistory}
             >
-              <path d={PANEL_META.history.icon} />
-            </svg>
-            <span
-              class="history-rail-label rotate-180 text-ui-micro uppercase tracking-[0.04em] [writing-mode:vertical-rl]"
-            >History</span>
-          </button>
-        {/snippet}
-      </Hint>
+              <svg
+                class="h-4 w-4 flex-none"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d={PANEL_META.history.icon} />
+              </svg>
+            </button>
+          {/snippet}
+        </Hint>
+      </div>
+    {/if}
+    {#if currentWidthMode === "stacked"}
+      <!-- §10 Stacked (<800): the bottom tab bar replaces the vertical
+           activity rail — 5 primary views + "More" overflow. Selecting a
+           view makes its keep-alive host the one visible full-screen
+           route (stackedPaneClass) — no remounts, mode flips swap classes
+           only. Chrome-only conditional mount: the hosts themselves stay
+           untouched by this if. -->
+      <StackedTabBar
+        views={[...STACKED_PRIMARY_VIEWS]}
+        morePanels={stackedMorePanelsList}
+        active={stackedView}
+        badges={{ status: changeCount }}
+        onSelect={selectStackedView}
+      />
     {/if}
   </div>
 
@@ -2555,3 +3148,75 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   danger
   onConfirm={() => void discardOpenEntry()}
 />
+
+<!-- GitHub remote override (E1 §9.1): pick the remote the GitHub flow
+     resolves owner/repo from (default origin). The host of each remote and
+     the resolved state are disclosed; the choice persists per repo root. -->
+<DialogShell
+  bind:open={forgeRemoteOpen}
+  labelledBy="forge-remote-title"
+  width="24rem"
+>
+  {#snippet children()}
+    <div class="flex min-w-0 flex-col gap-2">
+      <p id="forge-remote-title" class="text-ui-base font-semibold">
+        GitHub remote
+      </p>
+      <p
+        id="forge-remote-status"
+        class="text-ui-meta leading-[1.45] break-words text-muted-foreground"
+      >
+        {forgeRemoteStatus}
+      </p>
+      <div class="flex flex-col gap-0.5" role="listbox" aria-label="Remotes">
+        {#if forgeRemoteList.length === 0}
+          <p class="text-ui-meta text-muted-foreground">No remotes configured.</p>
+        {/if}
+        {#each forgeRemoteList as remote (remote.name)}
+          {@const effective = forgeRemoteCurrent ?? "origin"}
+          <button
+            class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1.5 text-left text-ui-meta hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            role="option"
+            aria-selected={effective === remote.name}
+            onclick={() => chooseForgeRemote(remote.name)}
+          >
+            <span
+              class="inline-flex size-3 flex-none items-center justify-center rounded-full border {effective ===
+              remote.name
+                ? "border-primary"
+                : "border-muted-foreground/50"}"
+              aria-hidden="true"
+            >
+              {#if effective === remote.name}
+                <span class="size-1.5 rounded-full bg-primary"></span>
+              {/if}
+            </span>
+            <span class="min-w-0 flex-1 truncate font-medium">{remote.name}</span>
+            <span class="flex-none text-ui-micro text-muted-foreground">
+              {hostOfRemoteUrl(remote.url) ?? "—"}
+            </span>
+          </button>
+        {/each}
+      </div>
+      {#if forgeRemoteCurrent !== null && forgeRemoteCurrent !== "origin"}
+        <button
+          class="inline-flex cursor-pointer items-center gap-1 self-start text-ui-micro text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+          type="button"
+          data-autofocus
+          onclick={() => chooseForgeRemote("origin")}
+        >
+          Reset to origin
+        </button>
+      {/if}
+    </div>
+  {/snippet}
+  {#snippet actions()}
+    <Button
+      class="sdlg-primary"
+      variant="default"
+      type="button"
+      onclick={() => (forgeRemoteOpen = false)}
+    >Close</Button>
+  {/snippet}
+</DialogShell>

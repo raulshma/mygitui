@@ -43,6 +43,9 @@ describe("parseAppSettings", () => {
       aiMonthlyTokenBudget: 2000000,
       aiBudgetResetDay: 15,
       locale: "en",
+      forgeSnapshotSeconds: 90,
+      forgeFailureToasts: false,
+      forgeActivityToasts: true,
       rogue: true,
     });
     expect(out).toEqual({
@@ -56,7 +59,17 @@ describe("parseAppSettings", () => {
       aiMonthlyTokenBudget: 2000000,
       aiBudgetResetDay: 15,
       locale: "en",
+      forgeSnapshotSeconds: 90,
+      forgeFailureToasts: false,
+      forgeActivityToasts: true,
     });
+  });
+
+  it("lifts a sub-floor GitHub snapshot cadence to the 30s floor (0 stays off)", () => {
+    expect(parseAppSettings({ forgeSnapshotSeconds: 10 }).forgeSnapshotSeconds).toBe(30);
+    expect(parseAppSettings({ forgeSnapshotSeconds: 0 }).forgeSnapshotSeconds).toBe(0);
+    expect(parseAppSettings({ forgeSnapshotSeconds: 99999 }).forgeSnapshotSeconds).toBe(3600);
+    expect(parseAppSettings({}).forgeSnapshotSeconds).toBe(60);
   });
 
   it("clamps terminal font size and autofetch minutes", () => {

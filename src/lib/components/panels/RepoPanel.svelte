@@ -595,7 +595,7 @@
                   {#snippet child({ props })}
                     <Button
                       {...props}
-                      class="h-auto rounded px-[5px] py-px font-mono text-ui-tiny font-normal text-muted-foreground"
+                      class="h-auto rounded px-[5px] py-px font-mono text-ui-meta font-normal text-muted-foreground"
                       variant="outline"
                       type="button"
                       onclick={() => void copySha(sha)}
@@ -637,10 +637,10 @@
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={row.kind}>{row.kind}</span>
                 {#if row.present}
-                  <span class="shrink-0 rounded-full bg-muted px-1.5 py-px text-ui-tiny leading-normal text-muted-foreground">present</span>
+                  <span class="shrink-0 rounded-full bg-muted px-1.5 py-px text-ui-micro leading-normal text-muted-foreground">present</span>
                 {/if}
                 {#if row.executable}
-                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-ui-tiny leading-normal text-primary">executable</span>
+                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-ui-micro leading-normal text-primary">executable</span>
                 {/if}
               </span>
               <span class="flex flex-none items-center gap-1">
@@ -676,7 +676,7 @@
             </li>
           {/each}
         </ul>
-        <p class="state mt-1 mb-0 text-ui-tiny text-muted-foreground">
+        <p class="state mt-1 mb-0 text-ui-meta text-muted-foreground">
           Hook files live under <code class="font-mono">.git/hooks</code> in the repository — edit them with “Open in editor”.
         </p>
       {/if}
@@ -800,7 +800,7 @@
         <!-- Locks sub-section (Phase 5 `git lfs locks`): list + lock/unlock.
              Hidden until the first list read lands (best-effort). -->
         {#if lfsLockError}
-          <p class="state mb-1.5 mt-2 text-ui-tiny text-muted-foreground">
+          <p class="state mb-1.5 mt-2 text-ui-meta text-muted-foreground">
             Locks unavailable: {lfsLockError}
           </p>
         {/if}
@@ -816,9 +816,9 @@
                 {#each lfsLockList as lock (lock.id)}
                   <li class="flex min-w-0 items-center gap-2 rounded border border-transparent px-1 py-0.5 hover:border-border">
                     <span class="min-w-0 flex-1 truncate font-mono text-ui-meta text-foreground" title={lock.path}>{lock.path}</span>
-                    <span class="shrink-0 text-ui-tiny text-muted-foreground">{lock.owner || "unknown owner"}</span>
+                    <span class="shrink-0 text-ui-meta text-muted-foreground">{lock.owner || "unknown owner"}</span>
                     <Button
-                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
                       variant="outline"
                       type="button"
                       disabled={lfsLockBusy}
@@ -888,19 +888,19 @@
             {#each attrLines as line, i (i)}
               {#if line.kind === "raw"}
                 {#if line.text.trim() !== ""}
-                  <li class="text-ui-tiny text-muted-foreground" aria-label="Comment">{line.text.trim()}</li>
+                  <li class="text-ui-meta text-muted-foreground" aria-label="Comment">{line.text.trim()}</li>
                 {/if}
               {:else}
                 <li class="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded border border-transparent px-1 py-0.5 hover:border-border">
                   <span class="flex min-w-0 flex-wrap items-center gap-1.5">
                     <span class="min-w-0 truncate font-mono text-ui-meta text-foreground" title={line.pattern}>{line.pattern}</span>
                     {#each line.attrs as attr (attr)}
-                      <span class="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-ui-tiny leading-normal text-muted-foreground">{attr}</span>
+                      <span class="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-ui-micro leading-normal text-muted-foreground">{attr}</span>
                     {/each}
                   </span>
                   <span class="flex flex-none items-center gap-1">
                     <Button
-                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
                       variant="outline"
                       type="button"
                       disabled={attrBusy}
@@ -910,7 +910,7 @@
                       {ruleIsLfs(line) ? "Untrack LFS" : "Track LFS"}
                     </Button>
                     <Button
-                      class="h-auto rounded px-2 py-px text-ui-tiny font-normal text-muted-foreground"
+                      class="h-auto rounded px-2 py-px text-ui-meta font-normal text-muted-foreground"
                       variant="outline"
                       type="button"
                       disabled={attrBusy}
@@ -963,7 +963,7 @@
             </label>
           </div>
           {#if attrDirty}
-            <p class="m-0 text-ui-tiny text-muted-foreground">
+            <p class="m-0 text-ui-meta text-muted-foreground">
               Edits apply per entry with a re-read-before-write guard (a file changed underneath reloads instead of saving).
             </p>
           {/if}

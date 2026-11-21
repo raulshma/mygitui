@@ -282,7 +282,7 @@
           {#each logEntries as entry, i (i)}
             <li class="log-row flex items-center gap-2 py-0.5">
               <span
-                class={"mark w-12 flex-none rounded-full px-1.5 text-center text-ui-tiny font-semibold uppercase tracking-wide " +
+                class={"mark w-12 flex-none rounded-full px-1.5 text-center text-ui-micro font-semibold uppercase tracking-wide " +
                   `mark-${entry.mark} ` +
                   (entry.mark === "good"
                     ? "bg-primary/15 text-primary"

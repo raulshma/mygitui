@@ -59,7 +59,9 @@ test("paginated log settles despite late final page and survives scrolling", asy
     await page.waitForTimeout(150);
     await expect(status).not.toContainText("Streaming");
   }
-  await expect(status).toContainText("2500", { timeout: 10_000 });
+  // Workstream D §8.1 formats the settled count with a thousands separator
+  // ("2,500 commits"); the buffered-pages detail moved into a tooltip.
+  await expect(status).toContainText("2,500", { timeout: 10_000 });
   await expect(page.locator("#commit-row-2499")).toBeVisible();
 
   // Quiescence: no abort→restart loop after the walk exhausted.

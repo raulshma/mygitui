@@ -3,14 +3,17 @@
    * Header sync quick actions — one "Sync" split button.
    *
    * The main segment runs the contextual verb (pull when behind, push when
-   * ahead, fetch otherwise) and shows ahead/behind counts as `↓n ↑n`; the
-   * chevron opens an explicit Fetch / Pull / Push menu. Counts ride on the
-   * button itself, so the header keeps one compact control instead of three
-   * unlabeled icons. Verbs pinned from the menu (the trailing pin action,
-   * stored app-wide in `headerPins`) get their own always-visible icon
-   * segments in the same group, so a favorite verb skips the menu entirely;
-   * a pinned pull/push carries its incoming/outgoing count badge too, so
-   * work waiting on either side of the remote stays visible at a glance.
+   * ahead, fetch otherwise); the chevron opens an explicit Fetch / Pull /
+   * Push menu. Verbs pinned from the menu (the trailing pin action, stored
+   * app-wide in `headerPins`) get their own always-visible icon segments in
+   * the same group, so a favorite verb skips the menu entirely.
+   *
+   * Workstream D §8.6 dedup: the header does NOT render the ahead/behind
+   * counts — the status bar's sync item is the single surface where those
+   * counts show as text. Here they remain fully discoverable: the main
+   * segment's tooltip + aria-label spell them out ("Push 2 commits to the
+   * remote") and the chevron menu labels carry them ("Push (2 ahead)").
+   *
    * Clicking a verb runs the same shared operation as the
    * command palette (`$lib/git/sync`), and busy state comes from the
    * existing per-repo op store — including ops started from a panel or the
@@ -43,11 +46,6 @@
   /** "1 commit" / "3 commits" for tooltips and labels. */
   function commitCount(count: number): string {
     return `${count} commit${count === 1 ? "" : "s"}`;
-  }
-
-  /** Counts stay readable instead of stretching the header group. */
-  function badgeCount(count: number): string {
-    return count > 99 ? "99+" : String(count);
   }
 </script>
 
@@ -282,18 +280,6 @@
         : iconPush;
   }
 
-  /**
-   * The count a pinned segment carries: pull shows incoming (behind), push
-   * outgoing (ahead), fetch none. `null` when there is nothing to show.
-   */
-  function pinCount(
-    verb: SyncVerb,
-  ): { count: number; dir: "behind" | "ahead" } | null {
-    if (verb === "pull" && behind > 0) return { count: behind, dir: "behind" };
-    if (verb === "push" && ahead > 0) return { count: ahead, dir: "ahead" };
-    return null;
-  }
-
   /** Segment tooltip: running → progress, busy → wait, else the idle title. */
   function pinTitle(verb: SyncVerb): string {
     if (runningVerb === verb) return `${VERB_LABELS[verb]} in progress…`;
@@ -315,6 +301,10 @@
 >
   <Hint label={primaryTitle}>
     {#snippet child({ props })}
+      <!-- Workstream D §8.6 dedup: the ↓n/↑n count badges moved out of the
+           header (the status bar's sync item is the single place the
+           counts render as text); the counts stay in this button's
+           tooltip, its aria-label and the chevron menu. -->
       <Button
         class="sync-main gap-ui-3 border-0 px-2 text-ui-meta transition-colors duration-[120ms] hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
@@ -327,26 +317,7 @@
         <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
           <Icon icon={iconSync} size={14} />
         </span>
-        <span class="sync-word flex-none font-medium leading-none max-[760px]:hidden">Sync</span>
-        {#if behind > 0 && runningVerb === null}
-          <!-- Count badges carry no own tooltip: they sit inside this
-               button's Hint trigger, and this button's tooltip already
-               spells the behind/ahead counts out. -->
-          <span
-            class="count behind inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full bg-muted px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-muted-foreground max-[760px]:hidden"
-          >
-            <Icon icon={iconPull} size={12} />
-            {badgeCount(behind)}
-          </span>
-        {/if}
-        {#if ahead > 0 && runningVerb === null}
-          <span
-            class="count ahead inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full bg-accent px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums text-accent-foreground max-[760px]:hidden"
-          >
-            <Icon icon={iconPush} size={12} />
-            {badgeCount(ahead)}
-          </span>
-        {/if}
+        <span class="sync-word flex-none font-medium leading-none wm-stacked:hidden">Sync</span>
       </Button>
     {/snippet}
   </Hint>
@@ -368,14 +339,6 @@
           <span class="verb-icon inline-flex h-3.5 w-3.5 flex-none items-center justify-center">
             <Icon icon={verbIcon(verb)} size={14} />
           </span>
-          {#if pinCount(verb) !== null && runningVerb === null}
-            {@const badge = pinCount(verb)!}
-            <span
-              class={`count ${badge.dir} inline-flex h-auto min-w-4 flex-none items-center gap-ui-1 rounded-full px-1 text-ui-tiny font-semibold leading-tight text-center tabular-nums max-[760px]:hidden ${badge.dir === "ahead" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}`}
-            >
-              {badgeCount(badge.count)}
-            </span>
-          {/if}
         </Button>
       {/snippet}
     </Hint>

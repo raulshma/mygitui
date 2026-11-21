@@ -1,6 +1,6 @@
 /**
  * Global command registry (M4 F2) — the backing store of the command
- * palette (Ctrl/Cmd+Shift+P) and the keybind engine.
+ * palette (Ctrl/Cmd+K) and the keybind engine.
  *
  * A {@link Command} is one palette entry: a stable id (also the keybind
  * override key), a title, a section for grouping, optional keywords for
@@ -62,7 +62,7 @@ import {
   tabStore,
 } from "$lib/stores/tabs.svelte";
 import { busy as opBusy, kindLabel, runUndoFor, undoCountFor } from "$lib/stores/ops.svelte";
-import { openSwitcher } from "$lib/stores/switcher.svelte";
+import { openSwitcher, toggleSwitcher } from "$lib/stores/switcher.svelte";
 import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
 import { guardNow, loadUndo } from "$lib/stores/safety.svelte";
 import { resetBindings } from "$lib/palette/keybinds";
@@ -244,6 +244,9 @@ const PANEL_SHORTCUTS: Record<string, string> = {
   terminal: "ctrl+9",
   history: "ctrl+0",
   assistant: "ctrl+alt+a",
+  // The GitHub panel (E1, §9.2): every digit slot was taken; forge takes
+  // Ctrl+Shift+G ("G" for GitHub).
+  forge: "ctrl+shift+g",
 };
 
 // ---------------------------------------------------------------------------
@@ -281,7 +284,7 @@ export const COMMANDS: Command[] = [
     id: "repo.open",
     title: "Open repository…",
     section: "Repo",
-    keywords: ["quick switcher", "switch repo", "cmd+k"],
+    keywords: ["quick switcher", "switch repo", "cmd+shift+k"],
     run: () => openSwitcher(),
   },
   {
@@ -648,7 +651,18 @@ export const COMMANDS: Command[] = [
     keywords: ["search", "locate", "ctrl+f", "filter rows"],
     shortcut: "ctrl+f",
     when: (ctx) => ctx.repoId !== null,
-    run: () => dispatch("diff-find"),
+    // Ctrl+F follows focus: inside the FILES panel's tree it opens the
+    // file filter (Workstream A §5.6), inside the STATUS panel's list the
+    // change filter (Workstream B §6.5), inside the HISTORY panel's list
+    // the commit search (Workstream D §8.4), anywhere else it finds in the
+    // diff.
+    run: () => {
+      const filesRoot = document.activeElement?.closest?.(".files");
+      if (filesRoot) dispatch("files-filter");
+      else if (document.activeElement?.closest?.(".source-control")) dispatch("status-filter");
+      else if (document.activeElement?.closest?.(".history")) dispatch("history-filter");
+      else dispatch("diff-find");
+    },
   },
   {
     id: "diff.next-hunk",
@@ -760,6 +774,7 @@ export const COMMANDS: Command[] = [
       ["terminal", "Terminal"],
       ["history", "History"],
       ["assistant", "Assistant"],
+      ["forge", "GitHub"],
     ] as const
   ).map(([panel, label], index): Command => ({
     id: `panel.focus-${panel}`,
@@ -934,17 +949,18 @@ export const COMMANDS: Command[] = [
   },
   {
     id: "app.quick-switcher",
-    title: "Open quick switcher",
+    title: "Toggle quick switcher",
     section: "App",
-    keywords: ["repositories", "tabs", "cmd+k"],
-    run: () => openSwitcher(),
+    keywords: ["repositories", "tabs", "cmd+shift+k"],
+    shortcut: "ctrl+shift+k",
+    run: () => toggleSwitcher(),
   },
   {
     id: "app.palette",
     title: "Toggle command palette",
     section: "App",
-    keywords: ["commands", "shortcuts"],
-    shortcut: "ctrl+shift+p",
+    keywords: ["commands", "shortcuts", "cmd+k"],
+    shortcut: "ctrl+k",
     // Dispatched rather than imported: the palette store imports this
     // registry, and App.svelte owns the "toggle-command-palette" listener.
     // The typed bus (palette/events.ts) is pure types — no cycle.

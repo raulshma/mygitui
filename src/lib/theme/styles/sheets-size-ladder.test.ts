@@ -37,30 +37,34 @@ function hasToken(apply: string, token: string): boolean {
 
 /**
  * Canonical ladder shared by every sheet of a density group: buttons
- * (xs/sm/default/lg ×5..11), inputs/selects, badge, tabs list, switch
- * track + knob, toast, table head, menu/command items and their content
- * padding, dialog/alert-dialog and popover padding.
+ * (xs/sm/default/lg; compact collapses its sub-28px steps onto the shared
+ * 28px hit-target floor — `--spacing-ui-hit` in app.css — so every
+ * interactive control reaches 28×28px), inputs/selects, badge (decorative,
+ * exempt from the hit-target floor), tabs list, switch track + knob, toast,
+ * table head, menu/command items and their content padding,
+ * dialog/alert-dialog and popover padding.
  */
 const SHARED_LADDERS: Record<Density, Ladder> = {
 	compact: {
-		"cn-button-size-xs": ["h-5"],
-		"cn-button-size-sm": ["h-6"],
+		"cn-button-size-xs": ["h-7"],
+		"cn-button-size-sm": ["h-7"],
 		"cn-button-size-default": ["h-7"],
 		"cn-button-size-lg": ["h-8"],
-		"cn-button-size-icon-xs": ["size-5"],
-		"cn-button-size-icon-sm": ["size-6"],
+		"cn-button-size-icon-xs": ["size-7"],
+		"cn-button-size-icon-sm": ["size-7"],
 		"cn-button-size-icon": ["size-7"],
 		"cn-button-size-icon-lg": ["size-8"],
 		"cn-input": ["h-7"],
-		"cn-select-trigger": ["h-7", "h-6"], // default + sm
+		"cn-select-trigger": ["h-7", "h-7"], // default + sm, both on the hit-target floor
+		"cn-toggle-size-sm": ["h-7"], // interactive → hit-target floor, like the buttons
 		"cn-badge": ["h-5"],
 		"cn-tabs-list": ["h-7"],
 		"cn-switch": ["h-4", "w-7"],
 		"cn-switch-thumb": ["size-3.5"],
 		"cn-toast": ["h-10"],
 		"cn-table-head": ["h-10"],
-		"cn-dropdown-menu-item": ["min-h-6", "px-2", "py-1"],
-		"cn-command-item": ["min-h-6", "px-2", "py-1"],
+		"cn-dropdown-menu-item": ["min-h-7", "px-2", "py-1"],
+		"cn-command-item": ["min-h-7", "px-2", "py-1"],
 		"cn-dropdown-menu-content": ["min-w-32", "p-1"],
 		"cn-command": ["p-1"],
 		"cn-dialog-content": ["p-4", "gap-4"],
@@ -78,6 +82,7 @@ const SHARED_LADDERS: Record<Density, Ladder> = {
 		"cn-button-size-icon-lg": ["size-9"],
 		"cn-input": ["h-8"],
 		"cn-select-trigger": ["h-8", "h-7"],
+		"cn-toggle-size-sm": ["h-7"],
 		"cn-badge": ["h-5"],
 		"cn-tabs-list": ["h-8"],
 		"cn-switch": ["h-[18px]", "w-8"],
@@ -103,6 +108,7 @@ const SHARED_LADDERS: Record<Density, Ladder> = {
 		"cn-button-size-icon-lg": ["size-10"],
 		"cn-input": ["h-9"],
 		"cn-select-trigger": ["h-9", "h-8"],
+		"cn-toggle-size-sm": ["h-8"],
 		"cn-badge": ["h-5"],
 		"cn-tabs-list": ["h-9"],
 		"cn-switch": ["h-[18px]", "w-8"],
@@ -128,6 +134,7 @@ const SHARED_LADDERS: Record<Density, Ladder> = {
 		"cn-button-size-icon-lg": ["size-11"],
 		"cn-input": ["h-10"],
 		"cn-select-trigger": ["h-10", "h-9"],
+		"cn-toggle-size-sm": ["h-9"],
 		"cn-badge": ["h-5"],
 		"cn-tabs-list": ["h-10"],
 		"cn-switch": ["h-[18px]", "w-8"],

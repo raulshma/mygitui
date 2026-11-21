@@ -14,6 +14,7 @@
    * list, so the Actions sidebar stays in sync.
    */
   import { untrack } from "svelte";
+  import { pollScheduler } from "$lib/stores/pollScheduler.svelte";
   import type { WorkflowJob, WorkflowStep } from "$lib/ipc/types";
   import { forgeStore, openExternal } from "$lib/stores/forge.svelte";
   import { toast } from "$lib/toast";
@@ -27,6 +28,7 @@
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import {
     activityDurationLabel,
+    logDownloadName,
     prAgeLabel,
     runCanRerun,
     runDetailSignature,
@@ -93,7 +95,7 @@
   // Pill geometry/type only — border, background, hover and disabled chrome
   // come from the ui Button/Toggle primitives this is passed to as `class`.
   const tb =
-    "flex-none gap-1 whitespace-nowrap rounded-full px-2.5 py-px text-ui-micro leading-[1.4] font-normal text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny";
+    "flex-none gap-1 whitespace-nowrap rounded-full px-2.5 py-px text-ui-micro leading-[1.4] font-normal text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-micro";
 
   /** `null` = combined log of every job. */
   let selectedJobId = $state<number | null>(null);
@@ -110,6 +112,14 @@
 
   function jumpToStep(jobName: string, stepName: string): void {
     activeStepKey = `${jobName}\u0000${stepName}`;
+  }
+
+  /**
+   * E2 §9.4 breadcrumb, "runs" level: the runs list is the forge panel's
+   * Actions (Workflows) tab — focus the panel and open that tab.
+   */
+  function openRunsList(): void {
+    emitUiEvent("focus-panel", { panel: "forge", repoId, tab: "actions" });
   }
 
   const detail = $derived(forgeStore.detailFor(repoId, runId));
@@ -230,36 +240,49 @@
     untrack(() => void forgeStore.loadRunLogs(targetRepo, id, jobId, onlyFailed));
   });
 
-  // Mild polling while the run is active. Hidden windows skip a beat; the
-  // next visible tick catches up. Reading the scope state keeps the interval's
-  // closure fresh when the user switches jobs mid-run. Logs are re-fetched
-  // only when the detail's progress signature changed: `gh run view --log`
-  // ships the whole run text (MBs for long runs) — refetching it every tick
-  // re-serialized the entire log over IPC for the duration of the run.
+  // Mild polling while the run is active — an E1 scheduler lane
+  // (`forge:runview:<repo>:<run>`, 3.5 s): hidden windows skip a beat (the
+  // scheduler pauses), and the PAUSE toggle still stops everything (the
+  // lane unregisters when `autoRefresh` flips off). The job/failed-only
+  // scope rides a plain mutable holder the lane work reads untracked, so
+  // switching jobs mid-run does not restart the cadence (the old interval
+  // re-read its closure the same way). Logs are re-fetched only when the
+  // detail's progress signature changed: `gh run view --log` ships the whole
+  // run text (MBs for long runs) — refetching it every tick re-serialized
+  // the entire log over IPC for the duration of the run.
+  let logScope = { jobId: null as number | null, failedOnly: false };
+  $effect(() => {
+    // Plain-object writes: intentionally NOT reactive — the lane closure
+    // below reads the latest scope each tick without re-registering.
+    logScope.jobId = selectedJobId;
+    logScope.failedOnly = failedOnly;
+  });
   $effect(() => {
     if (!autoRefresh) return;
     const targetRepo = repoId;
     const id = runId;
-    const jobId = selectedJobId;
-    const onlyFailed = failedOnly;
     if (!active) return;
     let lastLogSig = runDetailSignature(forgeStore.detailFor(targetRepo, id));
-    const timer = setInterval(() => {
-      if (
-        typeof document !== "undefined" &&
-        document.visibilityState === "hidden"
-      ) {
-        return;
-      }
-      void forgeStore.loadRunDetail(targetRepo, id).then((detail) => {
-        if (detail === null) return;
-        const sig = runDetailSignature(detail);
-        if (sig === lastLogSig) return;
-        lastLogSig = sig;
-        void forgeStore.loadRunLogs(targetRepo, id, jobId, onlyFailed);
-      });
-    }, 3_500);
-    return () => clearInterval(timer);
+    const unsubscribe = pollScheduler.register(
+      `forge:runview:${targetRepo}:${id}`,
+      {
+        intervalMs: 3_500,
+        work: async () => {
+          const detail = await forgeStore.loadRunDetail(targetRepo, id);
+          if (detail === null) return;
+          const sig = runDetailSignature(detail);
+          if (sig === lastLogSig) return;
+          lastLogSig = sig;
+          await forgeStore.loadRunLogs(
+            targetRepo,
+            id,
+            logScope.jobId,
+            logScope.failedOnly,
+          );
+        },
+      },
+    );
+    return unsubscribe;
   });
 
   $effect(() => {
@@ -477,18 +500,54 @@
 <div class="run-view @container flex h-full min-h-0 min-w-0 flex-col bg-card">
   <header class="run-head flex-none flex flex-col gap-ui-35 border-b border-border bg-popover px-[0.7rem] pt-ui-4 pb-[0.55rem] @max-[38rem]:px-2 @max-[38rem]:pt-ui-35 @max-[38rem]:pb-ui-45">
     <div class="head-top flex min-w-0 items-center gap-ui-4">
-      <span class="crumbs flex min-w-0 items-baseline gap-ui-35 text-ui-meta text-muted-foreground">
-        <span class="crumb-muted flex-none">Actions</span>
-        <span class="crumb-sep flex-none opacity-60" aria-hidden="true">/</span>
-        <Hint label={run?.name ?? "Workflow run"}>
+      <nav
+        class="crumbs flex min-w-0 items-baseline gap-ui-35 text-ui-meta text-muted-foreground"
+        aria-label="Runs, jobs and logs"
+      >
+        <!-- runs → jobs → logs (E2 §9.4): level 1 is the runs list (the
+             forge panel's Actions tab), level 2 this run's jobs, level 3
+             the log scope shown below. -->
+        <Hint label="Open the runs list in the GitHub panel">
           {#snippet child({ props })}
-            <span class="crumb-current min-w-0 truncate font-medium text-foreground" {...props}>
-              {run?.name ?? "Workflow run"}
-            </span>
+            <button
+              class="crumb-runs flex-none cursor-pointer rounded-sm border-none bg-transparent p-0 text-ui-meta text-muted-foreground hover:text-foreground hover:underline underline-offset-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              {...props}
+              type="button"
+              onclick={openRunsList}
+            >
+              Actions
+            </button>
           {/snippet}
         </Hint>
+        <span class="crumb-sep flex-none opacity-60" aria-hidden="true">/</span>
+        {#if selectedJobId !== null}
+          <Hint label="Back to all jobs (combined log)">
+            {#snippet child({ props })}
+              <button
+                class="crumb-jobs flex-none min-w-0 max-w-40 cursor-pointer truncate rounded-sm border-none bg-transparent p-0 text-ui-meta text-muted-foreground hover:text-foreground hover:underline underline-offset-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                {...props}
+                type="button"
+                onclick={() => selectJob(null)}
+              >
+                {run?.name ?? "Workflow run"}
+              </button>
+            {/snippet}
+          </Hint>
+        {:else}
+          <Hint label={run?.name ?? "Workflow run"}>
+            {#snippet child({ props })}
+              <span class="crumb-current min-w-0 truncate font-medium text-foreground" {...props}>
+                {run?.name ?? "Workflow run"}
+              </span>
+            {/snippet}
+          </Hint>
+        {/if}
         {#if run}<span class="run-number flex-none font-mono text-ui-micro text-muted-foreground">#{run.number}</span>{/if}
-      </span>
+        <span class="crumb-sep flex-none opacity-60" aria-hidden="true">/</span>
+        <span class="crumb-logs flex-none max-w-40 truncate text-ui-meta text-muted-foreground">
+          {selectedJob ? selectedJob.name : "All jobs"}
+        </span>
+      </nav>
       <span class="spacer ml-auto"></span>
       {#if onPopout}
         <Hint label="Open this run in its own window">
@@ -525,7 +584,7 @@
 
     <div class="title-row flex min-w-0 flex-wrap items-center gap-ui-45">
       <span class="status-chip flex-none inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-ui-micro font-semibold {chipTone[runStateClass(kind)] ?? "bg-accent text-muted-foreground"}">
-        <span class="status-icon text-ui-tiny" aria-hidden="true">{runStateIcon(kind)}</span>
+        <span class="status-icon text-ui-micro" aria-hidden="true">{runStateIcon(kind)}</span>
         {statusText}
       </span>
       {#if active}
@@ -696,13 +755,13 @@
       <div class="jobs-head flex-none flex flex-wrap items-center gap-ui-4 border-b border-border bg-popover px-2 py-ui-35">
         <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-ui-35 truncate text-xs font-semibold text-foreground">
           Jobs
-          {#if jobs.length > 0}<span class="pane-count rounded-full bg-accent px-ui-35 text-ui-tiny font-medium text-muted-foreground">{jobs.length}</span>{/if}
+          {#if jobs.length > 0}<span class="pane-count rounded-full bg-accent px-ui-35 text-ui-micro font-medium text-muted-foreground">{jobs.length}</span>{/if}
         </h3>
         {#if active && jobs.length > 0}
           <Hint label={`${jobsDone} of ${jobs.length} jobs finished`}>
             {#snippet child({ props })}
               <span
-                class="job-progress inline-flex items-center gap-ui-3 whitespace-nowrap text-ui-tiny text-muted-foreground"
+                class="job-progress inline-flex items-center gap-ui-3 whitespace-nowrap text-ui-micro text-muted-foreground"
                 {...props}
               >
                 <span class="job-progress-track block h-[0.3rem] w-[3.2rem] overflow-hidden rounded-full bg-accent" aria-hidden="true">
@@ -723,7 +782,7 @@
                 onPressedChange={() => toggleFailedOnly()}
               >
                 Failed only
-                <span class="filter-count rounded-full bg-current/15 px-ui-3 text-ui-tiny">{failedJobs.length}</span>
+                <span class="filter-count rounded-full bg-current/15 px-ui-3 text-ui-micro">{failedJobs.length}</span>
               </Toggle>
             {/snippet}
           </Hint>
@@ -764,10 +823,10 @@
                 aria-pressed={selectedJobId === null}
                 onclick={() => selectJob(null)}
               >
-                <span class="job-bullet all-bullet inline-flex size-5 flex-none items-center justify-center rounded-full bg-accent text-ui-tiny text-muted-foreground" aria-hidden="true">▤</span>
+                <span class="job-bullet all-bullet inline-flex size-5 flex-none items-center justify-center rounded-full bg-accent text-ui-micro text-muted-foreground" aria-hidden="true">▤</span>
                 <span class="job-main flex min-w-0 flex-col">
                   <span class="job-name truncate text-[0.74rem] font-medium text-foreground">All jobs</span>
-                  <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
+                  <span class="job-sub truncate text-ui-meta text-muted-foreground">
                     {failedOnly ? "Failed steps across the run" : "Combined log"}
                   </span>
                 </span>
@@ -814,12 +873,12 @@
                   </span>
                   <span class="job-main flex min-w-0 flex-col">
                     <span class="job-name truncate text-[0.74rem] font-medium text-foreground">{job.name}</span>
-                    <span class="job-sub truncate text-[0.64rem] text-muted-foreground">
+                    <span class="job-sub truncate text-ui-meta text-muted-foreground">
                       {stepStateLabel(job.conclusion, job.status)}
                       {#if jobDuration} · {jobDuration}{/if}
                     </span>
                   </span>
-                  <span class="job-status whitespace-nowrap text-ui-tiny {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}">
+                  <span class="job-status whitespace-nowrap text-ui-micro {stepStateClass(job.conclusion, job.status)} {runTone[stepStateClass(job.conclusion, job.status)] ?? "text-muted-foreground"}">
                     {stepStateLabel(job.conclusion, job.status)}
                   </span>
                 </button>
@@ -853,7 +912,7 @@
                           onclick={() => jumpToStep(job.name, step.name)}
                         >
                           <span
-                            class="step-icon w-[0.8rem] flex-none text-center text-ui-tiny {stepStateClass(step.conclusion, step.status)} {runTone[stepStateClass(step.conclusion, step.status)] ?? "text-muted-foreground"}"
+                            class="step-icon w-[0.8rem] flex-none text-center text-ui-micro {stepStateClass(step.conclusion, step.status)} {runTone[stepStateClass(step.conclusion, step.status)] ?? "text-muted-foreground"}"
                             aria-hidden="true"
                           >
                             {runStateIcon(stepKind)}
@@ -863,11 +922,11 @@
                               <span class="step-name min-w-0 flex-1 truncate text-foreground" {...props}>{step.name}</span>
                             {/snippet}
                           </Hint>
-                          <span class="step-meta flex-none text-ui-tiny text-muted-foreground opacity-90">
+                          <span class="step-meta flex-none text-ui-micro text-muted-foreground opacity-90">
                             {stepStateLabel(step.conclusion, step.status)}
                             {#if stepDuration} · {stepDuration}{/if}
                           </span>
-                          <span class="step-jump-icon flex-none text-[0.64rem] text-muted-foreground opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-[2px] group-hover:opacity-80 {activeStepKey === stepKeyStr ? "translate-x-[2px] opacity-80" : ""}" aria-hidden="true">→</span>
+                          <span class="step-jump-icon flex-none text-ui-micro text-muted-foreground opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-[2px] group-hover:opacity-80 {activeStepKey === stepKeyStr ? "translate-x-[2px] opacity-80" : ""}" aria-hidden="true">→</span>
                         </button>
                       {/snippet}
                     </Hint>
@@ -884,15 +943,15 @@
       <div class="log-head flex-none flex flex-wrap items-center gap-ui-4 border-b border-border bg-popover px-2 py-ui-35">
         <h3 class="pane-title m-0 inline-flex min-w-0 items-baseline gap-ui-35 truncate text-xs font-semibold text-foreground">
           {selectedJob ? selectedJob.name : "All jobs"}
-          {#if failedOnly}<span class="scope-chip rounded-full bg-muted px-2 text-ui-tiny font-medium text-muted-foreground">failed steps</span>{/if}
+          {#if failedOnly}<span class="scope-chip rounded-full bg-muted px-2 text-ui-micro font-medium text-muted-foreground">failed steps</span>{/if}
         </h3>
         {#if live}
-          <span class="live-badge small flex-none inline-flex items-center gap-ui-3 text-ui-tiny font-medium text-primary">
+          <span class="live-badge small flex-none inline-flex items-center gap-ui-3 text-ui-micro font-medium text-primary">
             <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-current" aria-hidden="true"></span>
             Live
           </span>
         {:else if active}
-          <span class="paused-chip flex-none rounded-full bg-accent px-2 text-ui-tiny text-muted-foreground">Paused</span>
+          <span class="paused-chip flex-none rounded-full bg-accent px-2 text-ui-micro text-muted-foreground">Paused</span>
         {/if}
         <span class="spacer ml-auto"></span>
         {#if selectedJob}
@@ -926,6 +985,11 @@
             onOpenLive={() => void openOnGitHub()}
             emptyText={emptyLogText}
             targetStepKey={activeStepKey}
+            downloadName={logDownloadName(
+              run?.number ?? runId,
+              run?.name ?? "workflow",
+              selectedJob?.name ?? null,
+            )}
           />
         {/key}
       </div>

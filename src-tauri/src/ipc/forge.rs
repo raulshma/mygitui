@@ -12,8 +12,8 @@ use tauri::State;
 
 use crate::engine::types::RepoId;
 use crate::forge::{
-    self, CheckInfo, ForgeContext, ForgeError, ForgeStatus, PrCreated, PrInfo, WorkflowInfo,
-    WorkflowInput, WorkflowRun, WorkflowRunDetail,
+    self, CheckInfo, ForgeContext, ForgeError, ForgeSnapshot, ForgeStatus, PrCreated, PrInfo,
+    WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
 };
 use crate::repo::RepoManager;
 
@@ -30,17 +30,96 @@ pub async fn forge_status() -> Result<ForgeStatus, String> {
         .map_err(|e| format!("forge_status task failed: {e}"))
 }
 
-/// Owner/repo/branch context of one open repo (derived from the `origin`
-/// remote + HEAD; errors when the remote is not GitHub or HEAD is detached).
+/// Hosts `gh auth status` reports (manual refresh of the E1 host cache;
+/// `forge_status` refreshes it on auth-state change). Always includes
+/// `github.com`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_hosts() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(forge::hosts_sync)
+        .await
+        .map_err(|e| format!("forge_hosts task failed: {e}"))
+}
+
+/// Owner/repo/branch context of one open repo (derived from the configured
+/// remote — default `origin`, `remote` selects the per-repo override — plus
+/// HEAD; errors with a structured `ForgeError` when the remote is missing or
+/// not GitHub, or HEAD is detached).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn forge_context(
     repo_id: RepoId,
+    remote: Option<String>,
     state: State<'_, RepoManager>,
-) -> Result<ForgeContext, String> {
-    let root = get_handle(&state, &repo_id)?.root.clone();
-    tauri::async_runtime::spawn_blocking(move || forge::context_sync(&root))
+) -> Result<ForgeContext, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || forge::context_sync(&root, remote.as_deref()))
         .await
-        .map_err(|e| format!("forge_context task failed: {e}"))?
+        .map_err(|e| ForgeError::other(format!("forge_context task failed: {e}")))?
+}
+
+/// One repo's batched GitHub snapshot (E1): branch PR, HEAD check-runs,
+/// PR-head check-runs (when the PR head diverges), latest branch run —
+/// resolved with at most 4 concurrent gh calls and content hashes so the FE
+/// skips re-renders of unchanged parts. `remote` selects the per-repo
+/// override remote (default `origin`). Resolution-level failures (non-GitHub
+/// remote, gh missing) reject with a structured `ForgeError`; per-part
+/// failures ride inside the snapshot (`error` + missing parts).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_snapshot(
+    repo_id: RepoId,
+    remote: Option<String>,
+    state: State<'_, RepoManager>,
+) -> Result<ForgeSnapshot, ForgeError> {
+    let root = get_handle(&state, &repo_id)
+        .map_err(ForgeError::other)?
+        .root
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        forge::forge_snapshot_sync(&root, remote.as_deref())
+    })
+    .await
+    .map_err(|e| ForgeError::other(format!("forge_snapshot task failed: {e}")))?
+}
+
+/// Commit-level check-runs for an arbitrary sha (E2 commit surfaces).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_commit_checks(
+    repo_id: RepoId,
+    sha: String,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<CheckInfo>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::forge_commit_checks_sync(&root, &sha))
+        .await
+        .map_err(|e| format!("forge_commit_checks task failed: {e}"))?
+}
+
+/// The PR's changed files with their patches (E2's PR diff view).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_pr_files(
+    repo_id: RepoId,
+    number: u64,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<forge::ForgePrFile>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_files_sync(&root, number))
+        .await
+        .map_err(|e| format!("forge_pr_files task failed: {e}"))?
+}
+
+/// The PR's review threads, read-only (E2's review-thread panel).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn forge_pr_review_threads(
+    repo_id: RepoId,
+    number: u64,
+    state: State<'_, RepoManager>,
+) -> Result<Vec<forge::ForgeReviewThread>, String> {
+    let root = get_handle(&state, &repo_id)?.root.clone();
+    tauri::async_runtime::spawn_blocking(move || forge::forge_pr_review_threads_sync(&root, number))
+        .await
+        .map_err(|e| format!("forge_pr_review_threads task failed: {e}"))?
 }
 
 /// Create a PR via `gh pr create` (base, title, body via temp file, draft).

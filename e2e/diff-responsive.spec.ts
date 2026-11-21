@@ -1,9 +1,21 @@
 /**
- * Diff viewer responsive layout (commit detail context): wrapping is ON by
- * default — long lines fold inside the pane, never a horizontal scrollbar in
- * either mode. With wrap toggled OFF, unified grows one horizontal scrollbar
- * when the widest line genuinely overflows, and split grows ONE shared
- * scrollbar serving both halves (halves stay column-aligned).
+ * Diff viewer responsive layout (commit detail context): wrapping ON — long
+ * lines fold inside the pane, never a horizontal scrollbar in either mode.
+ * With wrap toggled OFF, unified grows one horizontal scrollbar when the
+ * widest line genuinely overflows, and split grows ONE shared scrollbar
+ * serving both halves (halves stay column-aligned).
+ *
+ * Workstream C (plan §7.5) made the diff defaults container-aware: under a
+ * 700px panel the viewer auto-selects Unified and turns wrap OFF (scroll
+ * instead of wrapped-line walls), with in-memory-only session overrides.
+ * These tests therefore PIN the state they exercise instead of relying on
+ * the defaults: boot seeds `mygitui.diff.wrap = true` (the wide-container
+ * default) and `openCommitDiff` clicks the segmented `Split` button (a
+ * session override that sticks at any container width), so the geometry
+ * assertions below stay about wrap/split behavior — not about which
+ * defaults the container would have picked. The wide viewport grew from
+ * 1400 to 1600 for the same reason: at 1400 the commit-detail panel lands
+ * within a few px of the 700px narrow threshold.
  *
  * Asserted on DOM geometry (scrollWidth/clientWidth/rects) against the
  * mocked Tauri backend — see tauri-mock.ts and history_click.spec.ts for
@@ -29,6 +41,12 @@ async function bootRepoWithDiff(
   opts: { allContext?: boolean; del?: string; added?: boolean } = {},
 ) {
   await seedStorage(page, recentRepos(["/tmp/repo"]));
+  // Pin the wrap preference ON (the wide-container default): the tests
+  // assert wrap-ON folding behavior, independent of the container-aware
+  // defaults the panel would pick at narrow widths.
+  await page.addInitScript(() => {
+    localStorage.setItem("mygitui.diff.wrap", "true");
+  });
   const lines: Array<{
     old_no: number | null;
     new_no: number | null;
@@ -89,6 +107,12 @@ async function openCommitDiff(page: Page, firstLine: string) {
   await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
   await page.locator("#commit-row-0").click();
   await expect(page.locator(".diff-viewer .viewport")).toBeVisible();
+  // Pin split mode (session override — sticks at any container width):
+  // most tests below assert split-half geometry, which the narrow defaults
+  // (unified under a 700px container) would otherwise replace.
+  const splitBtn = page.getByRole("button", { name: "Split", exact: true });
+  await splitBtn.click();
+  await expect(splitBtn).toHaveAttribute("aria-pressed", "true");
   // Context rows render the line in both halves, so the first context line
   // matches twice — any one instance proves the diff landed.
   await expect(page.getByText(firstLine).first()).toBeVisible();
@@ -124,7 +148,7 @@ test("split view shares the pane and never scrolls horizontally", async ({ page 
   const tracked = trackErrors(page);
   const long = "x".repeat(110);
   await bootRepoWithDiff(page, ["context start", long, long + "+tail", "\tindented line"]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "context start");
 
   // Wide window: halves fill the row 50/50, no horizontal overflow.
@@ -135,7 +159,13 @@ test("split view shares the pane and never scrolls horizontally", async ({ page 
   expect(Math.abs(m.halfWidths[0]! - m.halfWidths[1]!)).toBeLessThanOrEqual(2);
 
   // Narrow window: still fits — the layout is responsive, not fixed-width.
+  // Under a 700px container the diff defaults to wrap OFF + Unified, so
+  // wrap is re-enabled here via the toggle (in-memory session override)
+  // to keep this a wrap-ON split-geometry assertion.
   await page.setViewportSize({ width: 900, height: 800 });
+  const wrapToggle = page.getByRole("button", { name: "Wrap long lines" });
+  await wrapToggle.click();
+  await expect(wrapToggle).toHaveAttribute("aria-pressed", "true");
   m = await diffMetrics(page);
   expect(m.vpScroll).toBeLessThanOrEqual(m.vpClient);
   expect(m.rowWidth).toBe(m.vpClient);
@@ -148,7 +178,7 @@ test("added file renders inline full width even in split mode", async ({ page })
   await bootRepoWithDiff(page, ["first added line", "second added line"], {
     added: true,
   });
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "first added line");
 
   const metrics = await page.evaluate(() => {
@@ -184,7 +214,7 @@ test("split view keeps context text inside its own half", async ({ page }) => {
   // section into the right one.
   const long = "unchanged ".repeat(30).trim();
   await bootRepoWithDiff(page, [long, "second line"]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, long);
 
   const laidOut = await page.evaluate(() => {
@@ -243,7 +273,7 @@ test("split view confines text selection to the half it starts in", async ({ pag
   await bootRepoWithDiff(page, ["ctx line", "new added line"], {
     del: "old deleted line",
   });
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "ctx line");
 
   const boxes = await page.evaluate(() => {
@@ -295,7 +325,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
     ["alpha context line", "beta context line", "gamma context line", "delta context line"],
     { allContext: true },
   );
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "alpha context line");
 
   const points = await page.evaluate(() => {
@@ -345,7 +375,7 @@ test("split view keeps a multi-row selection on the side it starts in", async ({
 test("unified view fills the pane when lines are short", async ({ page }) => {
   const tracked = trackErrors(page);
   await bootRepoWithDiff(page, ["short context line", "a change", "another"]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "short context line");
 
   await page.getByRole("button", { name: "Unified", exact: true }).click();
@@ -364,7 +394,7 @@ test("unified view fills the pane when lines are short", async ({ page }) => {
 test("unified view scrolls only when the widest line genuinely overflows", async ({ page }) => {
   const tracked = trackErrors(page);
   await bootRepoWithDiff(page, ["context start", "y".repeat(110)]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "context start");
 
   await page.getByRole("button", { name: "Unified", exact: true }).click();
@@ -399,7 +429,7 @@ test("unified view scrolls only when the widest line genuinely overflows", async
 test("wrap off: split scrolls both halves on one shared scrollbar", async ({ page }) => {
   const tracked = trackErrors(page);
   await bootRepoWithDiff(page, ["context start", "z".repeat(110)]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "context start");
 
   // Default (wrap on): responsive, no horizontal overflow.
@@ -426,7 +456,7 @@ test("wrap off: split scrolls both halves on one shared scrollbar", async ({ pag
 test("wrap persists across viewers (preference storage)", async ({ page }) => {
   const tracked = trackErrors(page);
   await bootRepoWithDiff(page, ["context start", "w".repeat(110)]);
-  await page.setViewportSize({ width: 1400, height: 1000 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await openCommitDiff(page, "context start");
 
   const wrapBtn = page.getByRole("button", { name: "Wrap long lines" });

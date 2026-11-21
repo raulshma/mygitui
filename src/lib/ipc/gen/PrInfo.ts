@@ -3,7 +3,12 @@
 /**
  * One PR of `pr_list`.
  */
-export type PrInfo = { number: number, title: string, head_ref_name: string, base_ref_name: string, 
+export type PrInfo = { number: number, title: string, head_ref_name: string, 
+/**
+ * Head commit sha (`headRefOid`; "" when gh omits it) — the snapshot
+ * uses it to detect PR-head vs local-HEAD divergence.
+ */
+head_ref_oid: string, base_ref_name: string, 
 /**
  * `OPEN` | `MERGED` | `CLOSED` (verbatim gh value).
  */

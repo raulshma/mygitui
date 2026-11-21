@@ -14,6 +14,8 @@
    */
   import { tick, untrack } from "svelte";
   import { toast } from "$lib/toast";
+  import { describeError } from "$lib/errors";
+  import { exportText, pickSaveFile } from "$lib/ipc/client";
   import {
     activityDurationLabel,
     runDurationLabel,
@@ -54,6 +56,7 @@
     onOpenLive = undefined,
     windowSize = 2_000,
     targetStepKey = null,
+    downloadName = "workflow-log.log",
   }: {
     /** Raw `gh run view --log` text (`null` before the first fetch). */
     text: string | null;
@@ -75,6 +78,8 @@
     windowSize?: number;
     /** Target step key (`job\0step`) to expand and scroll into view. */
     targetStepKey?: string | null;
+    /** Default file name for the log download's save dialog (E2 §9.4). */
+    downloadName?: string;
   } = $props();
 
   // Tailwind replacements for the removed scoped styles: one tone per
@@ -374,6 +379,24 @@
     }
   }
 
+  /**
+   * E2 §9.4 log download: native save dialog, then a backend write (the
+   * archive-export flow; there is no fs plugin). Cancelled picker = no-op.
+   */
+  async function downloadLog(): Promise<void> {
+    if (text === null) return;
+    const destination = await pickSaveFile("Download workflow log", downloadName, [
+      { name: "Log file", extensions: ["log", "txt"] },
+    ]);
+    if (destination === null) return;
+    try {
+      await exportText(destination, text);
+      toast(`Log saved to ${destination}`, { kind: "success" });
+    } catch (err) {
+      toast(`Log download failed: ${describeError(err)}`, { kind: "error" });
+    }
+  }
+
   // A new search starts from the first result, not the tail of the old view.
   // `$effect.pre` applies this before the filtered DOM renders.
   let previousQuery = "";
@@ -468,7 +491,7 @@
 {/snippet}
 
 <div
-  class="log-viewer flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-sm border border-border bg-background"
+  class="log-viewer @container flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-sm border border-border bg-background"
   class:wrap
 >
   <div class="log-toolbar flex-none flex flex-wrap items-center gap-ui-3 border-b border-border bg-popover px-2 py-ui-35" role="toolbar" aria-label="Log controls">
@@ -500,7 +523,7 @@
         </Hint>
       {/if}
     </div>
-    <span class="log-count flex-none whitespace-nowrap text-ui-micro text-muted-foreground max-[44rem]:order-2" aria-live="polite">
+    <span class="log-count flex-none whitespace-nowrap text-ui-micro text-muted-foreground @max-[44rem]:order-2" aria-live="polite">
       {#if query.trim()}
         {matches} hit{matches === 1 ? "" : "s"} · {lineLabel(total)}
       {:else}
@@ -535,7 +558,7 @@
         {/snippet}
       </Hint>
     {/if}
-    <span class="spacer ml-auto max-[44rem]:hidden"></span>
+    <span class="spacer ml-auto @max-[44rem]:hidden"></span>
     {#if liveConsole && onOpenLive}
       <Hint label="Open GitHub's live console for this run">
         {#snippet child({ props })}
@@ -607,11 +630,21 @@
     >
       {copied ? "Copied" : "Copy"}
     </Button>
+    <Button
+      class="log-download {tb}"
+      variant="outline"
+      type="button"
+      title="Save the raw log to a file"
+      disabled={text === null}
+      onclick={() => void downloadLog()}
+    >
+      Download
+    </Button>
   </div>
 
   {#if error}
     <div class="log-error flex-none flex flex-wrap items-baseline gap-ui-4 border-b border-current/25 bg-destructive/15 px-2.5 py-ui-35 text-xs text-destructive" role="alert">
-      <span class="err-mark flex-none inline-flex size-4 items-center justify-center rounded-full border border-current text-ui-tiny font-bold" aria-hidden="true">!</span>
+      <span class="err-mark flex-none inline-flex size-4 items-center justify-center rounded-full border border-current text-ui-micro font-bold" aria-hidden="true">!</span>
       <span class="err-text min-w-0 [overflow-wrap:anywhere]">{error}</span>
       {#if text !== null}
         <span class="err-hint text-ui-micro opacity-75">Showing the last available output.</span>
@@ -701,12 +734,12 @@
               {/if}
               <span class="muted text-ui-micro font-normal text-muted-foreground">{lineLabel(jobEntry.job.lineCount)}</span>
               {#if jobEntry.job.errorCount > 0}
-                <span class="mini-chip flex-none rounded-full bg-destructive/15 px-2 text-ui-tiny leading-[1.5] font-medium text-destructive">
+                <span class="mini-chip flex-none rounded-full bg-destructive/15 px-2 text-ui-micro leading-[1.5] font-medium text-destructive">
                   {jobEntry.job.errorCount} error{jobEntry.job.errorCount === 1 ? "" : "s"}
                 </span>
               {/if}
               {#if jobEntry.job.warningCount > 0}
-                <span class="mini-chip flex-none rounded-full bg-muted px-2 text-ui-tiny leading-[1.5] font-medium text-muted-foreground">
+                <span class="mini-chip flex-none rounded-full bg-muted px-2 text-ui-micro leading-[1.5] font-medium text-muted-foreground">
                   {jobEntry.job.warningCount} warning{jobEntry.job.warningCount === 1
                     ? ""
                     : "s"}
@@ -729,7 +762,7 @@
                   ) ||
                   runDurationLabel(step.firstTime, step.lastTime)}
                 <section
-                  class="log-step border-t border-border/40 transition-colors duration-200 {highlightedStepKey === step.key
+                  class="log-step border-t border-border/40 transition-colors duration-[120ms] {highlightedStepKey === step.key
                     ? "bg-primary/[0.14] outline-1 outline-primary"
                     : ""}"
                   class:step-failed={step.conclusion === "failure" || step.errorCount > 0}
@@ -764,12 +797,12 @@
                       <span class="muted step-lines mr-ui-35 text-ui-micro font-normal text-muted-foreground">{lineLabel(step.lineCount)}</span>
                     {/if}
                     {#if step.errorCount > 0}
-                      <span class="mini-chip flex-none rounded-full bg-destructive/15 px-2 text-ui-tiny leading-[1.5] font-medium text-destructive">
+                      <span class="mini-chip flex-none rounded-full bg-destructive/15 px-2 text-ui-micro leading-[1.5] font-medium text-destructive">
                         {step.errorCount} error{step.errorCount === 1 ? "" : "s"}
                       </span>
                     {/if}
                     {#if step.warningCount > 0}
-                      <span class="mini-chip flex-none rounded-full bg-muted px-2 text-ui-tiny leading-[1.5] font-medium text-muted-foreground">
+                      <span class="mini-chip flex-none rounded-full bg-muted px-2 text-ui-micro leading-[1.5] font-medium text-muted-foreground">
                         {step.warningCount} warning{step.warningCount === 1 ? "" : "s"}
                       </span>
                     {/if}

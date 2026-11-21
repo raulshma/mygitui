@@ -275,7 +275,7 @@
       {#each projects as project (project.kind + ":" + project.path)}
         <li class="project-card flex flex-col gap-ui-4 rounded-lg border border-border bg-card px-2 py-ui-45">
           <div class="project-head flex min-w-0 flex-wrap items-baseline gap-ui-4">
-            <span class="project-kind flex-none text-ui-tiny font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
+            <span class="project-kind flex-none text-ui-meta font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
             <Hint label={project.name}>
               {#snippet child({ props })}
                 <span class="project-name min-w-0 truncate text-ui-meta font-semibold" {...props}>{project.name}</span>
@@ -291,7 +291,7 @@
             <Hint label={`Detected from ${project.detected_from.join(", ")}`}>
               {#snippet child({ props })}
                 <span
-                  class="project-from ml-auto max-w-[55%] truncate text-ui-tiny text-muted-foreground opacity-75"
+                  class="project-from ml-auto max-w-[55%] truncate text-ui-meta text-muted-foreground opacity-75"
                   {...props}
                 >
                   {project.detected_from.join(", ")}
@@ -318,18 +318,18 @@
                     <span class="script-label min-w-0 flex-1 truncate text-xs font-medium">{script.label}</span>
                     <Badge
                       variant="outline"
-                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-ui-35 py-px text-ui-tiny font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+                      class={`script-kind ${script.watch ? "watch" : ""} h-auto flex-none rounded-full border-transparent px-ui-35 py-px text-ui-micro font-semibold uppercase tracking-[0.03em] ${script.watch ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
                     >
                       {script.watch ? "watch" : scriptKindLabel(script.kind)}
                     </Badge>
                     {#if running}
-                      <span class="script-state flex-none text-ui-tiny text-primary">running…</span>
+                      <span class="script-state flex-none text-ui-meta text-primary">running…</span>
                     {/if}
                   </Button>
                   <span class="script-command-row flex min-w-0 items-center gap-ui-2 border-t border-border pb-ui-15 pl-ui-4 pr-ui-2 pt-ui-15">
                     <Hint label={script.command}>
                       {#snippet child({ props })}
-                        <code class="script-command min-w-0 flex-1 font-mono text-ui-tiny leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" {...props}>{script.command}</code>
+                        <code class="script-command min-w-0 flex-1 font-mono text-ui-meta leading-[1.35] text-muted-foreground [overflow-wrap:anywhere]" {...props}>{script.command}</code>
                       {/snippet}
                     </Hint>
                     <Hint label="Copy command">

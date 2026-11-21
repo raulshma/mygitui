@@ -57,10 +57,34 @@
  * - `popout.ts` — WebviewWindow popouts for `diff` / `history`
  *   (`?panel=<id>&repo=<id>` query contract, guarded outside Tauri).
  * - `splitPrefs.ts` — persisted ratios for panel-internal splitters
- *   (`SplitPane`: history list ↔ detail, detail meta ↔ diff).
+ *   (`SplitPane`: history list ↔ detail, detail meta ↔ diff) plus the
+ *   per-width-mode open/closed state overlay drawers persist.
+ * - `widthMode.svelte.ts` — the reactive window width modes (Wide/Medium/
+ *   Narrow/Stacked, plan §4.2) mirrored onto `<html data-width-mode="…">`;
+ *   the `wm-*` custom variants in `src/app.css` key off it.
+ * - `drawerPlan.ts` — the pure §10 responsive-matrix drawer plan: which
+ *   panel drawerizes at which width mode and from which edge, the
+ *   fresh-install open fallbacks, the never-empty-the-workspace guard, and
+ *   the shared host chrome/handler contract (dispatching to the stacked
+ *   full-screen chrome for `stacked: true` bindings). Unit tested, no
+ *   runes/DOM.
+ * - `workspaceDrawers.svelte.ts` — the reactive per-mode drawer open/closed
+ *   state, persisted through `splitPrefs` (`DRAWER_PREF_KEY`); consumed by
+ *   `RepoView` (which owns toggles, focus return and the §10 rail/toggle
+ *   affordances).
+ * - `stackedPlan.ts` — the pure §10 Stacked (<800px) fallback plan: the
+ *   bottom tab bar's inventory (5 primary views + More), display labels,
+ *   and the full-screen keep-alive host chrome. Unit tested, no
+ *   runes/DOM.
+ * - `workspaceStacked.svelte.ts` — the reactive active stacked view
+ *   (hydrated once per session, persisted through
+ *   `mygitui.stacked.view`); consumed by `RepoView` (which owns view
+ *   routing and host bindings).
+ * - `containerWidth.svelte.ts` — ResizeObserver width tracking for
+ *   structure-switching layouts (§4.2 "a panel adapts to its width").
  * - `../components/layout/SplitContainer.svelte` — recursive renderer for
  *   the tree (draggable + keyboard-accessible dividers, collapsed-pane
- *   hiding via `collapsedIds`).
+ *   hiding via `collapsedIds`, §10 overlay-drawer panes via `drawerPanes`).
  * - `../components/layout/ActivityBar.svelte` — VSCode-style icon rail that
  *   switches the primary sidebar and toggles it without unmounting.
  * - `../components/layout/SplitPane.svelte` — generic two-pane splitter for
@@ -75,8 +99,8 @@
  * - `mygitui.layouts.overlay.<repoRoot>` — per-repo overlay
  *   (`{ presetId?, treeOverride?, ratios?, activeTabs?, diffRatio?,
  *   leftCollapsed?, rightCollapsed? }`).
- * - `mygitui.split.<name>` — panel-internal splitter ratios (global prefs;
- *   see `splitPrefs.ts`).
+ * - `mygitui.split.<name>` — panel-internal splitter ratios + per-width-mode
+ *   open/closed state (global prefs; see `splitPrefs.ts`).
  *
  * All writes go through a 150 ms debounce; storage is injectable for tests.
  */

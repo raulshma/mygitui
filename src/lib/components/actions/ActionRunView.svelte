@@ -260,7 +260,7 @@
             <Button
               variant="outline"
               size="xs"
-              class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+              class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-micro"
               {...props}
               type="button"
               onclick={onPopout}
@@ -339,7 +339,7 @@
         <h3 class="pane-title m-0 text-xs font-semibold text-foreground">Output</h3>
         <Badge
           variant="outline"
-          class={`log-state ${live ? "live" : ""} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-tiny ${live ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
+          class={`log-state ${live ? "live" : ""} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro ${live ? "bg-secondary text-secondary-foreground" : "bg-muted text-muted-foreground"}`}
         >
           {live ? "Live" : "Finished"}
         </Badge>
@@ -351,7 +351,7 @@
             <Toggle
               variant="outline"
               size="sm"
-              class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+              class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-micro"
               {...props}
               bind:pressed={follow}
             >
@@ -359,7 +359,7 @@
             </Toggle>
           {/snippet}
         </Hint>
-        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny" type="button" onclick={() => void copyLog()}>
+        <Button variant="outline" size="xs" class="tb flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] text-muted-foreground @max-[38rem]:px-2 @max-[38rem]:text-ui-micro" type="button" onclick={() => void copyLog()}>
           Copy log
         </Button>
         <!-- M13: AI diagnosis next to Copy log once the run failed. -->
@@ -386,7 +386,7 @@
               <Button
                 variant="destructive"
                 size="xs"
-                class="tb danger flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] @max-[38rem]:px-2 @max-[38rem]:text-ui-tiny"
+                class="tb danger flex-none rounded-full px-2.5 text-ui-micro leading-[1.4] @max-[38rem]:px-2 @max-[38rem]:text-ui-micro"
                 {...props}
                 type="button"
                 onclick={cancelRun}

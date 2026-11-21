@@ -108,6 +108,25 @@ fn commit_hooks_active(repo: &Repository) -> bool {
         .any(|kind| hook_active(repo, kind))
 }
 
+/// The `git commit -s` message: one `Signed-off-by: Name <email>` trailer
+/// built from the committer identity, appended after a blank line. An
+/// identical trailer already present is not duplicated (git's trailer
+/// dedupe); a differently formatted trailer for the same person still
+/// appends, like git's own trailer handling.
+fn signed_off_message(message: &str, committer: &Signature<'_>) -> String {
+    let name = committer.name().unwrap_or_default().trim();
+    let email = committer.email().unwrap_or_default().trim();
+    let trailer = format!("Signed-off-by: {name} <{email}>");
+    let body = message.trim_end();
+    if body.lines().any(|line| line.trim() == trailer) {
+        return body.to_string();
+    }
+    if body.is_empty() {
+        return trailer;
+    }
+    format!("{body}\n\n{trailer}")
+}
+
 /// Is `kind` present and runnable? `pre-push` gating lives in the push lane
 /// (netops), which cannot execute hooks through libgit2.
 pub(crate) fn hook_active(repo: &Repository, kind: &str) -> bool {
@@ -406,6 +425,14 @@ impl Libgit2Engine {
                 "committer identity not configured (set user.name / user.email): {e}"
             ))
         })?;
+        // `git commit -s`: one `Signed-off-by:` trailer for the configured
+        // committer, appended to the message the caller supplied (an
+        // identical existing trailer is never duplicated).
+        let message = if opts.signoff {
+            signed_off_message(&opts.message, &committer)
+        } else {
+            opts.message.clone()
+        };
         let override_author = opts
             .author
             .as_ref()
@@ -445,14 +472,7 @@ impl Libgit2Engine {
             // then force-move the ref HEAD points at (the branch when
             // attached, HEAD itself when detached) — `git commit --amend`.
             let head_ref = repo.find_reference("HEAD")?;
-            let oid = repo.commit(
-                None,
-                &author,
-                &committer,
-                &opts.message,
-                &tree,
-                &parent_refs,
-            )?;
+            let oid = repo.commit(None, &author, &committer, &message, &tree, &parent_refs)?;
             let ref_name = head_ref
                 .symbolic_target()
                 .ok()
@@ -466,7 +486,7 @@ impl Libgit2Engine {
                 Some("HEAD"),
                 &author,
                 &committer,
-                &opts.message,
+                &message,
                 &tree,
                 &parent_refs,
             )?
@@ -526,4 +546,53 @@ fn signature_from_model(sig: &GitSignature) -> EngineResult<Signature<'static>> 
             sig.name, sig.email, e
         ))
     })
+}
+
+#[cfg(test)]
+mod signoff_tests {
+    use super::signed_off_message;
+    use git2::Signature;
+
+    fn committer() -> Signature<'static> {
+        Signature::new("Ada Lovelace", "ada@example.com", &git2::Time::new(0, 0)).unwrap()
+    }
+
+    #[test]
+    fn appends_trailer_after_blank_line() {
+        let out = signed_off_message("subject\n\nbody", &committer());
+        assert_eq!(
+            out,
+            "subject\n\nbody\n\nSigned-off-by: Ada Lovelace <ada@example.com>"
+        );
+    }
+
+    #[test]
+    fn single_line_body_gets_separated_trailer() {
+        let out = signed_off_message("subject", &committer());
+        assert_eq!(
+            out,
+            "subject\n\nSigned-off-by: Ada Lovelace <ada@example.com>"
+        );
+    }
+
+    #[test]
+    fn identical_trailer_is_not_duplicated() {
+        let msg = "subject\n\nSigned-off-by: Ada Lovelace <ada@example.com>";
+        assert_eq!(signed_off_message(msg, &committer()), msg);
+        // Trailing whitespace on the existing trailer still counts.
+        let padded = "subject\n\nSigned-off-by: Ada Lovelace <ada@example.com>  ";
+        assert_eq!(signed_off_message(padded, &committer()), padded.trim_end());
+    }
+
+    #[test]
+    fn different_trailer_still_appends() {
+        let out = signed_off_message(
+            "subject\n\nSigned-off-by: Someone Else <else@example.com>",
+            &committer(),
+        );
+        assert_eq!(
+            out,
+            "subject\n\nSigned-off-by: Someone Else <else@example.com>\n\nSigned-off-by: Ada Lovelace <ada@example.com>"
+        );
+    }
 }

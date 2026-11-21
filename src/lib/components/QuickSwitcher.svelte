@@ -1,9 +1,12 @@
 <script lang="ts">
   /**
-   * Quick switcher overlay (cmd/ctrl+K, B4 lane).
+   * Quick switcher overlay (cmd/ctrl+Shift+K as of §11 — it ceded Ctrl+K to
+   * the command palette and its toggle moved onto the keybind engine as the
+   * `app.quick-switcher` command, so the combo shows up in the `?`
+   * cheatsheet and is rebindable in Settings like every other shortcut).
    *
    * Mounted once from App.svelte; a `svelte:window` keydown listener owns
-   * the global shortcut (toggle) and Escape. Fuzzy search (scorer + item
+   * Escape (the engine handles the toggle). Fuzzy search (scorer + item
    * building live in `$lib/stores/switcher.svelte`) over open tabs and
    * recent repositories; Enter/click activates — `setActive` for tabs,
    * `openTab` for recents (failures toast, the overlay still closes).
@@ -20,7 +23,6 @@
     isSwitcherOpen,
     rankSwitcherItems,
     toggleItemFavorite,
-    toggleSwitcher,
     type RankedItem,
   } from "$lib/stores/switcher.svelte";
   import { toast } from "$lib/toast";
@@ -127,13 +129,8 @@
   }
 
   function onGlobalKeydown(event: KeyboardEvent): void {
-    const k = event.key.toLowerCase();
-    if ((event.metaKey || event.ctrlKey) && k === "k") {
-      event.preventDefault();
-      query = "";
-      toggleSwitcher();
-      return;
-    }
+    // The toggle combo lives in the keybind engine now (`app.quick-switcher`,
+    // default ctrl/cmd+Shift+K) — this listener only closes on Escape.
     if (open && event.key === "Escape") {
       event.preventDefault();
       close();
@@ -307,7 +304,7 @@
           </li>
         {/if}
       </ul>
-      <footer class="hint px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-ui-micro">↑↓ navigate · ↵ open · esc close · cmd/ctrl+K toggle</footer>
+      <footer class="hint px-4 pt-2 pb-3 border-t border-border text-muted-foreground text-ui-micro">↑↓ navigate · ↵ open · esc close · cmd/ctrl+Shift+K toggle</footer>
     </div>
   </div>
 {/if}

@@ -57,6 +57,32 @@ describe("ShortcutsOverlay", () => {
     expect(screen.getByText("Ctrl+Alt+R")).toBeTruthy();
   });
 
+  it("documents the §11 surface keys (b/h, Ctrl+Shift+Enter) as a static section", async () => {
+    openShortcuts();
+    render(ShortcutsOverlay);
+    await tick();
+
+    // The static "Row & composer keys" section renders alongside the
+    // registry sections (§11: b/h row actions + commit & push in the `?`
+    // popover; Ctrl+Shift+G rides the engine's panel.focus-forge default).
+    expect(screen.getByRole("region", { name: "Row & composer keys commands" })).toBeTruthy();
+    expect(screen.getByText("Commit and push (composer)")).toBeTruthy();
+    expect(screen.getByText("Blame focused file row (commit detail)")).toBeTruthy();
+    expect(screen.getByText("File history for focused row (commit detail)")).toBeTruthy();
+  });
+
+  it("filters match the static surface-key rows too", async () => {
+    openShortcuts();
+    render(ShortcutsOverlay);
+    await tick();
+
+    await fireEvent.input(screen.getByLabelText("Filter shortcuts"), {
+      target: { value: "blame" },
+    });
+    expect(screen.getByText("Blame focused file row (commit detail)")).toBeTruthy();
+    expect(screen.queryByText("Refresh repository status")).toBeNull();
+  });
+
   it("filters per keystroke and shows an empty state", async () => {
     openShortcuts();
     render(ShortcutsOverlay);

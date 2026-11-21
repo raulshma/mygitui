@@ -77,6 +77,25 @@ export interface AppSettingsData {
    * always reads the persisted choice.
    */
   locale: Locale;
+  /**
+   * GitHub snapshot cadence (E1, plan §9.3) for the ACTIVE repo, in seconds.
+   * 0 disables background polling (manual refresh + popovers still work).
+   * Clamped to a 30 s floor (`FORGE_SNAPSHOT_SECONDS_MIN`) — the plan's
+   * floor for user-configurable cadences; inactive-open repos always poll
+   * at the fixed 5-minute rate.
+   */
+  forgeSnapshotSeconds: number;
+  /**
+   * Toast when a repo's GitHub state turns failing (checks/run failed).
+   * Default ON — failures are the one thing the footer may interrupt for
+   * (§9.2); everything else is opt-in.
+   */
+  forgeFailureToasts: boolean;
+  /**
+   * Toast on GitHub activity transitions (run started/finished, PR opened).
+   * Default OFF (opt-in; §9.2 toasts default-on for failures only).
+   */
+  forgeActivityToasts: boolean;
 }
 
 export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
@@ -90,6 +109,9 @@ export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
   aiMonthlyTokenBudget: 0,
   aiBudgetResetDay: 1,
   locale: "en",
+  forgeSnapshotSeconds: 60,
+  forgeFailureToasts: true,
+  forgeActivityToasts: false,
 };
 
 /** Terminal font size bounds shared by the setting and the terminal store. */
@@ -105,6 +127,12 @@ export const UI_SCALE_MIN = 85;
 export const UI_SCALE_MAX = 125;
 /** Slider step; parsing snaps stored values onto the step grid. */
 export const UI_SCALE_STEP = 5;
+
+/** GitHub snapshot cadence bounds (seconds; 0 = off). */
+export const FORGE_SNAPSHOT_SECONDS_MIN = 30;
+export const FORGE_SNAPSHOT_SECONDS_MAX = 3600;
+/** Fixed cadence of inactive-open repos' snapshot lanes (plan §9.3). */
+export const FORGE_INACTIVE_SNAPSHOT_MS = 5 * 60_000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -152,6 +180,28 @@ export function parseAppSettings(data: unknown): AppSettingsData {
   // Only registered locales pass; anything else re-defaults (the i18n
   // catalog itself falls back to English, then the key).
   if (raw.locale === "en") out.locale = raw.locale;
+  if (
+    typeof raw.forgeSnapshotSeconds === "number" &&
+    Number.isFinite(raw.forgeSnapshotSeconds)
+  ) {
+    out.forgeSnapshotSeconds = Math.round(
+      clamp(raw.forgeSnapshotSeconds, 0, FORGE_SNAPSHOT_SECONDS_MAX),
+    );
+    // A non-zero value below the floor is lifted to the floor (the plan's
+    // 30 s minimum for user-configurable cadences); 0 stays "off".
+    if (
+      out.forgeSnapshotSeconds > 0 &&
+      out.forgeSnapshotSeconds < FORGE_SNAPSHOT_SECONDS_MIN
+    ) {
+      out.forgeSnapshotSeconds = FORGE_SNAPSHOT_SECONDS_MIN;
+    }
+  }
+  if (typeof raw.forgeFailureToasts === "boolean") {
+    out.forgeFailureToasts = raw.forgeFailureToasts;
+  }
+  if (typeof raw.forgeActivityToasts === "boolean") {
+    out.forgeActivityToasts = raw.forgeActivityToasts;
+  }
   return out;
 }
 
@@ -222,6 +272,21 @@ export class AppSettingsStore {
   /** Day of month the AI budget window resets on (1–31). */
   get aiBudgetResetDay(): number {
     return this.#value.aiBudgetResetDay;
+  }
+
+  /** Active-repo GitHub snapshot cadence in seconds (0 = off). */
+  get forgeSnapshotSeconds(): number {
+    return this.#value.forgeSnapshotSeconds;
+  }
+
+  /** Toast on GitHub failures (default on). */
+  get forgeFailureToasts(): boolean {
+    return this.#value.forgeFailureToasts;
+  }
+
+  /** Toast on GitHub activity transitions (default off). */
+  get forgeActivityToasts(): boolean {
+    return this.#value.forgeActivityToasts;
   }
 
   /** Patch settings and persist (partial update, validated on write). */

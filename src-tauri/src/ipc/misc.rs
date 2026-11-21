@@ -141,3 +141,28 @@ pub async fn project_detect(
         .await
         .map_err(|e| format!("project_detect task failed: {e}"))
 }
+
+// ---------------------------------------------------------------------------
+// `export_text` — the FE save-dialog + write flow for text exports (E2
+// workflow-run log download; the same pickSaveFile-then-backend-write
+// shape as the M11 archive export). The destination reaches this command
+// straight from the native save dialog, but it gets the same
+// metacharacter/option guard as every other CLI-adjacent lane (`archive`):
+// never a shell arg here, yet a leading `-` or control chars still mean
+// corruption, not a path. The contents ride the IPC payload as plain
+// bytes.
+// ---------------------------------------------------------------------------
+
+/// Writes UTF-8 `contents` to `destination` (native save-dialog path).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_text(destination: String, contents: String) -> Result<(), String> {
+    if !crate::maintenance::cli_arg_ok(&destination) {
+        return Err("invalid destination path".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&destination, contents.as_bytes())
+            .map_err(|e| format!("writing `{destination}`: {e}"))
+    })
+    .await
+    .map_err(|e| format!("export_text task failed: {e}"))?
+}

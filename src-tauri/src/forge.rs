@@ -53,7 +53,7 @@ pub const ACTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `--json` field list shared by `pr_list` (all optional fields parse
 /// tolerantly, so older gh versions still work).
-pub const PR_LIST_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,state,isDraft,url,createdAt,updatedAt,mergedAt,closedAt,author,body,additions,deletions,changedFiles,reviewDecision,mergeable,labels";
+pub const PR_LIST_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,state,isDraft,url,createdAt,updatedAt,mergedAt,closedAt,author,body,additions,deletions,changedFiles,reviewDecision,mergeable,labels,headRefOid";
 
 /// How many PRs `pr_list` requests (`gh pr list --limit`).
 pub const PR_LIST_LIMIT: usize = 50;
@@ -170,6 +170,9 @@ pub struct PrInfo {
     pub number: u64,
     pub title: String,
     pub head_ref_name: String,
+    /// Head commit sha (`headRefOid`; "" when gh omits it) — the snapshot
+    /// uses it to detect PR-head vs local-HEAD divergence.
+    pub head_ref_oid: String,
     pub base_ref_name: String,
     /// `OPEN` | `MERGED` | `CLOSED` (verbatim gh value).
     pub state: String,
@@ -375,20 +378,28 @@ pub struct ForgeNotification {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
 #[ts(export)]
 pub struct ForgeError {
-    /// `NoGh` | `NotAuthed` | `AlreadyExists` | `Other` (kept as a
-    /// string-literal union in the generated TS type — the FE narrows it
-    /// via `ForgeFailureKind`; values are the `KIND_*` consts).
-    #[ts(type = "\"NoGh\" | \"NotAuthed\" | \"AlreadyExists\" | \"Other\"")]
+    /// `NoGh` | `NotAuthed` | `AlreadyExists` | `NotRepo` | `RateLimited` |
+    /// `Offline` | `Other` (kept as a string-literal union in the generated
+    /// TS type — the FE narrows it via `ForgeFailureKind`; values are the
+    /// `KIND_*` consts).
+    #[ts(
+        type = "\"NoGh\" | \"NotAuthed\" | \"AlreadyExists\" | \"NotRepo\" | \"RateLimited\" | \"Offline\" | \"Other\""
+    )]
     pub kind: String,
     pub message: String,
     /// For `AlreadyExists`: the existing PR's URL when parseable.
     pub url: Option<String>,
 }
 
-/// `ForgeError.kind` values (contracts.md).
+/// `ForgeError.kind` values (contracts.md; E1 adds the degraded-chip kinds —
+/// `NotRepo` for non-GitHub/missing remotes, `RateLimited` for 403-quota
+/// responses, `Offline` for network-down failures).
 pub const KIND_NO_GH: &str = "NoGh";
 pub const KIND_NOT_AUTHED: &str = "NotAuthed";
 pub const KIND_ALREADY_EXISTS: &str = "AlreadyExists";
+pub const KIND_NOT_REPO: &str = "NotRepo";
+pub const KIND_RATE_LIMITED: &str = "RateLimited";
+pub const KIND_OFFLINE: &str = "Offline";
 pub const KIND_OTHER: &str = "Other";
 
 impl ForgeError {
@@ -515,34 +526,58 @@ fn recv_lossy(rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> String {
 /// compared case-insensitively, `www.` stripped, `.git` suffix optional):
 /// `https://github.com/o/r`, `http|ssh|git://[git@]github.com/o/r(.git)`,
 /// scp-like `git@github.com:o/r(.git)`. Non-GitHub hosts and anything with
-/// fewer/more than two path segments yield `None`.
+/// fewer/more than two path segments yield `None`. (Production resolution
+/// goes through [`parse_github_remote_with_hosts`] with the authed-host
+/// cache; this github.com-only form stays as the documented helper.)
+#[allow(dead_code)]
 pub fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    parse_github_remote_with_hosts(url, &[])
+}
+
+/// Host token of a URL authority (lowercased, `www.` stripped, port and
+/// userinfo dropped) — the comparison form for the allowed-host list.
+fn normalize_host_token(raw: &str) -> String {
+    let host = raw.trim();
+    // Drop userinfo (`git@`) and port (`:22`).
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    host.strip_prefix("www.").unwrap_or(&host).to_owned()
+}
+
+/// [`parse_github_remote`] against an allowed-host list: `github.com` always
+/// matches, plus every host `gh auth status` reported (E1 — GitHub Enterprise
+/// remotes resolve on the same machine gh is authed for). Hosts compare
+/// case-insensitively with `www.` stripped. Unknown hosts (a coworker's ssh
+/// dev-machine alias) yield `None` — the FE renders the muted "off" chip.
+pub fn parse_github_remote_with_hosts(
+    url: &str,
+    allowed_hosts: &[String],
+) -> Option<(String, String)> {
     let url = url.trim();
     if url.is_empty() {
         return None;
     }
 
-    let (host, path) = if let Some((scheme, rest)) = url.split_once("://") {
-        let _ = scheme; // any scheme (https/http/ssh/git/git+ssh); the host gates
+    let (host, path) = if let Some((_scheme, rest)) = url.split_once("://") {
+        // Any scheme (https/http/ssh/git/git+ssh); the host gates.
         let (authority, path) = match rest.find('/') {
             Some(idx) => (&rest[..idx], &rest[idx + 1..]),
             None => (rest, ""),
         };
-        // Drop userinfo (`git@`) and port (`:22`).
-        let host = authority.rsplit('@').next().unwrap_or(authority);
-        let host = host.split(':').next().unwrap_or(host);
-        (host, path)
+        (normalize_host_token(authority), path)
     } else {
         let colon = url.find(':')?;
         // scp-like: `git@github.com:owner/repo.git` (no scheme).
         let authority = &url[..colon];
-        let host = authority.rsplit('@').next().unwrap_or(authority);
-        (host, &url[colon + 1..])
+        (normalize_host_token(authority), &url[colon + 1..])
     };
 
-    let host = host.trim().to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host);
-    if host != "github.com" {
+    let host_allowed = host == "github.com"
+        || allowed_hosts
+            .iter()
+            .any(|h| normalize_host_token(h) == host);
+    if !host_allowed {
         return None;
     }
     let path = path.trim().trim_end_matches('/');
@@ -559,6 +594,95 @@ pub fn parse_github_remote(url: &str) -> Option<(String, String)> {
         return None;
     }
     Some((owner.to_owned(), repo.to_owned()))
+}
+
+/// Hosts `gh auth status` reported, parsed from its output ("✓ Logged in to
+/// <host> account …"; older gh printed "as <user>" after the host). Pure,
+/// fixture-tested.
+pub fn gh_auth_hosts(output: &str) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for line in output.lines() {
+        let Some(idx) = line.to_ascii_lowercase().find("logged in to ") else {
+            continue;
+        };
+        let rest = &line[idx + "logged in to ".len()..];
+        let token = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c: char| ".,:;()".contains(c));
+        if token.is_empty() {
+            continue;
+        }
+        let host = normalize_host_token(token);
+        if host.is_empty() || host == "account" || host == "as" {
+            continue;
+        }
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
+/// The default host: `github.com` is always resolvable (plan §9.1).
+pub const DEFAULT_GITHUB_HOST: &str = "github.com";
+
+/// Process-global cache of hosts reported by `gh auth status` (`github.com`
+/// always included). Refreshed by [`status_sync`] on auth-state change and by
+/// [`hosts_sync`] (the manual-refresh command).
+static AUTHED_HOSTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The currently cached host list (`github.com` first; never empty).
+pub fn cached_hosts() -> Vec<String> {
+    match AUTHED_HOSTS.lock() {
+        Ok(guard) => {
+            let mut hosts = vec![DEFAULT_GITHUB_HOST.to_string()];
+            for host in guard.iter() {
+                if host != DEFAULT_GITHUB_HOST && !hosts.contains(host) {
+                    hosts.push(host.clone());
+                }
+            }
+            hosts
+        }
+        Err(_) => vec![DEFAULT_GITHUB_HOST.to_string()],
+    }
+}
+
+/// Replaces the cache with `hosts` (deduped, `github.com` ensured). Only
+/// non-empty input replaces — `gh auth status` on an unauthed machine prints
+/// no accounts and must not wipe previously learned Enterprise hosts.
+pub fn cache_authed_hosts(hosts: Vec<String>) {
+    let learned: Vec<String> = hosts
+        .into_iter()
+        .map(|h| normalize_host_token(&h))
+        .filter(|h| !h.is_empty())
+        .collect();
+    if learned.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = AUTHED_HOSTS.lock() {
+        *guard = learned;
+    }
+}
+
+/// Refresh the host cache from `gh auth status` output (no-op on failure).
+fn refresh_hosts_from_auth() {
+    let outcome = run_program(
+        GH,
+        None,
+        &["auth".to_string(), "status".to_string()],
+        AUTH_TIMEOUT,
+    );
+    let hosts = gh_auth_hosts(&format!("{}\n{}", outcome.stdout, outcome.stderr));
+    cache_authed_hosts(hosts);
+}
+
+/// Body of the manual host-refresh command: re-runs `gh auth status`, caches
+/// what it reports and returns the live list.
+pub fn hosts_sync() -> Vec<String> {
+    refresh_hosts_from_auth();
+    cached_hosts()
 }
 
 /// Parse the version token out of `gh --version` output
@@ -592,7 +716,9 @@ fn canonical_bucket(bucket: &str) -> Option<&'static str> {
 fn check_state_from_state(state: &str) -> &'static str {
     match state.to_ascii_uppercase().as_str() {
         "SUCCESS" => "pass",
-        "FAILURE" | "ERROR" | "CANCELLED" => "fail",
+        "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+            "fail"
+        }
         "SKIPPING" | "SKIPPED" | "NEUTRAL" | "BLANK" => "skipping",
         _ => "pending",
     }
@@ -643,6 +769,7 @@ pub fn parse_pr_list_json(payload: &str) -> Vec<PrInfo> {
                 number,
                 title: string_field("title"),
                 head_ref_name: string_field("headRefName"),
+                head_ref_oid: string_field("headRefOid"),
                 base_ref_name: string_field("baseRefName"),
                 state: string_field("state"),
                 is_draft: item
@@ -724,6 +851,15 @@ fn json_u64(item: &serde_json::Value, key: &str) -> u64 {
 fn json_author_login(item: &serde_json::Value) -> String {
     item.get("author")
         .and_then(|author| author.get("login"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Author login of a REST JSON object (`user.login`; `""` when missing).
+fn json_rest_user_login(item: &serde_json::Value) -> String {
+    item.get("user")
+        .and_then(|user| user.get("login"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_owned()
@@ -1128,7 +1264,29 @@ const AUTH_MARKERS: [&str; 5] = [
     "gh: to get started",
 ];
 
+/// stderr markers (lowercased haystack) that mean GitHub answered 403 with a
+/// quota message (the rate-limited degraded state; FE shows "retry in Xm").
+const RATE_LIMIT_MARKERS: [&str; 3] = [
+    "rate limit exceeded",
+    "secondary rate limit",
+    "abuse detection",
+];
+
+/// stderr markers (lowercased haystack) that mean the machine has no usable
+/// network path to GitHub (the offline degraded state).
+const OFFLINE_MARKERS: [&str; 6] = [
+    "could not resolve host",
+    "no such host",
+    "connection refused",
+    "connection reset by peer",
+    "network unreachable",
+    "dial tcp",
+];
+
 /// Classify one failed gh run into a [`ForgeError`] (contracts.md kinds).
+/// Order matters: quota 403s mention auth ("here's the good news: auth") and
+/// must classify as `RateLimited` before the auth markers run; offline
+/// markers win over the catch-all.
 pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
     if let Some(err) = spawn_error {
         return ForgeError {
@@ -1147,10 +1305,27 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
         };
     }
     let lower = combined.to_ascii_lowercase();
+    if RATE_LIMIT_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return ForgeError {
+            kind: KIND_RATE_LIMITED.to_string(),
+            message: "GitHub API rate limit reached — retrying with backoff; `gh auth status` shows the account's quota".to_string(),
+            url: None,
+        };
+    }
     if AUTH_MARKERS.iter().any(|marker| lower.contains(marker)) {
         return ForgeError {
             kind: KIND_NOT_AUTHED.to_string(),
             message: "gh is not authenticated — run `gh auth login`".to_string(),
+            url: None,
+        };
+    }
+    if OFFLINE_MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return ForgeError {
+            kind: KIND_OFFLINE.to_string(),
+            message: "GitHub is unreachable — check the network connection".to_string(),
             url: None,
         };
     }
@@ -1181,6 +1356,8 @@ fn trim_message(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Body of `forge_status` (no repository needed): PATH probe + auth check.
+/// A successful auth probe also refreshes the authed-host cache (plan §9.1:
+/// hosts refresh on auth-state change).
 pub fn status_sync() -> ForgeStatus {
     let probe = run_program(GH, None, &["--version".to_string()], VERSION_TIMEOUT);
     if probe.spawn_error.is_some() {
@@ -1193,44 +1370,99 @@ pub fn status_sync() -> ForgeStatus {
         &["auth".to_string(), "status".to_string()],
         AUTH_TIMEOUT,
     );
+    let authed = !auth.timed_out && auth.code == Some(0);
+    // Host cache refresh rides the auth probe (both an authed run — which
+    // lists accounts — and an unauthed one still print host context).
+    let hosts = gh_auth_hosts(&format!("{}\n{}", auth.stdout, auth.stderr));
+    cache_authed_hosts(hosts);
     ForgeStatus {
         available: true,
         version,
-        authed: !auth.timed_out && auth.code == Some(0),
+        authed,
     }
 }
 
-/// Body of `forge_context`: owner/repo from the `origin` remote (git2) plus
-/// the current branch. Opens its own short-lived `git2::Repository` (a read
-/// that touches no shared engine state).
-pub fn context_sync(root: &Path) -> Result<ForgeContext, String> {
-    let repo = git2::Repository::discover(root).map_err(|e| format!("not a repository: {e}"))?;
-    let remote = repo
-        .find_remote("origin")
-        .map_err(|_| "no `origin` remote configured — the gh flow needs one".to_string())?;
-    let remote_url = remote
-        .url()
-        .map(str::to_owned)
-        .map_err(|_| "origin has no URL".to_string())?;
-    let (owner, name) = parse_github_remote(&remote_url)
-        .ok_or_else(|| format!("origin is not a GitHub remote: {remote_url}"))?;
+/// A GitHub remote resolved from one open repository: the owner/repo pair
+/// plus the remote's name and URL (E1 — the snapshot and the remote-override
+/// UI both report what was resolved).
+pub struct ResolvedRemote {
+    pub remote_name: String,
+    pub remote_url: String,
+    pub owner: String,
+    pub repo: String,
+}
+
+/// Shared tail of context/snapshot resolution: open the repo (short-lived
+/// `git2::Repository`, a read that touches no shared engine state), find
+/// `remote` (default `origin`; the per-repo override wins) and parse it
+/// against the cached authed-host list. Failures are structured
+/// [`ForgeError`]s with kind `NotRepo` (missing remote / not GitHub) — the
+/// FE's degraded "off" chip shows the reason verbatim.
+pub fn resolve_remote(
+    root: &Path,
+    remote_override: Option<&str>,
+) -> Result<ResolvedRemote, ForgeError> {
+    let remote_name = remote_override
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("origin")
+        .to_owned();
+    let repo = git2::Repository::discover(root)
+        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+    let remote = repo.find_remote(&remote_name).map_err(|_| ForgeError {
+        kind: KIND_NOT_REPO.to_string(),
+        message: format!("no `{remote_name}` remote configured — the GitHub flow needs one"),
+        url: None,
+    })?;
+    let remote_url = remote.url().map(str::to_owned).map_err(|_| ForgeError {
+        kind: KIND_NOT_REPO.to_string(),
+        message: format!("`{remote_name}` has no URL"),
+        url: None,
+    })?;
+    let (owner, name) =
+        parse_github_remote_with_hosts(&remote_url, &cached_hosts()).ok_or_else(|| ForgeError {
+            kind: KIND_NOT_REPO.to_string(),
+            message: format!("`{remote_name}` is not a GitHub remote: {remote_url}"),
+            url: None,
+        })?;
+    Ok(ResolvedRemote {
+        remote_name,
+        remote_url,
+        owner,
+        repo: name,
+    })
+}
+
+/// Body of `forge_context`: owner/repo from the remote (git2) plus the
+/// current branch. `remote_override` selects a non-default remote (per-repo
+/// override, E1). Rejection is the structured [`ForgeError`] (`NotRepo` for
+/// remote problems) so the FE can render named degraded states.
+pub fn context_sync(
+    root: &Path,
+    remote_override: Option<&str>,
+) -> Result<ForgeContext, ForgeError> {
+    let resolved = resolve_remote(root, remote_override)?;
+    let repo = git2::Repository::discover(root)
+        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
     if repo.head_detached().unwrap_or(false) {
-        return Err("detached HEAD — check out a branch to work with pull requests".to_string());
+        return Err(ForgeError::other(
+            "detached HEAD — check out a branch to work with pull requests",
+        ));
     }
     let head = repo
         .head()
-        .map_err(|e| format!("repository has no HEAD: {e}"))?;
+        .map_err(|e| ForgeError::other(format!("repository has no HEAD: {e}")))?;
     let branch = head
         .shorthand()
-        .map_err(|e| format!("current branch could not be determined: {e}"))?;
+        .map_err(|e| ForgeError::other(format!("current branch could not be determined: {e}")))?;
     if branch.is_empty() || branch == "HEAD" {
-        return Err("current branch could not be determined".to_string());
+        return Err(ForgeError::other("current branch could not be determined"));
     }
     Ok(ForgeContext {
-        owner,
-        repo: name,
+        owner: resolved.owner,
+        repo: resolved.repo,
         branch: branch.to_owned(),
-        remote_url,
+        remote_url: resolved.remote_url,
     })
 }
 
@@ -2105,4 +2337,676 @@ pub fn workflow_list_sync(root: &Path) -> Result<Vec<WorkflowInfo>, String> {
     ];
     let output = read_gh(root, &args, RUNS_TIMEOUT)?;
     Ok(parse_workflow_list_json(&output))
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot (E1, plan §9.3): one batched read of the branch's live GitHub
+// state — branch PR, HEAD check-runs, PR-head check-runs, latest branch run
+// — fanned out over at most 4 CONCURRENT gh calls, with content hashes so
+// unchanged snapshots skip FE re-renders.
+// ---------------------------------------------------------------------------
+
+/// Content hashes of a [`ForgeSnapshot`]'s four parts (FNV-1a over the
+/// serialized part). Equal hashes ⇒ the FE keeps its previous render.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeSnapshotHashes {
+    pub pr: u64,
+    pub head_checks: u64,
+    pub pr_head_checks: u64,
+    pub run: u64,
+}
+
+/// One repo's batched GitHub snapshot (E1 footer chips + popovers).
+#[derive(Debug, Clone, Serialize, PartialEq, TS)]
+#[ts(export)]
+pub struct ForgeSnapshot {
+    /// Current branch shorthand (`None` on detached HEAD — no branch PR/run
+    /// then, but HEAD checks still resolve).
+    pub branch: Option<String>,
+    /// HEAD commit sha (`None` on an unborn repo).
+    pub head_sha: Option<String>,
+    /// HEAD is reachable from the remote-tracking branch (`Some(false)` =
+    /// unpushed; `None` = unknown — no tracking ref).
+    pub pushed: Option<bool>,
+    /// The branch's PR, open one preferred (merged/closed kept for the chip's
+    /// merged/closed states).
+    pub pr: Option<PrInfo>,
+    /// Commit-level check-runs of the local HEAD sha.
+    pub head_checks: Vec<CheckInfo>,
+    /// The branch PR's head sha (`headRefOid`), when gh reported one.
+    pub pr_head_sha: Option<String>,
+    /// PR-head check-runs — fetched only when the PR head differs from the
+    /// local HEAD (`None` = same sha, the head checks cover it).
+    pub pr_head_checks: Option<Vec<CheckInfo>>,
+    /// Latest Actions run for the branch, newest first's first entry.
+    pub run: Option<WorkflowRun>,
+    pub hashes: ForgeSnapshotHashes,
+    /// Highest-priority failure among the snapshot's parts (NoGh beats
+    /// NotAuthed beats RateLimited beats Offline beats Other); `None` when
+    /// every part resolved. Missing individual parts with no error just mean
+    /// "no such object" (no PR / no runs).
+    pub error: Option<ForgeError>,
+}
+
+/// One file of a PR's diff (`forge_pr_files`; REST `pulls/<n>/files`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgePrFile {
+    pub path: String,
+    /// GitHub's file status (`added` | `removed` | `modified` | `renamed` |
+    /// `changed`; verbatim REST value).
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// Unified patch (REST omits it above its size cap / for binaries).
+    pub patch: Option<String>,
+}
+
+/// One review comment of a PR (`forge_pr_review_threads`; REST
+/// `pulls/<n>/comments`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeReviewComment {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub created_at: Option<String>,
+}
+
+/// One review thread (a top-level review comment plus its replies, read-only
+/// for E2's PR-detail view).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[ts(export)]
+pub struct ForgeReviewThread {
+    pub id: u64,
+    pub path: String,
+    /// The commented line (`None` for file-level comments).
+    pub line: Option<u64>,
+    /// GitHub's "outdated" flag (the commented lines have changed).
+    pub outdated: bool,
+    pub author: String,
+    pub body: String,
+    pub created_at: Option<String>,
+    pub replies: Vec<ForgeReviewComment>,
+}
+
+/// FNV-1a 64-bit (pure, fixture-tested) — the snapshot content hash.
+pub fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Content hash of any serializable snapshot part (0 on serialization
+/// failure — a hash collision with real content is harmless: the FE would
+/// just skip a re-render it did not need anyway).
+pub fn hash_serialized<T: serde::Serialize>(value: &T) -> u64 {
+    match serde_json::to_vec(value) {
+        Ok(bytes) => fnv1a64(&bytes),
+        Err(_) => 0,
+    }
+}
+
+/// The branch's PR: the first entry whose head branch matches, preferring
+/// `OPEN` over MERGED/CLOSED (mirrors the FE's `prForBranch`). Pure.
+pub fn branch_pr_of(prs: &[PrInfo], branch: &str) -> Option<PrInfo> {
+    if branch.is_empty() {
+        return None;
+    }
+    let mut open: Option<&PrInfo> = None;
+    let mut other: Option<&PrInfo> = None;
+    for pr in prs {
+        if pr.head_ref_name != branch {
+            continue;
+        }
+        if pr.state == "OPEN" {
+            open = Some(pr);
+        }
+        other = other.or(Some(pr));
+    }
+    open.or(other).cloned()
+}
+
+/// Canonical [`CheckInfo`] state of one REST check-run
+/// (`repos/…/commits/<sha>/check-runs`): a not-completed run is pending; a
+/// completed conclusion maps through the shared token table.
+pub fn check_run_state(status: &str, conclusion: &str) -> &'static str {
+    if status != "completed" || conclusion.is_empty() {
+        return "pending";
+    }
+    check_state_from_state(conclusion)
+}
+
+/// Parse `gh api repos/:owner/:repo/commits/<sha>/check-runs` output
+/// tolerantly (`{check_runs: [...]}`; a bare array also parses). Nameless
+/// entries are skipped.
+pub fn parse_commit_check_runs_json(payload: &str) -> Vec<CheckInfo> {
+    let value: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let runs = match &value {
+        serde_json::Value::Array(items) => items.as_slice(),
+        _ => value
+            .get("check_runs")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+    };
+    runs.iter()
+        .filter_map(|item| {
+            let name = item.get("name")?.as_str()?.trim().to_owned();
+            if name.is_empty() {
+                return None;
+            }
+            let status = item
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let conclusion = item
+                .get("conclusion")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            Some(CheckInfo {
+                name,
+                state: check_run_state(status, conclusion).to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Parse the REST `pulls/<n>/files` payload tolerantly.
+pub fn parse_pr_files_json(payload: &str) -> Vec<ForgePrFile> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let path = item.get("filename")?.as_str()?.trim().to_owned();
+            if path.is_empty() {
+                return None;
+            }
+            Some(ForgePrFile {
+                path,
+                status: item
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("modified")
+                    .to_owned(),
+                additions: item
+                    .get("additions")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                deletions: item
+                    .get("deletions")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                patch: item
+                    .get("patch")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+/// One REST review comment (`pulls/<n>/comments`), ungrouped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawReviewComment {
+    pub id: u64,
+    pub in_reply_to_id: Option<u64>,
+    pub path: String,
+    pub line: Option<u64>,
+    pub outdated: bool,
+    pub author: String,
+    pub body: String,
+    pub created_at: Option<String>,
+}
+
+/// Parse the REST `pulls/<n>/comments` payload tolerantly.
+pub fn parse_review_comments_json(payload: &str) -> Vec<RawReviewComment> {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_u64()?;
+            Some(RawReviewComment {
+                id,
+                in_reply_to_id: item
+                    .get("in_reply_to_id")
+                    .and_then(serde_json::Value::as_u64),
+                path: item
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                line: item.get("line").and_then(serde_json::Value::as_u64),
+                outdated: item
+                    .get("outdated")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                author: json_rest_user_login(&item),
+                body: item
+                    .get("body")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                created_at: json_option_string(&item, "created_at"),
+            })
+        })
+        .collect()
+}
+
+/// Groups flat review comments into threads: top-level comments (no
+/// `in_reply_to_id`) open threads in list order; replies attach to their
+/// parent. A reply whose parent is missing (GitHub pagination) becomes its
+/// own thread rather than being dropped. Pure, fixture-tested.
+pub fn group_review_threads(comments: Vec<RawReviewComment>) -> Vec<ForgeReviewThread> {
+    let mut threads: Vec<ForgeReviewThread> = Vec::new();
+    let mut positions: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    for comment in comments {
+        let to_thread = |comment: &RawReviewComment| ForgeReviewThread {
+            id: comment.id,
+            path: comment.path.clone(),
+            line: comment.line,
+            outdated: comment.outdated,
+            author: comment.author.clone(),
+            body: comment.body.clone(),
+            created_at: comment.created_at.clone(),
+            replies: Vec::new(),
+        };
+        match comment.in_reply_to_id {
+            None => {
+                positions.insert(comment.id, threads.len());
+                threads.push(to_thread(&comment));
+            }
+            Some(parent) => match positions.get(&parent).copied() {
+                Some(index) => threads[index].replies.push(ForgeReviewComment {
+                    id: comment.id,
+                    author: comment.author,
+                    body: comment.body,
+                    created_at: comment.created_at,
+                }),
+                None => {
+                    positions.insert(comment.id, threads.len());
+                    threads.push(to_thread(&comment));
+                }
+            },
+        }
+    }
+    threads
+}
+
+/// Degraded-state priority of an error kind (lower wins — the FE shows the
+/// most fundamental problem first: no gh means nothing else can work).
+fn error_priority(kind: &str) -> u8 {
+    match kind {
+        KIND_NO_GH => 0,
+        KIND_NOT_AUTHED => 1,
+        KIND_RATE_LIMITED => 2,
+        KIND_OFFLINE => 3,
+        _ => 4,
+    }
+}
+
+/// Highest-priority error of a snapshot's failed parts (`None` when all
+/// resolved). Pure, tested.
+pub fn worst_part_error(errors: Vec<ForgeError>) -> Option<ForgeError> {
+    errors.into_iter().min_by(|a, b| {
+        error_priority(&a.kind)
+            .cmp(&error_priority(&b.kind))
+            .then_with(|| a.message.cmp(&b.message))
+    })
+}
+
+/// Snapshot gh arguments: the branch's PR (explicit `--repo` slug so a
+/// non-default remote resolves the right repository regardless of gh's own
+/// remote detection).
+pub fn snapshot_pr_args(slug: &str, branch: &str) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "list".to_string(),
+        "--repo".to_string(),
+        slug.to_string(),
+        "--state".to_string(),
+        "all".to_string(),
+        "--head".to_string(),
+        branch.to_string(),
+        "--json".to_string(),
+        PR_LIST_JSON_FIELDS.to_string(),
+        "--limit".to_string(),
+        "10".to_string(),
+    ]
+}
+
+/// Fallback arguments of the branch-PR lookup for gh versions that reject
+/// `--head`/`--repo` combinations: the unfiltered list, branch-filtered in
+/// Rust by [`branch_pr_of`].
+pub fn snapshot_pr_list_args(slug: &str) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "list".to_string(),
+        "--repo".to_string(),
+        slug.to_string(),
+        "--state".to_string(),
+        "all".to_string(),
+        "--json".to_string(),
+        PR_LIST_JSON_FIELDS.to_string(),
+        "--limit".to_string(),
+        "50".to_string(),
+    ]
+}
+
+/// Snapshot gh arguments: the latest run of one branch.
+pub fn snapshot_run_args(slug: &str, branch: &str) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "list".to_string(),
+        "--repo".to_string(),
+        slug.to_string(),
+        "--branch".to_string(),
+        branch.to_string(),
+        "--limit".to_string(),
+        "1".to_string(),
+        "--json".to_string(),
+        RUN_LIST_JSON_FIELDS.to_string(),
+    ]
+}
+
+/// Arguments of the commit-level check-runs read (REST via `gh api`).
+pub fn commit_check_runs_args(slug: &str, sha: &str) -> Vec<String> {
+    vec![
+        "api".to_string(),
+        format!("repos/{slug}/commits/{sha}/check-runs"),
+    ]
+}
+
+/// Arguments of the PR-files read (REST via `gh api`).
+pub fn pr_files_args(slug: &str, number: u64) -> Vec<String> {
+    vec![
+        "api".to_string(),
+        format!("repos/{slug}/pulls/{number}/files"),
+    ]
+}
+
+/// Arguments of the PR review-threads read (REST via `gh api`).
+pub fn review_threads_args(slug: &str, number: u64) -> Vec<String> {
+    vec![
+        "api".to_string(),
+        format!("repos/{slug}/pulls/{number}/comments"),
+    ]
+}
+
+/// Is HEAD reachable from the remote-tracking branch? `merge_base(head,
+/// remote) == head` answers it without a full walk. `None` = no tracking
+/// ref (never pushed).
+fn head_pushed(
+    repo: &git2::Repository,
+    remote_name: &str,
+    branch: &str,
+    head_oid: &git2::Oid,
+) -> Option<bool> {
+    let reference = repo
+        .find_reference(&format!("refs/remotes/{remote_name}/{branch}"))
+        .ok()?;
+    let remote_oid = reference.target()?;
+    if remote_oid == *head_oid {
+        return Some(true);
+    }
+    match repo.merge_base(*head_oid, remote_oid) {
+        Ok(base) => Some(base == *head_oid),
+        // Unrelated histories: HEAD is certainly not on the remote.
+        Err(_) => Some(false),
+    }
+}
+
+/// One snapshot gh read classified into [`ForgeError`] (snapshot parts carry
+/// structured kinds — the chips' degraded states).
+fn run_gh_part(cwd: &Path, args: Vec<String>, timeout: Duration) -> Result<String, ForgeError> {
+    let outcome = run_program(GH, Some(cwd), &args, timeout);
+    if let Some(err) = &outcome.spawn_error {
+        return Err(forge_failure(Some(err), ""));
+    }
+    if outcome.code == Some(0) && !outcome.timed_out {
+        return Ok(outcome.stdout);
+    }
+    if outcome.timed_out {
+        return Err(ForgeError::other(format!(
+            "gh timed out after {} s and was killed",
+            timeout.as_secs()
+        )));
+    }
+    let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
+    Err(forge_failure(None, &combined))
+}
+
+/// Snapshot part: the branch's PR. `Ok(None)` = no PR for the branch (a
+/// normal state, not an error). Older gh versions that reject the
+/// `--head`/`--repo` combination fall back to the unfiltered list.
+pub fn snapshot_branch_pr_sync(
+    cwd: &Path,
+    slug: &str,
+    branch: &str,
+) -> Result<Option<PrInfo>, ForgeError> {
+    let outcome = run_gh_part(cwd, snapshot_pr_args(slug, branch), LIST_TIMEOUT);
+    match outcome {
+        Ok(stdout) => Ok(branch_pr_of(&parse_pr_list_json(&stdout), branch)),
+        Err(err) if err.kind == KIND_OTHER => {
+            // Retry once with the unfiltered list before surfacing the error.
+            let fallback = run_gh_part(cwd, snapshot_pr_list_args(slug), LIST_TIMEOUT);
+            match fallback {
+                Ok(stdout) => Ok(branch_pr_of(&parse_pr_list_json(&stdout), branch)),
+                Err(err) => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Snapshot part: the latest Actions run of the branch (`None` = none).
+pub fn snapshot_branch_run_sync(
+    cwd: &Path,
+    slug: &str,
+    branch: &str,
+) -> Result<Option<WorkflowRun>, ForgeError> {
+    let stdout = run_gh_part(cwd, snapshot_run_args(slug, branch), RUNS_TIMEOUT)?;
+    Ok(parse_workflow_runs_json(&stdout).into_iter().next())
+}
+
+/// Commit-level check-runs of one sha (the snapshot's HEAD/PR-head parts and
+/// the standalone `forge_commit_checks` command).
+pub fn commit_check_runs_sync(
+    cwd: &Path,
+    slug: &str,
+    sha: &str,
+) -> Result<Vec<CheckInfo>, ForgeError> {
+    let stdout = run_gh_part(cwd, commit_check_runs_args(slug, sha), CHECKS_TIMEOUT)?;
+    Ok(parse_commit_check_runs_json(&stdout))
+}
+
+/// Body of `forge_snapshot`: resolve the remote, read branch/HEAD locally,
+/// then fan the GitHub reads out over at most 4 CONCURRENT gh calls (plan
+/// §9.3). Per-repo `remote_override` selects a non-default remote.
+pub fn forge_snapshot_sync(
+    root: &Path,
+    remote_override: Option<&str>,
+) -> Result<ForgeSnapshot, ForgeError> {
+    let resolved = resolve_remote(root, remote_override)?;
+    let repo = git2::Repository::discover(root)
+        .map_err(|e| ForgeError::other(format!("not a repository: {e}")))?;
+    let head = repo.head().ok();
+    let head_commit = head.as_ref().and_then(|h| h.peel_to_commit().ok());
+    let head_sha = head_commit.as_ref().map(|c| c.id().to_string());
+    let detached = repo.head_detached().unwrap_or(false);
+    let branch: Option<String> = if detached {
+        None
+    } else {
+        head.as_ref()
+            .and_then(|h| h.shorthand().ok())
+            .filter(|b| !b.is_empty() && *b != "HEAD")
+            .map(str::to_owned)
+    };
+    let pushed = match (&head_commit, &branch) {
+        (Some(commit), Some(branch_name)) => {
+            head_pushed(&repo, &resolved.remote_name, branch_name, &commit.id())
+        }
+        _ => None,
+    };
+    let slug = format!("{}/{}", resolved.owner, resolved.repo);
+
+    // Phase 1 — three independent reads in parallel (branch PR, HEAD checks,
+    // latest run). Phase 2 — PR-head checks, which depend on phase 1's PR
+    // head sha; concurrent calls never exceed 4 (§9.3).
+    let (pr_part, head_checks_part, run_part) = std::thread::scope(|scope| {
+        let pr = branch.clone().map(|branch_name| {
+            let cwd = root.to_path_buf();
+            let slug = slug.clone();
+            scope.spawn(move || snapshot_branch_pr_sync(&cwd, &slug, &branch_name))
+        });
+        let head_checks = head_sha.clone().map(|sha| {
+            let cwd = root.to_path_buf();
+            let slug = slug.clone();
+            scope.spawn(move || commit_check_runs_sync(&cwd, &slug, &sha))
+        });
+        let run = branch.clone().map(|branch_name| {
+            let cwd = root.to_path_buf();
+            let slug = slug.clone();
+            scope.spawn(move || snapshot_branch_run_sync(&cwd, &slug, &branch_name))
+        });
+        let pr_part = pr.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(ForgeError::other("snapshot pr worker failed")))
+        });
+        let head_checks_part = head_checks.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(ForgeError::other("snapshot checks worker failed")))
+        });
+        let run_part = run.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err(ForgeError::other("snapshot run worker failed")))
+        });
+        (pr_part, head_checks_part, run_part)
+    });
+
+    let mut errors: Vec<ForgeError> = Vec::new();
+    let pr = match pr_part {
+        Some(Ok(pr)) => pr,
+        Some(Err(err)) => {
+            errors.push(err);
+            None
+        }
+        None => None,
+    };
+    let head_checks = match head_checks_part {
+        Some(Ok(checks)) => checks,
+        Some(Err(err)) => {
+            errors.push(err);
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let run = match run_part {
+        Some(Ok(run)) => run,
+        Some(Err(err)) => {
+            errors.push(err);
+            None
+        }
+        None => None,
+    };
+
+    // Phase 2 — PR-head checks, only when the PR head diverges from the
+    // local HEAD (same sha ⇒ the head checks already cover the PR).
+    let pr_head_sha = pr
+        .as_ref()
+        .map(|pr| pr.head_ref_oid.clone())
+        .filter(|sha| !sha.is_empty());
+    let pr_head_checks: Option<Vec<CheckInfo>> = match (&pr_head_sha, &head_sha) {
+        (Some(pr_sha), Some(local_sha)) if pr_sha != local_sha => {
+            match commit_check_runs_sync(root, &slug, pr_sha) {
+                Ok(checks) => Some(checks),
+                Err(err) => {
+                    errors.push(err);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    // Hashes before the struct literal moves the parts into it.
+    let hashes = ForgeSnapshotHashes {
+        pr: pr.as_ref().map_or(0, hash_serialized),
+        head_checks: hash_serialized(&head_checks),
+        pr_head_checks: pr_head_checks.as_ref().map_or(0, hash_serialized),
+        run: run.as_ref().map_or(0, hash_serialized),
+    };
+    Ok(ForgeSnapshot {
+        branch,
+        head_sha,
+        pushed,
+        pr,
+        head_checks,
+        pr_head_sha,
+        pr_head_checks,
+        run,
+        hashes,
+        error: worst_part_error(errors),
+    })
+}
+
+/// Body of `forge_commit_checks`: commit-level check-runs for an arbitrary
+/// sha (E2's commit surfaces; also the snapshot's part reader).
+pub fn forge_commit_checks_sync(root: &Path, sha: &str) -> Result<Vec<CheckInfo>, String> {
+    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+    let slug = format!("{}/{}", resolved.owner, resolved.repo);
+    commit_check_runs_sync(root, &slug, sha.trim()).map_err(|e| e.to_string())
+}
+
+/// Body of `forge_pr_files`: the PR's changed files with their patches
+/// (E2's PR diff view).
+pub fn forge_pr_files_sync(root: &Path, number: u64) -> Result<Vec<ForgePrFile>, String> {
+    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+    let slug = format!("{}/{}", resolved.owner, resolved.repo);
+    let args = pr_files_args(&slug, number);
+    let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
+    if let Some(err) = &outcome.spawn_error {
+        return Err(format!("gh CLI not found on PATH ({err})"));
+    }
+    if outcome.code == Some(0) && !outcome.timed_out {
+        return Ok(parse_pr_files_json(&outcome.stdout));
+    }
+    let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
+    Err(trim_message(&combined))
+}
+
+/// Body of `forge_pr_review_threads`: the PR's review threads, read-only
+/// (E2's review-thread panel).
+pub fn forge_pr_review_threads_sync(
+    root: &Path,
+    number: u64,
+) -> Result<Vec<ForgeReviewThread>, String> {
+    let resolved = resolve_remote(root, None).map_err(|e| e.to_string())?;
+    let slug = format!("{}/{}", resolved.owner, resolved.repo);
+    let args = review_threads_args(&slug, number);
+    let outcome = run_program(GH, Some(root), &args, LIST_TIMEOUT);
+    if let Some(err) = &outcome.spawn_error {
+        return Err(format!("gh CLI not found on PATH ({err})"));
+    }
+    if outcome.code == Some(0) && !outcome.timed_out {
+        return Ok(group_review_threads(parse_review_comments_json(
+            &outcome.stdout,
+        )));
+    }
+    let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
+    Err(trim_message(&combined))
 }

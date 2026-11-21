@@ -1106,6 +1106,7 @@ fn commit_opts(message: &str) -> CommitOptions {
         no_verify: false,
         allow_empty: false,
         author: None,
+        signoff: false,
     }
 }
 
@@ -1534,6 +1535,7 @@ fn commit_author_override_and_empty_guards() {
             &temp,
             &CommitOptions {
                 author: Some(override_author),
+                signoff: false,
                 ..commit_opts("authored")
             },
         )

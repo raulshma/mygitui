@@ -176,7 +176,7 @@
       hint="Enable it again in AI settings to use the agent chat."
     >
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         variant="secondary"
         type="button"
         onclick={() => emitUiEvent("open-ai-settings")}
@@ -192,7 +192,7 @@
       hint="Enable it again in AI settings (Features → Agent chat) to use the agent chat."
     >
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         variant="secondary"
         type="button"
         onclick={() => emitUiEvent("open-ai-settings")}
@@ -207,7 +207,7 @@
       hint="The agent reads the staged diff and recent commits to answer questions. It never modifies anything."
     >
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         type="button"
         onclick={() => ai.setOptIn(repoId, true)}
       >
@@ -330,7 +330,7 @@
     <!-- Composer -->
     <div class="flex flex-none items-end gap-1.5 border-t border-border bg-popover px-2.5 py-2">
       <button
-        class="flex-none rounded-full border px-2 py-px text-ui-tiny transition-colors {agentic
+        class="flex-none rounded-full border px-2 py-px text-ui-micro transition-colors {agentic
           ? 'border-primary/60 bg-primary/10 text-foreground'
           : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
         type="button"

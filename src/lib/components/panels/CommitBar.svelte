@@ -1,32 +1,58 @@
+<script module lang="ts">
+  /**
+   * One commit scope (plan §6.1): the owning repository or a dirty
+   * submodule the composer can target. `id` is stable per panel instance
+   * ("main" or the submodule's repo-relative path) — it keys the per-scope
+   * draft messages.
+   */
+  export interface CommitScope {
+    id: string;
+    /** Chip label (repo/module display name). */
+    label: string;
+    /** The scope's backend repo id (all commit/push/AI IPC targets it). */
+    repoId: string;
+    /** Latest status snapshot (counts + staged detection + branch). */
+    status: RepoStatus | null;
+    /** Full path (chip tooltip); absent for the owning repository. */
+    path?: string;
+  }
+</script>
+
 <script lang="ts">
   /**
-   * Commit bar (M2) — sits at the bottom of the source-control sidebar (the
-   * workspace's left column), so the commit message and button stay visible
-   * while the changes list scrolls above.
+   * Commit bar (M2) — the ONE composer for the STATUS panel (plan §6.1):
+   * it docks to the panel's bottom edge (sticky — the changes list scrolls
+   * above) and retargets to whichever scope chip is active. Scope chips
+   * sit above the message box — the owning repository plus every DIRTY
+   * submodule with its change count (`jellyplay (93) · jellyfin-plugin (n)`);
+   * selecting a chip swaps the draft message, the staging context and the
+   * commit action to that repository, so N submodules no longer mean N
+   * stacked composers. A single-scope caller (the agent view) passes no
+   * `scopes` and the chips row never renders.
    *
    * Message textarea (Ctrl/Cmd+Enter commits; Ctrl/Cmd+Shift+Enter commits
    * and pushes; starts one row tall and grows with the draft up to a cap,
-   * then scrolls), compact icon toggles for Amend / skip-hooks / author
-   * override, signing + hook status icons, a Fixup action, the Commit
-   * button and a secondary Commit & Push button (spinner while the commit /
-   * push op runs per the OpStore; disabled with no message unless amending).
-   * The AI sparkle rides the textarea's top-right corner (VS Code-style).
-   * Under the message sits one dense controls row: config left-to-right
-   * (options menu, Fixup, signing/hook status, per-run AI model picker)
-   * with the Commit & Push + Commit pair glued to the right edge. When the
-   * sidebar is too narrow the pair wraps to its own right-aligned line as
-   * a unit (only a truly tiny pane wraps the pair internally), so nothing
-   * ever scatters icon-by-icon. The author override fields expand as a
+   * then scrolls), compact icon toggles for skip-hooks / author override,
+   * signing + hook status icons, a Fixup action and ONE primary `Commit`
+   * button with a split caret menu (Commit & Push, Amend last, Sign off —
+   * plan §6.2). The AI sparkle rides the textarea's top-right corner
+   * (VS Code-style) with the tiny model-override caret beside it
+   * (AiModelPicker compact — plan §6.3; no full-width dropdown anywhere in
+   * the commit flow). Under the message sits one dense controls row
+   * (config left, the split Commit glued right) that never wraps into two
+   * rows — the composer is a container-query root (§6.7): scope chips
+   * scroll horizontally and the action pair stays on one line however
+   * narrow the panel gets. The author override fields expand as a
    * full-width row under that.
    * Success clears the form, toasts the short sha and asks the owner to
-   * refresh (`onCommitted` → RepoView refreshStatus). Failures render
+   * refresh (`onCommitted` → StatusPanel refreshAll). Failures render
    * inline next to the button; a push failure after a landed commit toasts
    * "Committed — push failed: …". The AI button is a disabled ghost (M6).
    *
    * M12 (lane C): "Fixup into HEAD" commits the staged changes straight
    * into `fixup! <HEAD summary>` (no message needed; respects the
    * --no-verify toggle and the author override). Disabled until something
-   * is staged and HEAD exists (read from the tab store's status); the HEAD
+   * is staged and HEAD exists (read from the scope's status); the HEAD
    * summary is fetched lazily through a one-page `stream_log`.
    */
   import { commit, hooksList, readFile, signingInfo, streamLog } from "$lib/ipc/client";
@@ -52,6 +78,7 @@
     rulerLeftCss,
     templateFromBody,
   } from "$lib/commit/commitExtras.svelte";
+  import { submoduleChangeCounts } from "./statusModel";
   import { untrack } from "svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
@@ -59,12 +86,19 @@
     repoId,
     status = undefined,
     onCommitted = undefined,
+    scopes = undefined,
   }: {
     repoId: string;
-    /** Explicit status snapshot (e.g. for submodules); falls back to tabStore. */
+    /** Explicit status snapshot for the fallback scope; falls back to tabStore. */
     status?: RepoStatus | null;
-    /** Called after a successful commit (RepoView refreshes the status). */
+    /** Called after a successful commit (the owner refreshes the status). */
     onCommitted?: () => void;
+    /**
+     * Scope chips (multi-repo STATUS composer, plan §6.1): main repo first,
+     * then every dirty submodule. Omitted = single-scope composer (agent
+     * view) — no chips row.
+     */
+    scopes?: CommitScope[];
   } = $props();
 
   const iconAmend = $derived(appIcon("edit")!);
@@ -77,10 +111,51 @@
   const iconHook = $derived(appIcon("bolt")!);
   const iconOptions = $derived(appIcon("tune")!);
   const iconRecents = $derived(appIcon("history")!);
+  const iconCaret = $derived(appIcon("chevron-down")!);
+
+  // -- Scope selection (plan §6.1) ----------------------------------------------
+  //
+  // The composer targets one scope at a time. The `scopes` prop carries the
+  // owning repo plus every dirty submodule; without it a single fallback
+  // scope is built from the props (explicit status, else the tab store).
+  // Each scope keeps its own draft message (switching preserves what you
+  // typed); commit-time options that bind to a specific repository
+  // (amend) reset on the switch so they can never leak across repos.
+
+  const scopeList = $derived.by<CommitScope[]>(() => {
+    if (scopes !== undefined && scopes.length > 0) return scopes;
+    return [
+      {
+        id: "main",
+        label: "",
+        repoId,
+        status:
+          status !== undefined
+            ? status
+            : (tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null),
+      },
+    ];
+  });
+
+  /** More than one chip = the row renders (single-scope callers see none). */
+  const multiScope = $derived(scopeList.length > 1);
+
+  let activeScopeId = $state("main");
+  /** Per-scope draft messages (switching a chip preserves the drafts). */
+  let drafts = $state<Record<string, string>>({});
+
+  const activeScope = $derived(
+    scopeList.find((scope) => scope.id === activeScopeId) ?? scopeList[0]!,
+  );
+  /** All commit/push/AI/metadata IPC targets the active scope's repo. */
+  const activeRepoId = $derived(activeScope.repoId);
+  /** The active scope's latest status snapshot. */
+  const activeStatus = $derived(activeScope.status);
 
   let message = $state("");
   let messageEl = $state<HTMLTextAreaElement | null>(null);
   let amend = $state(false);
+  let signoff = $state(false);
   let noVerify = $state(false);
   let showAuthor = $state(false);
   let authorName = $state("");
@@ -89,6 +164,27 @@
   let committing = $state(false);
   /** The push half of Commit & Push is in flight (instant feedback). */
   let pushing = $state(false);
+
+  /** Retargets the composer: stash the draft, load the target's. */
+  function switchScope(id: string): void {
+    if (id === activeScopeId) return;
+    drafts[activeScopeId] = message;
+    activeScopeId = id;
+    message = drafts[id] ?? "";
+    // Amend folds into a specific repository's HEAD — never carry it (or
+    // its inline hint state) across a scope switch.
+    amend = false;
+    error = null;
+  }
+
+  $effect(() => {
+    // Repo switch (keep-alive panel): the scope ids belonged to the previous
+    // repository — restart on the owning repo with clean drafts.
+    void repoId;
+    activeScopeId = "main";
+    drafts = {};
+    message = "";
+  });
 
   /** Grows the message box from one row up to a readable cap. */
   const MAX_MESSAGE_HEIGHT = 176;
@@ -117,21 +213,15 @@
     hooks.filter((h) => h.present && h.executable && !h.kind.startsWith("pre-push")),
   );
 
-  const commitBusy = $derived(busy(repoId, "commit"));
+  const commitBusy = $derived(busy(activeRepoId, "commit"));
   /** True while a push op runs for this repo (any entry point). */
-  const pushBusy = $derived(busy(repoId, "push"));
+  const pushBusy = $derived(busy(activeRepoId, "push"));
 
-  /** The repo's latest status snapshot (staged detection + HEAD sha). */
-  const activeStatus = $derived(
-    status !== undefined
-      ? status
-      : (tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null),
-  );
   const staged = $derived(hasStagedChanges(activeStatus?.entries ?? []));
 
   /**
    * Normal commits need something in the index; amending may reuse HEAD's
-   * message. While the first status is still loading (`status === null`) we
+   * message. While the scope's first status is still loading (null) we
    * keep the button available rather than guessing.
    */
   const needsStaged = $derived(!amend && activeStatus !== null && !staged);
@@ -184,26 +274,28 @@
   /**
    * Whether the AI sparkle rides the textarea's corner (the component hides
    * itself when AI is switched off; the reserved padding follows so the
-   * message keeps its full width when there is no button).
+   * message keeps its full width when there is no button). The tiny model
+   * override caret shares the corner (plan §6.3) — one generation button,
+   * one override menu, no full-width picker row.
    */
   const aiMessageVisible = $derived(
     ai.isEnabled() && ai.isFeatureEnabled("commit-message"),
   );
 
   $effect(() => {
-    // Load signing + hooks state (reloads when the repo switches).
-    void repoId;
+    // Load signing + hooks state (reloads when the active scope switches).
+    void activeRepoId;
     const token = ++metaToken;
     signing = null;
     hooks = [];
-    signingInfo(repoId)
+    signingInfo(activeRepoId)
       .then((info) => {
         if (token === metaToken) signing = info;
       })
       .catch(() => {
         // Signing info is decorative; ignore failures.
       });
-    hooksList(repoId)
+    hooksList(activeRepoId)
       .then((list) => {
         if (token === metaToken) hooks = list;
       })
@@ -214,9 +306,9 @@
 
   // -- Commit authoring niceties (template prefill, recent messages, ruler) ----
 
-  /** The repo's persisted-per-root identity (recents/ruler/template keys). */
+  /** The active scope's persisted-per-root identity (recents/ruler/template keys). */
   const repoRoot = $derived(
-    tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? repoId,
+    tabStore.tabs.find((tab) => tab.id === activeRepoId)?.root ?? activeRepoId,
   );
 
   /** Recent accepted messages for the dropdown (reactive via the store). */
@@ -243,7 +335,7 @@
     // No config-reading command exists in the backend, so the template
     // source is the `.gitmessage` file at the workdir root (git's
     // commit.template convention). A missing file silently skips.
-    readFile(repoId, ".gitmessage")
+    readFile(activeRepoId, ".gitmessage")
       .then((bytes) => {
         if (token !== templateToken) return;
         const draft = templateFromBody(new TextDecoder().decode(bytes));
@@ -284,11 +376,12 @@
   }
 
   /**
-   * Commits the staged changes (or amend). With `pushAfter` the existing
-   * commit flow is chained into a push of the current branch via the shared
-   * header/palette helper (primary remote, plain push — no force, no
-   * force-with-lease overrides). A landed commit followed by a failed push
-   * says so explicitly; a commit failure renders inline like Commit does.
+   * Commits the active scope's staged changes (or amend). With `pushAfter`
+   * the existing commit flow is chained into a push of the current branch
+   * via the shared header/palette helper (primary remote, plain push — no
+   * force, no force-with-lease overrides). A landed commit followed by a
+   * failed push says so explicitly; a commit failure renders inline like
+   * Commit does.
    */
   async function doCommit(pushAfter = false): Promise<void> {
     if (!canCommit) return;
@@ -296,12 +389,13 @@
     error = null;
     let sha: string | null = null;
     try {
-      sha = await commit(repoId, {
+      sha = await commit(activeRepoId, {
         message: message.trimEnd(),
         amend,
         no_verify: noVerify,
         allow_empty: false,
         author: authorOverride(),
+        signoff,
       });
     } catch (err) {
       error = describeError(err);
@@ -320,6 +414,7 @@
     showAuthor = false;
     amend = false;
     noVerify = false;
+    signoff = false;
     onCommitted?.();
     if (!pushAfter) {
       toast(`Committed ${sha.slice(0, 7)}`, { kind: "success" });
@@ -336,7 +431,7 @@
     pushing = true;
     try {
       const outcome = await pushCurrentBranch(
-        repoId,
+        activeRepoId,
         activeStatus?.branch ?? null,
       );
       if (outcome.kind === "skipped") {
@@ -365,31 +460,56 @@
     }
   }
 
-  // -- More commit options (UI review P2 #7) -----------------------------------
+  // -- More commit options ------------------------------------------------------
   //
-  // Amend / skip-hooks / author were three unlabeled icon toggles with no
-  // visible state. They now live in one menu with checkmarks, and anything
-  // active shows as a text chip so the state survives a glance.
+  // The split caret (plan §6.2) owns the commit-shape actions: Commit & Push,
+  // Amend last, Sign off. The ⚙ options menu keeps the drafting toggles that
+  // aren't commit actions (skip hooks, author override), and anything active
+  // shows as a text chip so the state survives a glance.
 
-  const anyOption = $derived(amend || noVerify || showAuthor);
+  const anyOption = $derived(amend || signoff || noVerify || showAuthor);
 
   const optionSummary = $derived.by(() => {
     const parts: string[] = [];
     if (amend) parts.push("Amend");
+    if (signoff) parts.push("Signed-off");
     if (noVerify) parts.push("Hooks off");
     if (showAuthor) parts.push("Author");
     return parts.join(" · ");
   });
 
-  /** Options menu: checkmark prefix shows the current toggle state. */
+  /** Split-caret menu: commit variants + the amend/sign-off toggles. */
+  function openCommitActions(event: MouseEvent): void {
+    showMenuAtElement(
+      event.currentTarget as HTMLElement,
+      [
+        {
+          id: "commit-push",
+          label: "Commit & Push (Ctrl+Shift+↵)",
+          icon: iconPush,
+          disabled: !canCommitPush,
+          run: () => void doCommit(true),
+        },
+        {
+          id: "amend",
+          label: `${amend ? "✓ " : ""}Amend last commit`,
+          icon: iconAmend,
+          run: () => (amend = !amend),
+        },
+        {
+          id: "signoff",
+          label: `${signoff ? "✓ " : ""}Sign off`,
+          icon: iconSigning,
+          run: () => (signoff = !signoff),
+        },
+      ],
+      { align: "end", above: true },
+    );
+  }
+
+  /** Drafting options menu: skip hooks + author override (amend lives in the caret). */
   function openCommitOptions(event: MouseEvent): void {
     showMenuAtElement(event.currentTarget as HTMLElement, [
-      {
-        id: "amend",
-        label: `${amend ? "✓ " : ""}Amend previous commit`,
-        icon: iconAmend,
-        run: () => (amend = !amend),
-      },
       {
         id: "no-verify",
         label: `${noVerify ? "✓ " : ""}Skip hooks (--no-verify)`,
@@ -439,7 +559,7 @@
     const headSha = activeStatus?.head ?? null;
     if (!headSha) return null;
     return new Promise<string | null>((resolve) => {
-      void streamLog(repoId, HEAD_LOG_FILTER, (page) => {
+      void streamLog(activeRepoId, HEAD_LOG_FILTER, (page) => {
         resolve(headCommitInPage(page, headSha)?.summary ?? null);
       }).catch(() => resolve(null));
     });
@@ -455,12 +575,13 @@
         toast("Fixup failed: could not determine HEAD", { kind: "error" });
         return;
       }
-      const sha = await commit(repoId, {
+      const sha = await commit(activeRepoId, {
         message: fixupMessage(head),
         amend: false,
         no_verify: noVerify,
         allow_empty: false,
         author: authorOverride(),
+        signoff: false,
       });
       toast(`Fixup committed into ${sha.slice(0, 7)}`, { kind: "success" });
       onCommitted?.();
@@ -473,23 +594,53 @@
 </script>
 
 <form
-  class="commit-bar flex-none flex flex-col gap-1 px-2 py-1.5 border-t border-border bg-card text-ui-base"
+  class="commit-bar @container flex-none flex flex-col gap-1 px-2 py-1.5 border-t border-border bg-card text-ui-base"
   aria-label="Create commit"
   onsubmit={(e) => {
     e.preventDefault();
     void doCommit();
   }}
 >
+  {#if multiScope}
+    <!-- Scope chips (plan §6.1): owning repo + every dirty submodule with
+         its change count. Horizontally scrollable (§6.7): overflow scrolls,
+         chips never shrink into illegibility. -->
+    <div
+      class="scopes flex flex-none items-center gap-1 min-w-0 overflow-x-auto pb-0.5"
+      role="group"
+      aria-label="Commit scope"
+    >
+      {#each scopeList as scope (scope.id)}
+        {@const counts = submoduleChangeCounts(scope.status)}
+        <button
+          class="scope-chip inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px text-ui-meta leading-[1.45] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {scope.id ===
+          activeScopeId
+            ? "border-primary/40 bg-primary/10 text-primary"
+            : "border-border bg-muted/50 text-muted-foreground hover:bg-accent hover:text-foreground"}"
+          type="button"
+          aria-pressed={scope.id === activeScopeId}
+          title={scope.path
+            ? `${scope.path} — ${counts.staged} staged, ${counts.changes} unstaged`
+            : `${counts.staged} staged, ${counts.changes} unstaged`}
+          onclick={() => switchScope(scope.id)}
+        >
+          <span class="max-w-40 overflow-hidden text-ellipsis">{scope.label}</span>
+          <span class="tabular-nums opacity-90">({counts.total})</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
   <div class="row-main flex flex-col gap-1 min-h-0">
     {#if recentMessages.length > 0}
-      <!-- Recall strip above the textarea: one dropdown of this repo's last
-           accepted messages (newest first). -->
-      <div class="recall flex items-center gap-1">
+      <!-- Recall strip above the textarea: one dropdown of the active
+           scope's last accepted messages (newest first). -->
+      <div class="recall flex min-w-0 items-center gap-1">
         <Hint label="Recall a recent commit message for this repository">
           {#snippet child({ props })}
             <Button
               {...props}
-              class="h-auto gap-1 rounded px-1.5 py-px text-ui-micro font-normal text-muted-foreground"
+              class="h-auto min-w-0 max-w-full gap-1 rounded px-1.5 py-px text-ui-micro font-normal text-muted-foreground"
               variant="ghost"
               type="button"
               aria-label="Recent commit messages"
@@ -499,7 +650,7 @@
               {#if iconRecents}
                 <Icon icon={iconRecents} size={12} />
               {/if}
-              <span>Recent messages ({recentMessages.length})</span>
+              <span class="truncate">Recent messages ({recentMessages.length})</span>
             </Button>
           {/snippet}
         </Hint>
@@ -510,7 +661,7 @@
       <Hint label="Commit message (Ctrl+Enter commits, Ctrl+Shift+Enter commits and pushes)">
         {#snippet child({ props })}
           <Textarea
-            class={`message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background ${aiMessageVisible ? "pr-7" : ""}`}
+            class={`message flex-none w-full min-w-0 box-border field-sizing-fixed min-h-7 max-h-44 resize-none overflow-y-hidden rounded-sm px-2 py-0.5 text-xs leading-[1.35] font-mono bg-background ${aiMessageVisible ? "pr-13" : ""}`}
             placeholder="Commit message… Ctrl+↵"
             aria-keyshortcuts="Control+Enter Meta+Enter Control+Shift+Enter Meta+Shift+Enter"
             rows={1}
@@ -524,15 +675,21 @@
         {/snippet}
       </Hint>
       {#if aiMessageVisible}
-        <!-- The AI sparkle rides the textarea's top-right corner: the
-            generator belongs to the draft it fills, and keeping it out of
-            the controls row frees the row for the picker + commit buttons
-            at sidebar widths where everything used to wrap and scatter.
-            The confirm/fail overlays are fixed-position and clamped to the
-            viewport, so the textarea ancestor cannot clip them. -->
-        <div class="absolute right-0.5 top-0.5 z-1">
+        <!-- The AI pair rides the textarea's top-right corner: the sparkle
+            generates (the draft it fills belongs to the active scope) and
+            the tiny caret beside it overrides the model (plan §6.3) —
+            no full-width dropdown in the controls row. The confirm/fail
+            overlays are fixed-position and clamped to the viewport, so the
+            textarea ancestor cannot clip them. -->
+        <div class="absolute right-0.5 top-0.5 z-1 flex items-center gap-0.5">
+          <AiModelPicker
+            repoId={activeRepoId}
+            compact
+            popUp
+            disabled={commitBusy || committing}
+          />
           <AiFeatureButton
-            {repoId}
+            repoId={activeRepoId}
             kind="commit-message"
             icon
             gateVisibility={false}
@@ -544,7 +701,7 @@
             errorPrefix="AI commit message failed"
             successToast="Commit message generated — review before committing"
             disabled={commitBusy || committing}
-            run={(opts) => ai.generateCommitMessage(repoId, undefined, opts)}
+            run={(opts) => ai.generateCommitMessage(activeRepoId, undefined, opts)}
             onResult={(outcome) => {
               const m = outcome.message ?? { subject: outcome.result.text, body: "" };
               message = m.body ? `${m.subject}
@@ -565,18 +722,21 @@ ${m.body}` : m.subject;
       ></div>
     </div>
 
-    <div class="controls flex items-center flex-wrap gap-x-ui-375 gap-y-1 w-full min-w-0">
-      <div class="opt-switches flex items-center gap-x-1 min-w-0">
+    <!-- One dense controls row (§6.7): config left, the split Commit glued
+         right; never wraps into two rows (chips scroll instead, the split
+         caret always stays attached). -->
+    <div class="controls flex flex-nowrap items-center gap-x-ui-375 w-full min-w-0">
+      <div class="opt-switches flex items-center gap-x-1 min-w-0 overflow-hidden">
         {#if anyOption}
           <Hint label="Active commit options">
             {#snippet child({ props })}
-              <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-px rounded-full bg-muted text-muted-foreground text-ui-tiny leading-normal" role="status" {...props}>
+              <span class="opt-summary shrink-0 max-w-48 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-px rounded-full bg-muted text-muted-foreground text-ui-micro leading-normal" role="status" {...props}>
                 {optionSummary}
               </span>
             {/snippet}
           </Hint>
         {/if}
-        <Hint label="Amend, skip hooks, or override the author">
+        <Hint label="Skip hooks or override the author">
           {#snippet child({ props })}
             <Button
               class="text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground"
@@ -585,7 +745,7 @@ ${m.body}` : m.subject;
               type="button"
               {...props}
               aria-label="More commit options"
-              aria-pressed={anyOption}
+              aria-pressed={noVerify || showAuthor}
               aria-haspopup="menu"
               onclick={openCommitOptions}
             >
@@ -657,39 +817,16 @@ ${m.body}` : m.subject;
         {/if}
       </div>
 
-      <!-- Per-run AI model choice: the sparkle that uses it lives in the
-           message box's corner; the picker follows the repo tools so the
-           row reads config-left, actions-right, and it wraps onto its
-           own line (never clips) on a very narrow sidebar. -->
-      <AiModelPicker {repoId} disabled={commitBusy || committing} />
-
-      <!-- Commit actions are one glued unit: on a narrow sidebar the whole
-           pair wraps to its own right-aligned line instead of scattering
-           button by button (or splitting Commit from its push twin). Only
-           a truly tiny pane wraps the pair internally, still end-aligned. -->
-      <span class="commit-actions ml-auto inline-flex flex-wrap justify-end items-center gap-x-ui-375 gap-y-1 max-w-full">
-        <Hint label="Commit, then push the branch to the primary remote (Ctrl+Shift+Enter)">
-          {#snippet child({ props })}
-            <Button
-              class="h-7 gap-ui-35 rounded-full px-3 text-xs"
-              variant="secondary"
-              type="button"
-              {...props}
-              aria-keyshortcuts="Control+Shift+Enter Meta+Shift+Enter"
-              aria-describedby={stagedHintId}
-              disabled={!canCommitPush}
-              onclick={() => void doCommit(true)}
-            >
-              <Icon icon={iconPush} size={14} />
-              <span>{pushing ? "Pushing…" : "Commit & Push"}</span>
-            </Button>
-          {/snippet}
-        </Hint>
-
+      <!-- The ONE primary action (§3.2): Commit with a split caret (plan
+           §6.2). The caret menu carries Commit & Push, Amend last and Sign
+           off; the primary button's accessible name stays exactly "Commit".
+           The unit never wraps — on a narrow panel the chips row scrolls and
+           this row stays single-line. -->
+      <span class="commit-actions ml-auto inline-flex flex-none items-stretch overflow-hidden rounded-full max-w-full">
         <Hint label={commitHint}>
           {#snippet child({ props })}
             <Button
-              class="h-7 min-w-[4.5rem] gap-ui-35 rounded-full px-3 text-xs"
+              class="h-7 min-w-[4.5rem] gap-ui-35 rounded-l-full rounded-r-none px-3 text-xs"
               {...props}
               type="submit"
               aria-describedby={stagedHintId}
@@ -700,6 +837,23 @@ ${m.body}` : m.subject;
               {:else}
                 <span>Commit</span>
               {/if}
+            </Button>
+          {/snippet}
+        </Hint>
+
+        <Hint label="More commit actions">
+          {#snippet child({ props })}
+            <Button
+              class="h-7 w-6 flex-none rounded-l-none rounded-r-full border-0 border-l border-primary-foreground/25 px-1 hover:bg-primary/90"
+              {...props}
+              variant="default"
+              type="button"
+              aria-label="More commit actions"
+              aria-haspopup="menu"
+              disabled={commitBusy || committing}
+              onclick={openCommitActions}
+            >
+              <Icon icon={iconCaret} size={14} />
             </Button>
           {/snippet}
         </Hint>

@@ -645,7 +645,7 @@
           : "Pull is unavailable without a current branch"}
         onclick={onBarPull}
       >
-        {#if behind > 0}<Badge variant="secondary" class="sync-count behind rounded-full bg-muted px-1.5 h-auto py-0 text-ui-tiny font-semibold leading-tight tabular-nums text-muted-foreground">↓ {behind}</Badge>{/if}
+        {#if behind > 0}<Badge variant="secondary" class="sync-count behind rounded-full bg-muted px-1.5 h-auto py-0 text-ui-micro font-semibold leading-tight tabular-nums text-muted-foreground">↓ {behind}</Badge>{/if}
         Pull
       </Button>
       <Button
@@ -658,7 +658,7 @@
           : "Push is unavailable without a current branch"}
         onclick={onBarPush}
       >
-        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-ui-tiny font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
+        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-ui-micro font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
         Push
       </Button>
       <Button

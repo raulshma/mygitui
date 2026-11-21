@@ -117,6 +117,9 @@ pub(crate) fn build_commit_args(message_file: &str, opts: &CommitOptions) -> Vec
     if opts.no_verify {
         args.push("--no-verify".to_string());
     }
+    if opts.signoff {
+        args.push("--signoff".to_string());
+    }
     if opts.allow_empty {
         args.push("--allow-empty".to_string());
     }
@@ -484,6 +487,7 @@ mod tests {
             no_verify: false,
             allow_empty: false,
             author: None,
+            signoff: false,
         }
     }
 
@@ -511,6 +515,7 @@ mod tests {
         options.amend = true;
         options.no_verify = true;
         options.allow_empty = true;
+        options.signoff = true;
         let args = build_commit_args("/tmp/m.msg", &options);
         assert_eq!(
             args,
@@ -520,6 +525,7 @@ mod tests {
                 "/tmp/m.msg",
                 "--amend",
                 "--no-verify",
+                "--signoff",
                 "--allow-empty",
             ]
         );

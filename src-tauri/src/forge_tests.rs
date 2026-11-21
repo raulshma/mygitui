@@ -1094,3 +1094,328 @@ fn status_sync_against_real_gh() {
         assert!(!status.version.is_empty(), "version parsed: {status:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// E1: authed hosts + remote resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gh_auth_hosts_parses_status_output() {
+    let output = "github.com\n  ✓ Logged in to github.com account octocat (keyring)\n  \
+                  - Active account: true\n  - Git operations protocol: https\nghe.example.com\n  \
+                  ✓ Logged in to ghe.example.com account work (keyring)\n";
+    let hosts = crate::forge::gh_auth_hosts(output);
+    assert!(hosts.contains(&"github.com".to_string()), "{hosts:?}");
+    assert!(hosts.contains(&"ghe.example.com".to_string()), "{hosts:?}");
+}
+
+#[test]
+fn gh_auth_hosts_dedupes_and_cleans_tokens() {
+    let output = "  ✓ Logged in to GITHUB.COM account a (keyring)\n  \
+                  ✓ Logged in to www.GitHub.COM account b (keyring)\n  \
+                  ✓ Logged in to ghe.corp.:22 account c\nno accounts\n";
+    let hosts = crate::forge::gh_auth_hosts(output);
+    assert_eq!(
+        hosts,
+        vec!["github.com".to_string(), "ghe.corp".to_string()]
+    );
+}
+
+#[test]
+fn gh_auth_hosts_without_logins_is_empty() {
+    assert!(crate::forge::gh_auth_hosts("").is_empty());
+    assert!(crate::forge::gh_auth_hosts("no authenticated accounts\n").is_empty());
+}
+
+#[test]
+fn github_remote_accepts_gh_authed_hosts() {
+    use crate::forge::parse_github_remote_with_hosts;
+    let hosts = vec!["ghe.example.com".to_string()];
+    assert_eq!(
+        parse_github_remote_with_hosts("git@ghe.example.com:acme/widget.git", &hosts),
+        Some(("acme".into(), "widget".into()))
+    );
+    assert_eq!(
+        parse_github_remote_with_hosts("https://GHE.example.com/acme/widget.git", &hosts),
+        Some(("acme".into(), "widget".into()))
+    );
+    // github.com always matches, hosts or not.
+    assert_eq!(
+        parse_github_remote_with_hosts("https://github.com/a/b", &[]),
+        Some(("a".into(), "b".into()))
+    );
+    // Unknown dev-machine hosts stay unresolvable (the muted "off" chip).
+    assert_eq!(
+        parse_github_remote_with_hosts("git@devbox.local:acme/widget.git", &hosts),
+        None
+    );
+    assert_eq!(parse_github_remote_with_hosts("", &hosts), None);
+}
+
+/// The host cache: `github.com` always present; a non-empty refresh replaces;
+/// an empty refresh (unauthed `gh auth status`) must not wipe learned hosts.
+#[test]
+fn authed_host_cache_replaces_only_on_new_hosts() {
+    use crate::forge::{cache_authed_hosts, cached_hosts};
+    cache_authed_hosts(vec![
+        "ghe.example.com".to_string(),
+        "github.com".to_string(),
+    ]);
+    let hosts = cached_hosts();
+    assert_eq!(hosts[0], "github.com");
+    assert!(hosts.contains(&"ghe.example.com".to_string()));
+    // Empty report keeps the previous cache.
+    cache_authed_hosts(Vec::new());
+    assert!(cached_hosts().contains(&"ghe.example.com".to_string()));
+    // Restore the default cache so other tests see github.com only.
+    cache_authed_hosts(vec!["github.com".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// E1: snapshot shaping, hashing and part error priority
+// ---------------------------------------------------------------------------
+
+#[test]
+fn snapshot_hashes_are_stable_and_part_sensitive() {
+    use crate::forge::hash_serialized;
+    let pr = pr_list_json_parses_fixture_tolerantly_pr();
+    let first = hash_serialized(&pr);
+    assert_eq!(first, hash_serialized(&pr), "same content → same hash");
+    let mut other = pr.clone();
+    other.title = "Different".to_string();
+    assert_ne!(first, hash_serialized(&other), "content change → new hash");
+    // FNV-1a is order-sensitive over the bytes.
+    use crate::forge::fnv1a64;
+    assert_eq!(fnv1a64(b""), 0xcbf29ce484222325);
+    assert_ne!(fnv1a64(b"a"), fnv1a64(b"b"));
+}
+
+/// The M6 PR-list fixture as a `PrInfo` (shared by snapshot-shaping tests).
+fn pr_list_json_parses_fixture_tolerantly_pr() -> crate::forge::PrInfo {
+    parse_pr_list_json(PR_LIST_FIXTURE).remove(0)
+}
+
+#[test]
+fn branch_pr_of_prefers_open_over_closed() {
+    use crate::forge::branch_pr_of;
+    let mut prs = parse_pr_list_json(PR_LIST_FIXTURE);
+    // The fixture's first entry is OPEN with head "m6-forge".
+    let open = branch_pr_of(&prs, "m6-forge");
+    assert_eq!(open.map(|pr| pr.state), Some("OPEN".to_string()));
+    // A merged PR wins when there is no open one for the branch.
+    prs.truncate(2);
+    prs.remove(0);
+    let merged = branch_pr_of(&prs, "old");
+    assert_eq!(merged.map(|pr| pr.state), Some("MERGED".to_string()));
+    assert_eq!(branch_pr_of(&prs, "missing"), None);
+    assert_eq!(branch_pr_of(&prs, ""), None);
+}
+
+#[test]
+fn pr_list_json_fills_head_ref_oid() {
+    let mut payload = String::from("[");
+    payload.push_str(
+        r#"{"number": 7, "headRefName": "e1", "headRefOid": "abc123def456", "state": "OPEN"}"#,
+    );
+    payload.push_str(r#", {"number": 8, "headRefName": "no-oid", "state": "OPEN"}]"#);
+    let prs = parse_pr_list_json(&payload);
+    assert_eq!(prs[0].head_ref_oid, "abc123def456");
+    // Older gh omits headRefOid: "" (the FE treats it as unknown).
+    assert_eq!(prs[1].head_ref_oid, "");
+}
+
+#[test]
+fn commit_check_runs_json_parses_states() {
+    use crate::forge::parse_commit_check_runs_json;
+    let payload = r#"{"total_count": 3, "check_runs": [
+        {"name": "build", "status": "completed", "conclusion": "success"},
+        {"name": "test", "status": "completed", "conclusion": "failure"},
+        {"name": "lint", "status": "in_progress", "conclusion": null},
+        {"name": "skip-me", "status": "completed", "conclusion": "skipped"},
+        {"name": "", "status": "completed", "conclusion": "success"}
+    ]}"#;
+    let checks = parse_commit_check_runs_json(payload);
+    assert_eq!(checks.len(), 4, "nameless entries are skipped");
+    assert_eq!(checks[0].state, "pass");
+    assert_eq!(checks[1].state, "fail");
+    assert_eq!(checks[2].state, "pending");
+    assert_eq!(checks[3].state, "skipping");
+    // Tolerant: a bare array also parses; garbage yields empty.
+    assert_eq!(
+        parse_commit_check_runs_json(
+            r#"[{"name": "solo", "status": "completed", "conclusion": "success"}]"#
+        )[0]
+        .name,
+        "solo"
+    );
+    assert!(parse_commit_check_runs_json("not json").is_empty());
+}
+
+#[test]
+fn check_run_state_maps_rest_conclusions() {
+    use crate::forge::check_run_state;
+    assert_eq!(check_run_state("completed", "success"), "pass");
+    assert_eq!(check_run_state("completed", "failure"), "fail");
+    assert_eq!(check_run_state("completed", "timed_out"), "fail");
+    assert_eq!(check_run_state("completed", "neutral"), "skipping");
+    assert_eq!(check_run_state("in_progress", "null"), "pending");
+    assert_eq!(check_run_state("queued", ""), "pending");
+}
+
+#[test]
+fn pr_files_json_parses_tolerantly() {
+    use crate::forge::parse_pr_files_json;
+    let payload = r#"[
+        {"filename": "src/app.ts", "status": "modified", "additions": 12, "deletions": 3, "patch": "@@ -1 +1 @@"},
+        {"filename": "bin/asset.png", "status": "added", "additions": 0, "deletions": 0, "patch": null},
+        {"no filename": true}
+    ]"#;
+    let files = parse_pr_files_json(payload);
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path, "src/app.ts");
+    assert_eq!(files[0].status, "modified");
+    assert_eq!(files[0].additions, 12);
+    assert_eq!(files[0].patch.as_deref(), Some("@@ -1 +1 @@"));
+    assert!(files[1].patch.is_none());
+    assert!(parse_pr_files_json("garbage").is_empty());
+}
+
+#[test]
+fn review_comments_group_into_threads() {
+    use crate::forge::{group_review_threads, parse_review_comments_json};
+    let payload = r#"[
+        {"id": 1, "path": "src/app.ts", "line": 12, "outdated": false,
+         "user": {"login": "ada"}, "body": "Consider a map here.", "created_at": "2026-11-01T10:00:00Z"},
+        {"id": 2, "in_reply_to_id": 1, "path": "src/app.ts", "line": 12,
+         "user": {"login": "linus"}, "body": "Done.", "created_at": "2026-11-01T11:00:00Z"},
+        {"id": 3, "in_reply_to_id": 99, "path": "src/other.rs", "line": 1,
+         "user": {"login": "orphan"}, "body": "Parent paginated away."}
+    ]"#;
+    let threads = group_review_threads(parse_review_comments_json(payload));
+    assert_eq!(threads.len(), 2, "1 real thread + 1 orphan-kept thread");
+    assert_eq!(threads[0].id, 1);
+    assert_eq!(threads[0].author, "ada");
+    assert_eq!(threads[0].line, Some(12));
+    assert!(!threads[0].outdated);
+    assert_eq!(threads[0].replies.len(), 1);
+    assert_eq!(threads[0].replies[0].author, "linus");
+    assert_eq!(threads[1].id, 3, "orphan reply survives as its own thread");
+    assert!(threads[1].replies.is_empty());
+    assert!(parse_review_comments_json("garbage").is_empty());
+}
+
+#[test]
+fn worst_part_error_picks_the_most_fundamental_failure() {
+    use crate::forge::{
+        worst_part_error, ForgeError, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OFFLINE, KIND_OTHER,
+        KIND_RATE_LIMITED,
+    };
+    assert_eq!(worst_part_error(Vec::new()), None);
+    let gh_missing = ForgeError {
+        kind: KIND_NO_GH.to_string(),
+        message: "gh missing".to_string(),
+        url: None,
+    };
+    let unauthed = ForgeError {
+        kind: KIND_NOT_AUTHED.to_string(),
+        message: "unauthed".to_string(),
+        url: None,
+    };
+    let rate_limited = ForgeError {
+        kind: KIND_RATE_LIMITED.to_string(),
+        message: "rate limited".to_string(),
+        url: None,
+    };
+    let offline = ForgeError {
+        kind: KIND_OFFLINE.to_string(),
+        message: "offline".to_string(),
+        url: None,
+    };
+    let other = ForgeError {
+        kind: KIND_OTHER.to_string(),
+        message: "other".to_string(),
+        url: None,
+    };
+    // NoGh beats everything; the order in the input list never matters.
+    assert_eq!(
+        worst_part_error(vec![
+            other.clone(),
+            offline,
+            unauthed.clone(),
+            gh_missing.clone()
+        ])
+        .map(|e| e.kind),
+        Some(KIND_NO_GH.to_string())
+    );
+    assert_eq!(
+        worst_part_error(vec![other.clone(), rate_limited.clone(), unauthed]).map(|e| e.kind),
+        Some(KIND_NOT_AUTHED.to_string())
+    );
+    assert_eq!(
+        worst_part_error(vec![other, rate_limited]).map(|e| e.kind),
+        Some(KIND_RATE_LIMITED.to_string())
+    );
+}
+
+#[test]
+fn snapshot_gh_args_are_argv_only_and_slug_scoped() {
+    use crate::forge::{
+        commit_check_runs_args, snapshot_pr_args, snapshot_pr_list_args, snapshot_run_args,
+    };
+    let pr = snapshot_pr_args("acme/widget", "e1-snap");
+    assert_eq!(
+        pr,
+        vec![
+            "pr".to_string(),
+            "list".to_string(),
+            "--repo".to_string(),
+            "acme/widget".to_string(),
+            "--state".to_string(),
+            "all".to_string(),
+            "--head".to_string(),
+            "e1-snap".to_string(),
+            "--json".to_string(),
+            crate::forge::PR_LIST_JSON_FIELDS.to_string(),
+            "--limit".to_string(),
+            "10".to_string(),
+        ]
+    );
+    assert_eq!(
+        snapshot_pr_list_args("acme/widget")[..4],
+        vec!["pr", "list", "--repo", "acme/widget"]
+    );
+    let run = snapshot_run_args("acme/widget", "main");
+    assert!(run.contains(&"--branch".to_string()));
+    assert!(run.contains(&"--limit".to_string()));
+    assert!(run.contains(&"1".to_string()));
+    let checks = commit_check_runs_args("acme/widget", "abc123");
+    assert_eq!(
+        checks,
+        vec![
+            "api".to_string(),
+            "repos/acme/widget/commits/abc123/check-runs".to_string()
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// E1: degraded-kind classification
+// ---------------------------------------------------------------------------
+
+#[test]
+fn forge_failure_maps_rate_limit_and_offline() {
+    use crate::forge::{forge_failure, KIND_OFFLINE, KIND_RATE_LIMITED};
+    let rate_limited = forge_failure(
+        None,
+        "gh: HTTP 403: Forbidden (https://api.github.com/repos/a/b) \n API rate limit exceeded for 1.2.3.4",
+    );
+    assert_eq!(rate_limited.kind, KIND_RATE_LIMITED);
+    let offline = forge_failure(
+        None,
+        "gh: Get \"https://api.github.com/notifications\": dial tcp: lookup api.github.com: could not resolve host",
+    );
+    assert_eq!(offline.kind, KIND_OFFLINE);
+    // A plain 403 refusal still classifies by its markers (Other here).
+    let refusal = forge_failure(None, "gh: Resource not accessible by integration");
+    assert_eq!(refusal.kind, KIND_OTHER);
+}

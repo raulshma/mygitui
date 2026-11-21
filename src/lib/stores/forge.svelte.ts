@@ -17,7 +17,11 @@
 
 import {
   forgeContext,
+  forgePrFiles,
+  forgePrReviewThreads,
+  forgeSnapshot,
   forgeStatus,
+  isForgeFailure,
   issueClose,
   issueCreate,
   issueList,
@@ -47,9 +51,13 @@ import {
 import type {
   CheckInfo,
   ForgeContext,
+  ForgeFailureKind,
   ForgeIssue,
   ForgeIssueDetail,
   ForgeNotification,
+  ForgePrFile,
+  ForgeReviewThread,
+  ForgeSnapshot,
   ForgeStatus,
   IssueStateFilter,
   PrInfo,
@@ -78,6 +86,19 @@ export function issueDetailKey(repoId: RepoId, number: number): string {
 /** Storage key for one workflow run (detail/busy lookups). */
 export function runKey(repoId: RepoId, runId: number): string {
   return `${repoId}:${runId}`;
+}
+
+/** True when every snapshot content hash matches (unchanged content). */
+export function snapshotHashesEqual(
+  a: ForgeSnapshot["hashes"],
+  b: ForgeSnapshot["hashes"],
+): boolean {
+  return (
+    a.pr === b.pr &&
+    a.head_checks === b.head_checks &&
+    a.pr_head_checks === b.pr_head_checks &&
+    a.run === b.run
+  );
 }
 
 /** Storage key for one run log view (run-wide, per job, failed-only). */
@@ -129,6 +150,13 @@ export class ForgeStore {
   /** Mutating issue action in flight per `"<repoId>:<number>"`. */
   #issueBusy = $state<Record<string, boolean>>({});
 
+  // -- PR-detail depth (E2, plan §9.4; read-only, loaded on open) -----------
+
+  /** Changed files (with patches) of one PR per `"<repoId>:<number>"` (lazy). */
+  #prFiles = new AsyncMap<ForgePrFile[]>();
+  /** Review threads (top-level + replies) of one PR per `"<repoId>:<number>"` (lazy). */
+  #threads = new AsyncMap<ForgeReviewThread[]>();
+
   // -- Notifications (Phase 6 batch A; refreshed on open / manual) ----------
 
   /** Unread notification threads per repo id. */
@@ -154,6 +182,137 @@ export class ForgeStore {
   #runBusy = $state<Record<string, boolean>>({});
   /** Workflow dispatch in flight per repo id. */
   #dispatchBusy = $state<Record<string, boolean>>({});
+
+  // -- Snapshot (E1, plan §9.3) ----------------------------------------------
+  //
+  // The footer chips' batched GitHub state per open repo, refreshed by the
+  // poll scheduler's `forge:snapshot:<repoId>` lanes. Same AsyncMap machine
+  // as every other group (seq guards + stale-on-error); content hashes skip
+  // re-renders of unchanged snapshots (the previous object is restored when
+  // every hash matches, so chip identities stay stable).
+
+  /** Batched GitHub snapshot per repo id. */
+  #snapshots = new AsyncMap<ForgeSnapshot>();
+  /** Wall-clock of the last successful snapshot fetch per repo id ("as of Xm ago"). */
+  #snapshotFetchedAt = new Map<RepoId, number>();
+  /** Last snapshot failure's ForgeError kind per repo id ("" = none). */
+  #snapshotKinds = $state<Record<string, string>>({});
+
+  // -- snapshot (E1) ---------------------------------------------------------
+
+  /**
+   * Refreshes one repo's snapshot (the poll scheduler's lane work and the
+   * popovers' manual refresh). `remote` selects the per-repo override remote
+   * (`null`/absent = `origin`). Silent when a previous entry exists — the
+   * chips must not flash "loading" on every 60 s tick. Resolves the snapshot,
+   * or `null` when the fetch failed (failure kind via
+   * {@link snapshotFailureKindFor}; the failure also REJECTS out of
+   * `refreshSnapshotStrict`, which the scheduler lanes use to trigger
+   * backoff).
+   */
+  async refreshSnapshot(
+    repoId: RepoId,
+    opts: { remote?: string | null; silent?: boolean } = {},
+  ): Promise<ForgeSnapshot | null> {
+    const remote = opts.remote ?? null;
+    const silent = opts.silent ?? this.#snapshots.get(repoId).state !== "idle";
+    const previous = this.#readyData(this.#snapshots, repoId);
+    const next = await this.#snapshots.run(
+      repoId,
+      () => forgeSnapshot(repoId, remote),
+      {
+        silent,
+        onError: (err) => {
+          // The rejection is the structured ForgeError (raw wire object or
+          // the wrapped ForgeIpcError) — the kind drives the chips' named
+          // degraded states (§9.1).
+          if (isForgeFailure(err)) {
+            this.#snapshotKinds = { ...this.#snapshotKinds, [repoId]: err.kind };
+          }
+          console.warn("[forge] snapshot failed:", err);
+        },
+      },
+    );
+    if (next !== null) {
+      delete this.#snapshotKinds[repoId];
+      this.#snapshotKinds = { ...this.#snapshotKinds };
+      this.#snapshotFetchedAt.set(repoId, Date.now());
+      if (
+        previous !== null &&
+        snapshotHashesEqual(previous.hashes, next.hashes)
+      ) {
+        // Unchanged content: restore the previous object (identical hashes →
+        // identical data), so derived chips keep their object identity and
+        // consumers skip re-rendering.
+        this.#snapshots.set(repoId, previous);
+      }
+      return this.#readyData(this.#snapshots, repoId);
+    }
+    return null;
+  }
+
+  /**
+   * The scheduler-lane variant: resolves like {@link refreshSnapshot} but
+   * REJECTS when the fetch failed so the poll scheduler's exponential
+   * backoff engages (403 ⇒ backoff + visible rate-limited state, §9.3).
+   */
+  async refreshSnapshotStrict(
+    repoId: RepoId,
+    opts: { remote?: string | null } = {},
+  ): Promise<void> {
+    const next = await this.refreshSnapshot(repoId, {
+      ...opts,
+      silent: true,
+    });
+    if (next === null && this.#snapshots.get(repoId).state === "error") {
+      throw new Error(this.snapshotErrorFor(repoId) ?? "snapshot failed");
+    }
+  }
+
+  /** The repo's ready snapshot (`null` while loading/failed without data). */
+  snapshotFor(repoId: RepoId): ForgeSnapshot | null {
+    return this.#readyData(this.#snapshots, repoId);
+  }
+
+  /**
+   * The snapshot, or the one a failed refresh left visible (stale-on-error —
+   * the chips keep showing the last-known state; the failure kind rides
+   * separately via {@link snapshotFailureKindFor}).
+   */
+  snapshotStaleFor(repoId: RepoId): ForgeSnapshot | null {
+    const entry = this.#snapshots.get(repoId);
+    if (entry.state === "ready") return entry.data;
+    return entry.state === "error" ? entry.previous : null;
+  }
+
+  /** The snapshot cache entry state (`idle | loading | ready | error`). */
+  snapshotStateFor(repoId: RepoId): "idle" | "loading" | "ready" | "error" {
+    return this.#snapshots.get(repoId).state;
+  }
+
+  /** The snapshot fetch failure message (when the latest fetch failed). */
+  snapshotErrorFor(repoId: RepoId): string | null {
+    return this.#mapError(this.#snapshots, repoId);
+  }
+
+  /** Last snapshot failure's `ForgeError` kind (`null` = last fetch ok). */
+  snapshotFailureKindFor(repoId: RepoId): ForgeFailureKind | null {
+    const kind = this.#snapshotKinds[repoId];
+    return kind ? (kind as ForgeFailureKind) : null;
+  }
+
+  /** Wall-clock (ms) of the last successful snapshot fetch (`null` = never). */
+  snapshotFetchedAtFor(repoId: RepoId): number | null {
+    return this.#snapshotFetchedAt.get(repoId) ?? null;
+  }
+
+  /** Drops the snapshot cache of one repo (tab close). */
+  dropSnapshot(repoId: RepoId): void {
+    this.#snapshots.reset(repoId);
+    this.#snapshotFetchedAt.delete(repoId);
+    delete this.#snapshotKinds[repoId];
+    this.#snapshotKinds = { ...this.#snapshotKinds };
+  }
 
   // -- shared AsyncMap read helpers -----------------------------------------
 
@@ -533,6 +692,29 @@ export class ForgeStore {
     );
   }
 
+  /** Lazily loads one PR's changed files (keyed per repo+number). */
+  async loadPrFiles(repoId: RepoId, number: number): Promise<ForgePrFile[]> {
+    const files = await this.#prFiles.run(
+      checksKey(repoId, number),
+      () => forgePrFiles(repoId, number),
+      { onError: (err) => console.warn("[forge] pr files failed:", err) },
+    );
+    return files ?? [];
+  }
+
+  /** Lazily loads one PR's review threads (keyed per repo+number). */
+  async loadReviewThreads(
+    repoId: RepoId,
+    number: number,
+  ): Promise<ForgeReviewThread[]> {
+    const threads = await this.#threads.run(
+      checksKey(repoId, number),
+      () => forgePrReviewThreads(repoId, number),
+      { onError: (err) => console.warn("[forge] review threads failed:", err) },
+    );
+    return threads ?? [];
+  }
+
   /** Creates an issue, then refreshes the list. */
   async createIssue(repoId: RepoId, title: string, body: string): Promise<void> {
     await issueCreate(repoId, title, body);
@@ -847,6 +1029,36 @@ export class ForgeStore {
   /** The issue-detail fetch failure, if the latest fetch failed. */
   issueDetailErrorFor(repoId: RepoId, number: number): string | null {
     return this.#mapError(this.#issueDetails, issueDetailKey(repoId, number));
+  }
+
+  // -- PR-detail depth read helpers (E2) -------------------------------------
+
+  /** One PR's changed files, or the files a failed refresh left visible. */
+  prFilesFor(repoId: RepoId, number: number): ForgePrFile[] | null {
+    return this.#staleData(this.#prFiles, checksKey(repoId, number));
+  }
+
+  prFilesLoadingFor(repoId: RepoId, number: number): boolean {
+    return this.#mapLoading(this.#prFiles, checksKey(repoId, number));
+  }
+
+  /** The PR-files fetch failure, if the latest fetch failed. */
+  prFilesErrorFor(repoId: RepoId, number: number): string | null {
+    return this.#mapError(this.#prFiles, checksKey(repoId, number));
+  }
+
+  /** One PR's review threads, or the threads a failed refresh left visible. */
+  reviewThreadsFor(repoId: RepoId, number: number): ForgeReviewThread[] | null {
+    return this.#staleData(this.#threads, checksKey(repoId, number));
+  }
+
+  reviewThreadsLoadingFor(repoId: RepoId, number: number): boolean {
+    return this.#mapLoading(this.#threads, checksKey(repoId, number));
+  }
+
+  /** The review-threads fetch failure, if the latest fetch failed. */
+  reviewThreadsErrorFor(repoId: RepoId, number: number): string | null {
+    return this.#mapError(this.#threads, checksKey(repoId, number));
   }
 
   // -- Notifications read helpers ------------------------------------------

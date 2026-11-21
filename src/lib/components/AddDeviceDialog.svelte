@@ -360,7 +360,7 @@
           bind:value={pollText}
           disabled={busy}
         />
-        <span class="text-muted-foreground text-[0.65rem]">
+        <span class="text-muted-foreground text-ui-meta">
           {POLL_SECS_MIN}–{POLL_SECS_MAX} s · blank = global default ({POLL_SECS_DEFAULT} s)
         </span>
       </Label>

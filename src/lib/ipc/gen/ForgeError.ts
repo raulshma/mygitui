@@ -6,11 +6,12 @@
  */
 export type ForgeError = { 
 /**
- * `NoGh` | `NotAuthed` | `AlreadyExists` | `Other` (kept as a
- * string-literal union in the generated TS type — the FE narrows it
- * via `ForgeFailureKind`; values are the `KIND_*` consts).
+ * `NoGh` | `NotAuthed` | `AlreadyExists` | `NotRepo` | `RateLimited` |
+ * `Offline` | `Other` (kept as a string-literal union in the generated
+ * TS type — the FE narrows it via `ForgeFailureKind`; values are the
+ * `KIND_*` consts).
  */
-kind: "NoGh" | "NotAuthed" | "AlreadyExists" | "Other", message: string, 
+kind: "NoGh" | "NotAuthed" | "AlreadyExists" | "NotRepo" | "RateLimited" | "Offline" | "Other", message: string, 
 /**
  * For `AlreadyExists`: the existing PR's URL when parseable.
  */

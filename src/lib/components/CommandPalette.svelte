@@ -1,6 +1,8 @@
 <script lang="ts">
   /**
-   * Command palette overlay (M4 F2) — Ctrl/Cmd+Shift+P.
+   * Command palette overlay (M4 F2) — Ctrl/Cmd+K (§12 P2: the palette is the
+   * Ctrl+K surface; the quick switcher that held Ctrl+K before moved to
+   * Ctrl/Cmd+Shift+K via the same engine).
    *
    * Mounted once from App.svelte; the global toggle keybinding is owned by
    * the keybind engine (`$lib/palette/keybinds.startKeybinds`, wired in
@@ -91,7 +93,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
     triggerEl = null;
   }
 
-  /** The command's effective shortcut hint ("Ctrl+Shift+P"), or null. */
+  /** The command's effective shortcut hint ("Ctrl+K"), or null. */
   function hint(command: Command): string | null {
     return shortcutHint(command);
   }

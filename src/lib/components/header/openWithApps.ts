@@ -1,0 +1,139 @@
+/**
+ * "Open with" plumbing shared by the repo header's overflow menu (the
+ * control's Workstream A home) — detection, last-used persistence and
+ * launching, extracted verbatim from the old `OpenWithButton.svelte` when
+ * the split button was demoted into the header overflow (plan §5.3).
+ *
+ * The primary segment opens the repository root with the last-used app
+ * (persisted `mygitui.openwith.last`, default: the platform file manager);
+ * detection lists every detected app with its brand icon (appIcons.ts),
+ * then — after a divider — the user-defined custom actions
+ * (`$lib/openwith/customApps.svelte`, generic terminal glyph). Detection
+ * re-runs on every menu open (cheap stat probes, so newly installed apps
+ * appear without a restart); ids resolve backend-side against a fresh
+ * probe, so only machine-verified executables are ever spawned for
+ * detected apps. Custom ids are namespaced `custom:<uuid>` in the
+ * last-used key and spawn the user's own command line via
+ * `open_with_custom`.
+ */
+import { detectEditors, openWith, openWithCustom } from "$lib/ipc/client";
+import type { EditorApp } from "$lib/ipc/types";
+import { describeError } from "$lib/errors";
+import { toast } from "$lib/toast";
+import {
+  CUSTOM_ID_PREFIX,
+  customApps,
+  fromMenuId,
+  isCustomId,
+  type CustomApp,
+} from "$lib/openwith/customApps.svelte";
+
+const LAST_KEY = "mygitui.openwith.last";
+
+/** Detection failure is surfaced once per session, then stays quiet. */
+let detectionToasted = false;
+
+/** One "open with" menu/launch entry: a detected app or a custom action. */
+export interface OpenEntry {
+  /** `custom:<uuid>` for custom apps, else the detected id. */
+  id: string;
+  name: string;
+  /** Present for custom entries (drives the spawn + the icon). */
+  custom?: CustomApp;
+}
+
+/**
+ * One detection pass. Called on mount and again on every menu open (the
+ * probes are a handful of `stat`s); a failure toasts once per session
+ * and resolves as "no apps".
+ */
+export function refreshApps(): Promise<EditorApp[]> {
+  return detectEditors()
+    .then((found) => (Array.isArray(found) ? found : []))
+    .catch((err: unknown) => {
+      if (!detectionToasted) {
+        detectionToasted = true;
+        toast(
+          `Could not detect editors: ${describeError(err)}`,
+          { kind: "error" },
+        );
+      }
+      return [] as EditorApp[];
+    });
+}
+
+function readLast(): string {
+  try {
+    return localStorage.getItem(LAST_KEY) ?? "explorer";
+  } catch {
+    return "explorer";
+  }
+}
+
+function persistLast(id: string): void {
+  try {
+    localStorage.setItem(LAST_KEY, id);
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+/** Custom actions, namespaced so they never collide with detected ids. */
+export function customEntries(): OpenEntry[] {
+  return customApps.apps.map((app) => ({
+    id: `${CUSTOM_ID_PREFIX}${app.id}`,
+    name: app.name,
+    custom: app,
+  }));
+}
+
+/** Last-used custom app, when the persisted id points at one that exists. */
+export function lastCustomEntry(): OpenEntry | undefined {
+  const lastId = readLast();
+  if (!isCustomId(lastId)) return undefined;
+  const app = customApps.byId(fromMenuId(lastId));
+  return app ? { id: lastId, name: app.name, custom: app } : undefined;
+}
+
+/**
+ * The app the primary/"open again" action targets: the last-used entry,
+ * falling back to the file manager (always present), then the first
+ * detected app. `undefined` only when detection found nothing at all.
+ */
+export function currentEntry(apps: EditorApp[]): OpenEntry | undefined {
+  const entries: OpenEntry[] = [
+    ...apps.map((a) => ({ id: a.id, name: a.name })),
+    ...customEntries(),
+  ];
+  const lastId = readLast();
+  const lastCustom = lastCustomEntry();
+  return (
+    lastCustom ??
+    entries.find((e) => e.id === lastId) ??
+    entries.find((e) => e.id === "explorer") ??
+    entries[0]
+  );
+}
+
+/**
+ * Launches the repository root in `entry`, remembering it as last-used
+ * (launch failures toast; the last-used choice still sticks, mirroring the
+ * old split button's flow).
+ */
+export async function openWithEntry(
+  root: string,
+  entry: OpenEntry,
+): Promise<void> {
+  persistLast(entry.id);
+  const pending = entry.custom
+    ? openWithCustom(root, entry.custom)
+    : openWith(root, entry.id);
+  try {
+    await pending;
+  } catch (err: unknown) {
+    toast(
+      `Could not open ${entry.name}: ${describeError(err)}`,
+      { kind: "error" },
+    );
+  }
+}

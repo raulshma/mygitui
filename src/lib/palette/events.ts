@@ -11,8 +11,12 @@
 
 /** All bus event names with their payload types. */
 export interface UiEventMap {
-  /** Focus a panel stack tab: `{ panel, repoId }`. */
-  "focus-panel": { panel: string; repoId: string | null };
+  /**
+   * Focus a panel stack tab: `{ panel, repoId, tab? }` — `tab` optionally
+   * selects a sub-tab inside the target panel (E2: `panel: "forge"` +
+   * `tab: "actions"` lands on the runs list from a run view's breadcrumb).
+   */
+  "focus-panel": { panel: string; repoId: string | null; tab?: string };
   /** Focus the history filter input. */
   "history-focus-filter": undefined;
   /** Clear the history filter. */
@@ -165,6 +169,25 @@ export interface UiEventMap {
    * palette command and status context menus.
    */
   "files-reveal-path": { repoId: string; path?: string };
+  /**
+   * Open the FILES panel's filter input: Ctrl/Cmd+F routed by focus from
+   * the `diff.find` command (see the comment there). Only the panel whose
+   * tree holds focus reacts.
+   */
+  "files-filter": undefined;
+  /**
+   * Open the STATUS panel's filter input: Ctrl/Cmd+F routed by focus from
+   * the `diff.find` command (same grammar as `files-filter`). Only the
+   * panel whose tree holds focus reacts.
+   */
+  "status-filter": undefined;
+  /**
+   * Focus the HISTORY panel's search input: Ctrl/Cmd+F routed by focus
+   * from the `diff.find` command (same grammar as `files-filter` /
+   * `status-filter`, Workstream D §8.4). Only the panel whose list holds
+   * focus reacts.
+   */
+  "history-filter": undefined;
   /** Open the quick-open dialog (fuzzy file finder, Ctrl+P). */
   "files-quick-open": undefined;
   /** Save the active file in the file workspace (Ctrl+S / palette). */

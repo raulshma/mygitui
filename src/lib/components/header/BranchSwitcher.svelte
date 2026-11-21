@@ -486,21 +486,23 @@
   }
 </script>
 
-<Hint label="Switch branch">
+<Hint label={`Switch branch — ${chipLabel}`}>
   {#snippet child({ props })}
+    <!-- Workstream D §8.6 dedup: the status bar owns the branch-name text
+         ("never show the same state twice"); the header switcher stays an
+         icon trigger — the current branch rides the tooltip + aria-label. -->
     <Button
       bind:ref={triggerEl}
-      class="branch-chip h-auto max-w-64 min-w-0 flex-none gap-1 rounded-full px-2 py-px font-mono text-ui-micro focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
+      class="branch-chip h-auto min-w-0 flex-none gap-1 rounded-full px-2 py-px focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1 hover:brightness-[1.08] [&_svg]:flex-none"
       variant="secondary"
       type="button"
       {...props}
-      aria-label="Switch branch"
+      aria-label={`Switch branch — ${chipLabel}`}
       aria-haspopup="dialog"
       aria-expanded={open}
       onclick={toggle}
     >
       <Icon icon={iconBranch} size={12} />
-      <span class="branch-label min-w-0 truncate">{chipLabel}</span>
       <Icon icon={iconChevronDown} size={10} />
     </Button>
   {/snippet}
@@ -690,7 +692,7 @@
                       {/if}
                       {#if row.branch.gone}
                         <span
-                          class="gone ml-1.5 rounded-full border border-destructive px-ui-35 text-ui-tiny text-destructive"
+                          class="gone ml-1.5 rounded-full border border-destructive px-ui-35 text-ui-micro text-destructive"
                           >gone</span
                         >
                       {/if}

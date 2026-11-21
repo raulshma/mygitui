@@ -5,4 +5,9 @@ export type CommitOptions = { message: string, amend: boolean, no_verify: boolea
 /**
  * Override author (name/email); committer stays the configured identity.
  */
-author: GitSignature | null, };
+author: GitSignature | null, 
+/**
+ * Append a `Signed-off-by:` trailer for the configured committer
+ * identity (`git commit -s`). Additive: absent on the wire = false.
+ */
+signoff: boolean, };

@@ -1,14 +1,16 @@
 /**
  * Header controls single-click (e2e): every Hint-wrapped header control —
- * the sync split-button chevron, the 3-dot "More repository actions", the
- * layout-preset select — must respond to ONE click, and its pill must not
- * flash closed and re-open while the pointer rests on the trigger.
+ * the sync split-button chevron and the 3-dot "More repository actions"
+ * overflow (with its Layout preset / Open with submenus) — must respond to
+ * ONE click, and its pill must not flash closed and re-open while the
+ * pointer rests on the trigger.
  *
  * Reproduces the user report: "many controls sometimes require clicking
- * twice to open (fetch/pull/push chevron, 3-dot repository actions)"; the
- * preset select "is lowercase before click, after click nothing opens but
- * the default becomes titlecase Default"; "the tooltip shows and flashes
- * then reshowss very quickly".
+ * twice to open (fetch/pull/push chevron, 3-dot repository actions)"; "the
+ * tooltip shows and flashes then reshowss very quickly". The layout-preset
+ * select tests moved with the control into the overflow (Workstream A);
+ * the dwell-swap mechanic they exercised is covered by the sync chevron
+ * tests (same Hint behavior).
  */
 
 import { expect, test, type Page } from "@playwright/test";
@@ -160,28 +162,34 @@ test("sync chevron opens when the press spans the dwell swap", async ({
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
 
-test("layout preset select opens when the press spans the dwell swap", async ({
+test("layout preset opens from the header overflow with single clicks", async ({
   page,
 }) => {
   const tracked = trackErrors(page);
   await boot(page);
-  const trigger = page.getByRole("combobox", { name: "Layout preset" });
-  await trigger.hover();
+  // Workstream A moved the preset select into "More repository actions"
+  // (RepoHeader submenu): overflow click → submenu click → options visible.
+  const more = page.getByRole("button", { name: "More repository actions" });
+  await more.hover();
   await page.waitForTimeout(280);
   await page.mouse.down();
   await page.waitForTimeout(80);
   await page.mouse.up();
+  await expect(
+    page.getByRole("menuitem", { name: "Layout preset" }),
+  ).toBeVisible({ timeout: 4_000 });
+  await page.getByRole("menuitem", { name: "Layout preset" }).click();
   try {
-    await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible({
-      timeout: 4_000,
-    });
+    await expect(
+      page.getByRole("menuitem", { name: "Default" }),
+    ).toBeVisible({ timeout: 4_000 });
   } catch (err) {
     await dumpTrace(page);
     throw err;
   }
-  // The listbox must STAY open — not dismiss on the click that opened it.
+  // The submenu must STAY open — not dismiss on the click that opened it.
   await page.waitForTimeout(400);
-  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
@@ -221,38 +229,16 @@ test("sync chevron opens on a single click after dwell", async ({ page }) => {
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });
 
-test("layout preset select opens on a fast click", async ({ page }) => {
-  const tracked = trackErrors(page);
-  await boot(page);
-  const trigger = page.getByRole("combobox", { name: "Layout preset" });
-  await trigger.hover();
-  await clickHere(page);
-  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
-  await dumpTrace(page);
-  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
-});
-
-test("layout preset select opens on a single click after dwell", async ({
+test("layout preset submenu opens on a fast click (no dwell)", async ({
   page,
 }) => {
   const tracked = trackErrors(page);
   await boot(page);
-  const trigger = page.getByRole("combobox", { name: "Layout preset" });
-  await trigger.hover();
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() =>
-          Array.from(
-            document.querySelectorAll('[data-slot="tooltip-content"]'),
-          ).some((el) => el.getAttribute("data-state") !== "closed"),
-        ),
-      { timeout: 5_000 },
-    )
-    .toBe(true);
-  await page.waitForTimeout(250);
+  const more = page.getByRole("button", { name: "More repository actions" });
+  await more.hover();
   await clickHere(page);
-  await expect(page.getByRole("listbox").getByRole("option", { name: "Default" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Layout preset" }).click();
+  await expect(page.getByRole("menuitem", { name: "Default" })).toBeVisible();
   await dumpTrace(page);
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
 });

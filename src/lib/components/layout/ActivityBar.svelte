@@ -6,7 +6,8 @@
    * get rail buttons; every other panel lives behind the "More panels"
    * overflow menu so the rail stays scannable without hovering each icon
    * (UI review P1 #1). Hover/focus shows a small label flyout beside the
-   * rail — faster than a native tooltip and not clipped, because the rail
+   * rail (`activity-btn`'s `data-label` ::after, Workstream A §5.4 keeps
+   * this) — faster than a native tooltip and not clipped, because the rail
    * no longer scrolls.
    *
    * Clicking any entry activates that panel in the primary sidebar, opening
@@ -18,6 +19,21 @@
    * History gets a separate bottom placement because the workspace keeps it
    * on the right edge; `onHistory` toggles that secondary sidebar instead of
    * switching the primary one.
+   *
+   * Workstream A (§5.4): the "More panels" "⋯" moved into the bottom group
+   * (above History) so the top rail is only core + pinned panels, the count
+   * badge sits INSIDE the rail width (anchored within the button, no bleed
+   * over the rail edge), and the active item gets a filled-pill affordance
+   * (tinted rounded fill + edge indicator) rather than color alone.
+   *
+ * §10 (responsive matrix): panels converted to overlay drawers in
+ * Medium/Narrow keep their rail item as the drawer's toggle —
+ * `drawerActive` marks the panels whose drawer is currently open so the
+ * pill + `aria-pressed` reflect it alongside the docked `active` panel.
+ *
+ * §10 Stacked (<800): the rail hides — the bottom StackedTabBar replaces
+ * it as the workspace navigator, carrying the same inventory (5 primary
+ * views + the rest behind "More").
    *
    * Overflow panels can be pinned: with `onTogglePin` set, each "More
    * panels" entry grows a pin action and pinned panels get their own rail
@@ -43,6 +59,7 @@
     panels,
     pinned = [],
     active = null,
+    drawerActive = {},
     historyActive = false,
     historyCanHide = true,
     collapsed = false,
@@ -59,6 +76,8 @@
     pinned?: PanelId[];
     /** Currently active primary-sidebar panel (null = none). */
     active?: PanelId | null;
+    /** Panels whose overlay drawer is open (§10): pill + aria-pressed. */
+    drawerActive?: Partial<Record<PanelId, boolean>>;
     /** Whether the right-hand history sidebar is visible/active. */
     historyActive?: boolean;
     /** Allow hiding the visible history view (false when it is the last pane). */
@@ -79,9 +98,10 @@
   const iconMore = $derived(appIcon("more-horiz")!);
   const iconPin = $derived(appIcon("push-pin")!);
 
-  /** Rail chrome (flyout + active indicator) lives in `@utility activity-btn`. */
+  /** Rail chrome (flyout + active indicator) lives in `@utility activity-btn`.
+   *  Active = filled pill (tinted rounded fill, not just a color swap). */
   const railBtn =
-    "activity-btn relative flex-none rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-accent [&.active]:text-primary";
+    "activity-btn relative flex-none rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-primary/15 [&.active]:text-primary [&.active]:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_25%,transparent)]";
 
   /** Default rail buttons (registry order first: the core panels). */
   const defaultRail = $derived(
@@ -109,6 +129,12 @@
   /** Caps runaway counts; the full number stays in the flyout label. */
   function badgeText(count: number): string {
     return count > 99 ? "99+" : String(count);
+  }
+
+  /** A rail item is "on" when it is the docked active panel OR its drawer
+   *  is open (§10 drawer toggles keep the pill affordance honest). */
+  function isOn(panel: PanelId): boolean {
+    return active === panel || (drawerActive[panel] ?? false);
   }
 
   /** Overflow menu: one labeled, icon-carrying entry per hidden panel. */
@@ -153,7 +179,7 @@
 </script>
 
 <div
-  class="activity-bar flex w-10 flex-none flex-col items-center gap-0.5 border-r border-border bg-popover py-1"
+  class="activity-bar flex w-10 flex-none flex-col items-center gap-0.5 border-r border-border bg-popover py-1 wm-stacked:hidden"
   role="toolbar"
   aria-orientation="vertical"
   aria-label="Activity bar"
@@ -161,7 +187,7 @@
   {#each railPanels as panel (panel)}
     {@const count = badges[panel] ?? 0}
     <Button
-      class="{railBtn} {active === panel ? 'active' : ''}"
+      class="{railBtn} {isOn(panel) ? 'active' : ''}"
       variant="ghost"
       size="icon-lg"
       type="button"
@@ -170,7 +196,7 @@
         ? `${panelLabel(panel)} — ${count} ${count === 1 ? "item" : "items"}`
         : panelLabel(panel)}
       aria-label={panelLabel(panel)}
-      aria-pressed={active === panel}
+      aria-pressed={isOn(panel)}
       onclick={() => onSelect(panel)}
       oncontextmenu={(event) => onRailContext(event, panel)}
     >
@@ -187,8 +213,10 @@
         <path d={PANEL_META[panel]?.icon ?? ""} />
       </svg>
       {#if count > 0}
+        <!-- Badge anchored INSIDE the button (0.25rem inset): it may never
+             bleed past the button edge onto the rail border (§5.4). -->
         <span
-          class="activity-badge absolute right-[0.05rem] top-ui-1 grid h-4 min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-ui-tiny font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
+          class="activity-badge absolute right-0.5 top-ui-1 grid h-4 min-w-[0.8rem] place-items-center rounded-full border-2 border-popover bg-primary px-[0.14rem] text-ui-micro font-bold leading-none tracking-[-0.02em] text-primary-foreground tabular-nums [.active_&]:border-accent"
           aria-hidden="true"
           >{badgeText(count)}</span
         >
@@ -196,31 +224,32 @@
     </Button>
   {/each}
 
-  {#if morePanels.length > 0}
-    <Button
-      class="{railBtn} {moreActive ? 'active' : ''}"
-      variant="ghost"
-      size="icon-lg"
-      type="button"
-      data-label="More panels"
-      aria-label="More panels"
-      aria-pressed={moreActive}
-      aria-haspopup="menu"
-      onclick={openMoreMenu}
-    >
-      <Icon icon={iconMore} size={18} />
-      {#if moreBadgeCount > 0}
-        <span
-          class="activity-badge dot absolute right-[0.05rem] top-ui-1 grid h-[0.45rem] w-[0.45rem] min-w-[0.45rem] place-items-center rounded-full border-0 bg-primary p-0 leading-none tracking-[-0.02em] text-primary-foreground tabular-nums"
-          aria-hidden="true"
-        ></span>
-      {/if}
-    </Button>
-  {/if}
-
   <div
     class="activity-bottom mt-auto flex w-full flex-col items-center gap-0.5 border-t border-border pt-1"
   >
+    {#if morePanels.length > 0}
+      <!-- Workstream A §5.4: the pinned/unpinned overflow "⋯" lives in the
+           bottom group, so the top rail is only core + pinned panels. -->
+      <Button
+        class="{railBtn} {moreActive ? 'active' : ''}"
+        variant="ghost"
+        size="icon-lg"
+        type="button"
+        data-label="More panels"
+        aria-label="More panels"
+        aria-pressed={moreActive}
+        aria-haspopup="menu"
+        onclick={openMoreMenu}
+      >
+        <Icon icon={iconMore} size={18} />
+        {#if moreBadgeCount > 0}
+          <span
+            class="activity-badge dot absolute right-0.5 top-ui-1 grid h-[0.45rem] w-[0.45rem] min-w-[0.45rem] place-items-center rounded-full border-0 bg-primary p-0 leading-none tracking-[-0.02em] text-primary-foreground tabular-nums"
+            aria-hidden="true"
+          ></span>
+        {/if}
+      </Button>
+    {/if}
     <Button
       class="{railBtn} {historyActive ? 'active' : ''}"
       variant="ghost"

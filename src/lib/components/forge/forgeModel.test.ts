@@ -13,6 +13,7 @@ import {
   checkSummaryLabel,
   htmlUrlFromApiUrl,
   isIssueOpen,
+  logDownloadName,
   isPrOpen,
   issueNumberFromUrl,
   issueStateClass,
@@ -56,6 +57,7 @@ function pr(patch: Partial<PrInfo> & { number: number }): PrInfo {
   return {
     title: `PR ${patch.number}`,
     head_ref_name: "feat",
+    head_ref_oid: "",
     base_ref_name: "main",
     state: "OPEN",
     is_draft: false,
@@ -473,5 +475,20 @@ describe("notifications", () => {
     ).toBe("https://github.com/a/b/commit/abc123");
     expect(htmlUrlFromApiUrl("https://github.com/a/b/pull/55")).toBeNull();
     expect(htmlUrlFromApiUrl("https://api.github.com/user")).toBeNull();
+  });
+});
+
+describe("logDownloadName (E2 log download)", () => {
+  it("builds run/job file names with slugged parts", () => {
+    expect(logDownloadName(42, "CI", null)).toBe("run-42-ci.log");
+    expect(logDownloadName(42, "CI", "build")).toBe("run-42-ci-build.log");
+    expect(logDownloadName(7, "Nightly Deploy", "npm test")).toBe(
+      "run-7-nightly-deploy-npm-test.log",
+    );
+  });
+
+  it("degrades missing names and keeps the .log extension", () => {
+    expect(logDownloadName(42, "", null)).toBe("run-42-workflow.log");
+    expect(logDownloadName(42, "CI", "///")).toBe("run-42-ci-job.log");
   });
 });

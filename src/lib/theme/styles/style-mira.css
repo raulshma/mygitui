@@ -131,12 +131,16 @@
     @apply text-primary underline-offset-4 hover:underline;
   }
 
+  /* Compact keeps its dense look, but every interactive target still meets
+   * the app's 28px hit-target floor (--spacing-ui-hit, plan §4.1) — the
+   * xs/sm steps collapse onto the 28px default height rather than shrinking
+   * below it. Icon glyphs inside stay small. */
   .cn-button-size-xs {
-    @apply h-5 gap-1 rounded-sm px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-2.5;
+    @apply h-7 gap-1 rounded-sm px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-2.5;
   }
 
   .cn-button-size-sm {
-    @apply h-6 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3;
+    @apply h-7 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3;
   }
 
   .cn-button-size-default {
@@ -148,11 +152,11 @@
   }
 
   .cn-button-size-icon-xs {
-    @apply size-5 rounded-sm [&_svg:not([class*='size-'])]:size-2.5;
+    @apply size-7 rounded-sm [&_svg:not([class*='size-'])]:size-2.5;
   }
 
   .cn-button-size-icon-sm {
-    @apply size-6 [&_svg:not([class*='size-'])]:size-3;
+    @apply size-7 [&_svg:not([class*='size-'])]:size-3;
   }
 
   .cn-button-size-icon {
@@ -239,7 +243,7 @@
   }
 
   .cn-command-item {
-    @apply data-selected:bg-muted data-selected:text-foreground data-selected:*:[svg]:text-foreground relative flex min-h-6 cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs/relaxed outline-hidden select-none in-data-[slot=dialog-content]:rounded-md [&_svg:not([class*='size-'])]:size-3.5;
+    @apply data-selected:bg-muted data-selected:text-foreground data-selected:*:[svg]:text-foreground relative flex min-h-7 cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs/relaxed outline-hidden select-none in-data-[slot=dialog-content]:rounded-md [&_svg:not([class*='size-'])]:size-3.5;
   }
 
   .cn-command-shortcut {
@@ -359,7 +363,7 @@
   }
 
   .cn-dropdown-menu-item {
-    @apply focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:text-destructive not-data-[variant=destructive]:focus:**:text-accent-foreground min-h-6 gap-2 rounded-md px-2 py-1 text-xs/relaxed data-[inset]:pl-7.5 [&_svg:not([class*='size-'])]:size-3.5;
+    @apply focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:text-destructive not-data-[variant=destructive]:focus:**:text-accent-foreground min-h-7 gap-2 rounded-md px-2 py-1 text-xs/relaxed data-[inset]:pl-7.5 [&_svg:not([class*='size-'])]:size-3.5;
   }
 
   .cn-dropdown-menu-checkbox-item {
@@ -514,7 +518,7 @@
 
   /* MARK: Select */
   .cn-select-trigger {
-    @apply border-input data-placeholder:text-muted-foreground bg-input/20 dark:bg-input/30 dark:hover:bg-input/50 focus-visible:border-ring focus-visible:ring-ring/30 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 gap-1.5 rounded-md border px-2 py-1.5 text-xs/relaxed transition-colors focus-visible:ring-2 aria-invalid:ring-2 data-[size=default]:h-7 data-[size=sm]:h-6 *:data-[slot=select-value]:flex *:data-[slot=select-value]:gap-1.5 [&_svg:not([class*='size-'])]:size-3.5;
+    @apply border-input data-placeholder:text-muted-foreground bg-input/20 dark:bg-input/30 dark:hover:bg-input/50 focus-visible:border-ring focus-visible:ring-ring/30 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 gap-1.5 rounded-md border px-2 py-1.5 text-xs/relaxed transition-colors focus-visible:ring-2 aria-invalid:ring-2 data-[size=default]:h-7 data-[size=sm]:h-7 *:data-[slot=select-value]:flex *:data-[slot=select-value]:gap-1.5 [&_svg:not([class*='size-'])]:size-3.5;
   }
 
   .cn-select-trigger-icon {
@@ -699,7 +703,10 @@
   }
 
   .cn-toggle-size-sm {
-    @apply h-6 min-w-6 rounded-[min(var(--radius-md),8px)] px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3;
+    /* Collapsed onto the 28px hit-target floor like the button ladder —
+     * compact keeps its dense look, but toggle sm is interactive (diff
+     * toolbar / run-view pills use it) and must reach 28px too. */
+    @apply h-7 min-w-7 rounded-[min(var(--radius-md),8px)] px-2 text-xs has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3;
   }
 
   .cn-toggle-size-lg {
@@ -754,11 +761,13 @@
   }
 
   .cn-input-group-button-size-xs {
-    @apply h-5 gap-1 rounded-[calc(var(--radius-sm)-2px)] px-1 [&>svg:not([class*='size-'])]:size-3;
+    /* 28px floor like the rest of the compact ladder (no app call site
+     * today; kept coherent so a future use can't ship a sub-28px control). */
+    @apply h-7 gap-1 rounded-[calc(var(--radius-sm)-2px)] px-1 [&>svg:not([class*='size-'])]:size-3;
   }
 
   .cn-input-group-button-size-icon-xs {
-    @apply size-6 p-0 has-[>svg]:p-0;
+    @apply size-7 p-0 has-[>svg]:p-0;
   }
 
   .cn-input-group-button-size-icon-sm {

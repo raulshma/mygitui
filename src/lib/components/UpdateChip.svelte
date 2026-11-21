@@ -170,7 +170,7 @@
             ></span>
           {:else if status === "downloading"}
             <span
-              class="pct absolute -right-1 -top-1.5 rounded-full bg-primary px-1 text-[0.55rem] font-semibold leading-[1.1] text-primary-foreground tabular-nums"
+              class="pct absolute -right-1 -top-1.5 rounded-full bg-primary px-1 text-ui-micro font-semibold leading-[1.1] text-primary-foreground tabular-nums"
               aria-hidden="true"
             >
               {percent === null ? "…" : `${percent}%`}

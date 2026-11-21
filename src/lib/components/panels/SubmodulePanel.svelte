@@ -260,7 +260,7 @@
     <Hint label="Submodules in this repository">
       {#snippet child({ props })}
         <span
-          class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-tiny font-medium tabular-nums text-muted-foreground"
+          class="count inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-muted px-1.5 py-0 text-ui-micro font-medium tabular-nums text-muted-foreground"
           {...props}
         >{list.length}</span>
       {/snippet}
@@ -377,7 +377,7 @@
                     <Hint label={display.detail}>
                       {#snippet child({ props: tagProps })}
                         <span
-                          class={`tag max-w-36 shrink-0 truncate text-ui-tiny leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
+                          class={`tag max-w-36 shrink-0 truncate text-ui-micro leading-[1.35] ${display.tone === "danger" ? "text-[var(--app-deleted)]" : display.tone === "dirty" ? "text-[var(--app-modified)]" : "text-muted-foreground"}`}
                           {...tagProps}
                         >
                           {display.tag}
@@ -460,7 +460,7 @@
           </div>
           <Hint label="Checked-out HEAD vs recorded gitlink">
             {#snippet child({ props })}
-              <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-ui-tiny text-muted-foreground opacity-85" {...props}>
+              <div class="meta flex min-w-0 items-center gap-1 whitespace-nowrap pl-5 font-mono text-ui-meta text-muted-foreground opacity-85" {...props}>
                 {#if updateAvailable(info)}
                   <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
                 {/if}

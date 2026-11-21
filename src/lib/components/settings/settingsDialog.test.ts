@@ -403,7 +403,7 @@ describe("SettingsDialog keybind editor", () => {
     // …with titles and pre-formatted bindings.
     expect(screen.getByText("Open repository…")).toBeTruthy();
     const palette = captureButton("Toggle command palette");
-    expect(palette.textContent).toContain("Ctrl+Shift+P");
+    expect(palette.textContent).toContain("Ctrl+K");
     // Unbound commands (e.g. files.find) show a placeholder instead.
     expect(captureButton("Find in file…").textContent).toContain("Unbound");
   });
@@ -462,22 +462,22 @@ describe("SettingsDialog keybind editor", () => {
   it("warns about conflicts inline before applying, then applies on confirm", async () => {
     await openKeybinds();
 
-    // ctrl+shift+p already belongs to "Toggle command palette".
+    // ctrl+k already belongs to "Toggle command palette" (§12 P2 default).
     const button = captureButton("Refresh repository status");
     await fireEvent.click(button);
-    await fireEvent.keyDown(button, { key: "p", ctrlKey: true, shiftKey: true });
+    await fireEvent.keyDown(button, { key: "k", ctrlKey: true });
 
     // Inline warning shown; the binding is NOT applied yet.
     const warning = screen.getByRole("alert");
     expect(warning.textContent).toContain(
-      "Ctrl+Shift+P is already bound to Toggle command palette",
+      "Ctrl+K is already bound to Toggle command palette",
     );
     // The conflicting combo is parked, not applied (no override written yet).
     expect(localStorage.getItem("mygitui.keybinds")).toBeNull();
 
     await fireEvent.click(screen.getByRole("button", { name: "Use anyway" }));
     expect(JSON.parse(localStorage.getItem("mygitui.keybinds") as string)).toEqual({
-      "repo.refresh": "ctrl+shift+p",
+      "repo.refresh": "ctrl+k",
     });
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -487,7 +487,7 @@ describe("SettingsDialog keybind editor", () => {
 
     const button = captureButton("Refresh repository status");
     await fireEvent.click(button);
-    await fireEvent.keyDown(button, { key: "p", ctrlKey: true, shiftKey: true });
+    await fireEvent.keyDown(button, { key: "k", ctrlKey: true });
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("alert")).toBeNull();

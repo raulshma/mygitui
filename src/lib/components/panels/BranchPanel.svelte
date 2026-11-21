@@ -770,7 +770,7 @@
                           {#if branch.ahead > 0 || branch.behind > 0}
                             <span class="ab pl-1.5 text-primary tabular-nums">↑{branch.ahead} ↓{branch.behind}</span>
                           {/if}
-                          {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
+                          {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-micro text-destructive">gone</Badge>{/if}
                         </span>
                       {/snippet}
                     </Hint>
@@ -793,7 +793,7 @@
                         {/snippet}
                       </Hint>
                     {:else}
-                      <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-tiny font-semibold tracking-[0.04em] text-background">HEAD</Badge>
+                      <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-micro font-semibold tracking-[0.04em] text-background">HEAD</Badge>
                     {/if}
                     <Hint label="Push, merge, rename, reset, or delete this branch">
                       {#snippet child({ props })}
@@ -858,7 +858,7 @@
                 >
                   <span class="chev text-muted-foreground" aria-hidden="true">{groupExpanded(group.remote) ? "▾" : "▸"}</span>
                   {group.remote}
-                  <span class="gcount text-ui-tiny font-normal text-muted-foreground">({group.branches.length})</span>
+                  <span class="gcount text-ui-micro font-normal text-muted-foreground">({group.branches.length})</span>
                 </Button>
                 <span class="spacer min-w-0 flex-1"></span>
                 {#if groupExpanded(group.remote)}
@@ -904,7 +904,7 @@
                               {#if tracker.ahead > 0 || tracker.behind > 0}
                                 <span class="ab pl-1.5 text-primary">↑{tracker.ahead} ↓{tracker.behind}</span>
                               {/if}
-                              {#if tracker.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-tiny text-destructive">gone</Badge>{/if}
+                              {#if tracker.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-micro text-destructive">gone</Badge>{/if}
                             </span>
                           {/snippet}
                         </Hint>
@@ -913,7 +913,7 @@
                       {/if}
                       <span class="actions ml-auto flex shrink-0 items-center gap-1">
                         {#if tracker?.is_head}
-                          <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-tiny font-semibold tracking-[0.04em] text-background">HEAD</Badge>
+                          <Badge variant="secondary" class="head-chip h-auto shrink-0 rounded-full bg-foreground px-1.5 py-0 text-ui-micro font-semibold tracking-[0.04em] text-background">HEAD</Badge>
                         {:else if tracker}
                           <Hint label={`Switch to ${tracker.name} (this remote branch is checked out as a local branch)`}>
                             {#snippet child({ props })}

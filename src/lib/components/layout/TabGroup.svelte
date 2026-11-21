@@ -1,10 +1,11 @@
 <script lang="ts">
   /**
    * TabGroup — renders a `{ kind: "tabs" }` layout leaf: the tab strip
-   * (same visual + keyboard pattern as the pre-M4 RepoView tablist),
-   * the panel bodies, a "+ Add panel" menu listing hidden panels,
-   * and a right-click context menu per tab ("Move to right group" /
-   * "New group to the right" / "Hide").
+   * (a {@link UnifiedTabStrip} surface — same engine as the repo/file tab
+   * strips since the §4.3 primitives pass), the panel bodies, a
+   * "+ Add panel" menu listing hidden panels, and a right-click context
+   * menu per tab ("Move to right group" / "New group to the right" /
+   * "Hide").
    *
    * When `hideTabs` is set (the activity-bar-controlled primary sidebar),
    * the horizontal strip is replaced by a compact view title + actions
@@ -18,10 +19,25 @@
    * import trees) out of the session. Panels removed from the group
    * ("Hide" / move) unmount; re-adding starts fresh.
    *
+   * Overlay drawers (plan §10, Medium/Narrow): panels in `drawerPanels`
+   * keep their keep-alive host but present it as a non-modal overlay
+   * drawer (`position: absolute` against the positioned workspace frame —
+   * the SAME element as the docked host, so a docked↔drawer mode flip
+   * never remounts the panel). A drawerized panel shows no tab button
+   * (the ActivityBar item / edge rail toggle it instead), and it mounts
+   * eagerly when its drawer is open so the content is there on first
+   * open. Visibility is the drawer's open state, not the group's active
+   * tab.
+   *
    * Pure presentation: every action is delegated to callbacks owned by
    * RepoView (which applies them through the layout store). Component
    * rendering is not unit testable, so behavior tests live in the layout
    * model/store suites.
+   *
+   * Strip behavior preserved from the pre-unification implementation:
+   * arrows activate as they move focus (`activateOnArrow`), middle-click
+   * hides the panel, and the background right-click is suppressed — the
+   * per-tab context menu replaces it.
    */
   import type { Snippet } from "svelte";
   import {
@@ -31,13 +47,20 @@
     type PanelId,
     type TabsNode,
   } from "$lib/layout/layoutModel";
+import {
+  overlayHostAttrs,
+  overlayPaneClass,
+  type DrawerBinding,
+} from "$lib/layout/drawerPlan";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
+  import UnifiedTabStrip from "./UnifiedTabStrip.svelte";
 
   let {
     node,
     renderPanel,
     hiddenPanels,
+    drawerPanels = [],
     hideTabs = false,
     canMoveLeft,
     canMoveRight,
@@ -50,6 +73,11 @@
     renderPanel: (id: PanelId) => Snippet;
     /** Panels currently not in the tree (candidates for "+ Add panel"). */
     hiddenPanels: PanelId[];
+    /**
+     * Panels of ANY group rendered as overlay drawers; entries whose
+     * `key` is one of this group's tabs apply here.
+     */
+    drawerPanels?: DrawerBinding[];
     /** Replace the tab strip with a compact title row (activity-bar group). */
     hideTabs?: boolean;
     /** Whether the holder group has a group to its left. */
@@ -69,16 +97,43 @@
   );
   const activePanel = $derived(node.tabs[activeIndex]);
 
+  /** Drawer bindings for THIS group's tabs (other groups' entries ignored). */
+  const groupDrawerPanels = $derived.by(() => {
+    const map = new Map<PanelId, DrawerBinding>();
+    for (const binding of drawerPanels) {
+      if (node.tabs.includes(binding.key as PanelId)) {
+        map.set(binding.key as PanelId, binding);
+      }
+    }
+    return map;
+  });
+
+  /** Strip items: PanelId + the label the ⋯ overflow menu shows. Drawerized
+   *  panels show no tab button — the ActivityBar item / edge rail toggles
+   *  their drawer instead (plan §10). */
+  const stripTabs: Array<{ id: PanelId; label: string }> = $derived(
+    node.tabs
+      .filter((panel) => !groupDrawerPanels.has(panel))
+      .map((panel) => ({ id: panel, label: panelLabel(panel) })),
+  );
+
   // -- keep-alive mounting -----------------------------------------------------
 
   /** Panels already activated in this group, in first-activation order. */
   let mounted: PanelId[] = $state([]);
 
   // Runs pre-render so a newly activated panel mounts in the same flush —
-  // the body never renders a frame without it.
+  // the body never renders a frame without it. An OPEN drawer mounts its
+  // panel the same way (first drawer open must not wait for a visit).
   $effect.pre(() => {
-    if (activePanel && !mounted.includes(activePanel)) {
-      mounted = [...mounted, activePanel];
+    const additions = node.tabs.filter(
+      (panel) =>
+        (panel === activePanel ||
+          (groupDrawerPanels.get(panel)?.open ?? false)) &&
+        !mounted.includes(panel),
+    );
+    if (additions.length > 0) {
+      mounted = [...mounted, ...additions];
     }
   });
 
@@ -161,23 +216,6 @@
     menu = null;
     onAdd(node.id, panel);
   }
-
-  // -- keyboard tablist ------------------------------------------------------
-
-  function onTablistKeydown(event: KeyboardEvent): void {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    if (node.tabs.length === 0) return;
-    event.preventDefault();
-    const dir = event.key === "ArrowRight" ? 1 : -1;
-    const next = (activeIndex + dir + node.tabs.length) % node.tabs.length;
-    onActivate(node.id, next);
-    // Move focus to the newly selected tab button.
-    requestAnimationFrame(() => {
-      rootEl
-        ?.querySelector<HTMLButtonElement>(`button[data-tab-index="${next}"]`)
-        ?.focus();
-    });
-  }
 </script>
 
 <div class="tabgroup flex h-full w-full min-h-0 flex-col" bind:this={rootEl}>
@@ -222,31 +260,31 @@
       </div>
     {/if}
   {:else}
-    <div
-      class="panel-tabs flex flex-none flex-nowrap gap-0.5 overflow-x-auto border-b border-border bg-popover px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      role="tablist"
-      aria-label="Panels"
-      tabindex="-1"
-      onkeydown={onTablistKeydown}
-      oncontextmenu={(e) => e.preventDefault()}
+    <UnifiedTabStrip
+      tabs={stripTabs}
+      activeId={activePanel ?? null}
+      label="Panels"
+      stripClass="panel-tabs flex-none flex-nowrap gap-0.5 border-b border-border bg-popover px-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      activateOnArrow
+      edgeFades={false}
+      onActivate={(item) => onActivate(node.id, node.tabs.indexOf(item.id))}
+      onStripContextMenu={(e) => e.preventDefault()}
     >
-      {#each node.tabs as panel, index (panel)}
-        <Hint label={`${panelLabel(panel)} — middle-click to close`}>
+      {#snippet tab(item, cell)}
+        <Hint label={`${panelLabel(item.id)} — middle-click to close`}>
           {#snippet child({ props })}
             <button
-              data-tab-index={index}
+              data-tab-index={cell.index}
               class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
               type="button"
-              role="tab"
-              aria-selected={index === activeIndex}
-              aria-controls={`tabpanel-${node.id}`}
               {...props}
-              id={`tab-${node.id}-${panel}`}
-              tabindex={index === activeIndex ? 0 : -1}
-              aria-label={panelLabel(panel)}
-              onclick={() => onActivate(node.id, index)}
-              onauxclick={(e) => onAuxClick(e, panel)}
-              oncontextmenu={(e) => openContext(e, panel)}
+              {...cell.triggerProps}
+              id={`tab-${node.id}-${item.id}`}
+              aria-controls={`tabpanel-${node.id}`}
+              aria-label={panelLabel(item.id)}
+              onclick={() => onActivate(node.id, cell.index)}
+              onauxclick={(e) => onAuxClick(e, item.id)}
+              oncontextmenu={(e) => openContext(e, item.id)}
             >
               <svg
                 class="tab-icon h-3 w-3 flex-none"
@@ -258,33 +296,34 @@
                 stroke-linejoin="round"
                 aria-hidden="true"
               >
-                <path d={PANEL_META[panel]?.icon ?? ""} />
+                <path d={PANEL_META[item.id]?.icon ?? ""} />
               </svg>
-              {panelLabel(panel)}
+              {panelLabel(item.id)}
             </button>
           {/snippet}
         </Hint>
-      {/each}
-
-      {#if hiddenPanels.length > 0}
-        <Hint label="Add panel">
-          {#snippet child({ props })}
-            <Button
-              class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
-              variant="ghost"
-              size="sm"
-              type="button"
-              {...props}
-              aria-haspopup="menu"
-              aria-expanded={menu?.kind === "add"}
-              onclick={openAdd}
-            >
-              +
-            </Button>
-          {/snippet}
-        </Hint>
-      {/if}
-    </div>
+      {/snippet}
+      {#snippet inStrip()}
+        {#if hiddenPanels.length > 0}
+          <Hint label="Add panel">
+            {#snippet child({ props })}
+              <Button
+                class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+                variant="ghost"
+                size="sm"
+                type="button"
+                {...props}
+                aria-haspopup="menu"
+                aria-expanded={menu?.kind === "add"}
+                onclick={openAdd}
+              >
+                +
+              </Button>
+            {/snippet}
+          </Hint>
+        {/if}
+      {/snippet}
+    </UnifiedTabStrip>
   {/if}
 
   <div
@@ -295,11 +334,19 @@
     aria-labelledby={!hideTabs && activePanel ? `tab-${node.id}-${activePanel}` : undefined}
   >
     <!-- Keep-alive hosts: one per visited panel; inactive ones are hidden,
-         not unmounted (see the script's keep-alive note). -->
+         not unmounted (see the script's keep-alive note). A drawerized
+         panel's host presents as a non-modal overlay drawer instead — the
+         SAME element, repositioned with CSS, so docked↔drawer mode flips
+         never remount the panel. Stacked bindings present the host as a
+         full-screen route (same element, `inset-0`). -->
     {#each shownPanels as panel (panel)}
+      {@const drawer = groupDrawerPanels.get(panel) ?? null}
       <div
-        class="panel-host flex min-h-0 flex-1 flex-col [&[hidden]]:hidden [&>aside]:min-h-0 [&>aside]:flex-1 [&>section]:min-h-0 [&>section]:flex-1"
-        hidden={panel !== activePanel}
+        class={drawer
+          ? overlayPaneClass(drawer)
+          : "panel-host flex min-h-0 flex-1 flex-col [&[hidden]]:hidden [&>aside]:min-h-0 [&>aside]:flex-1 [&>section]:min-h-0 [&>section]:flex-1"}
+        hidden={drawer ? undefined : panel !== activePanel}
+        {...(drawer ? overlayHostAttrs(drawer) : {})}
       >
         {@render renderPanel(panel)()}
       </div>

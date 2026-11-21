@@ -534,6 +534,7 @@ fn merge_squash_stages_result_without_commit_or_state() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("squash finishing commit");
@@ -620,6 +621,7 @@ fn merge_squash_conflict_drops_merge_state_keeps_markers() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("finishing commit");
@@ -665,6 +667,7 @@ fn merge_no_commit_stages_and_awaits_merge_commit() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("finishing commit");
@@ -1203,6 +1206,7 @@ fn commit_after_resolved_pick_clears_sequencer_state() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("commit");
@@ -1244,6 +1248,7 @@ fn commit_after_resolved_merge_takes_merge_head_parent_and_clears_state() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("merge-finishing commit");
@@ -1315,6 +1320,7 @@ fn merge_finishing_commit_allowed_when_resolved_tree_matches_head() {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("commit despite matching tree");
@@ -1345,6 +1351,7 @@ fn amend_during_merge_is_rejected() {
                 no_verify: true,
                 allow_empty: true,
                 author: None,
+                signoff: false,
             },
         )
         .expect_err("amend during merge");

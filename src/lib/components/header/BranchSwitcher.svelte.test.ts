@@ -150,7 +150,7 @@ afterEach(() => {
 function openSwitcher(): Promise<HTMLElement> {
   return (async () => {
     await fireEvent.click(
-      screen.getByRole("button", { name: "Switch branch" }),
+      screen.getByRole("button", { name: /^Switch branch/ }),
     );
     return await screen.findByRole("dialog", { name: "Branch switcher" });
   })();
@@ -318,7 +318,7 @@ describe("BranchSwitcher", () => {
       ).toBeNull(),
     );
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Switch branch" }),
+      screen.getByRole("button", { name: /^Switch branch/ }),
     );
   });
 

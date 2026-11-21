@@ -504,7 +504,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <Dialog.Overlay class="scrim bg-black/40" role="presentation" />
     <Dialog.Content
-      class="dialog flex w-[42rem] max-w-none flex-col overflow-y-auto text-popover-foreground max-h-[calc(100dvh_-_2rem)] max-[36rem]:max-h-[calc(100dvh_-_1rem)] sm:max-w-none"
+      class="dialog flex w-[42rem] max-w-none flex-col overflow-y-auto text-popover-foreground max-h-[calc(100dvh_-_2rem)] wm-stacked:max-h-[calc(100dvh_-_1rem)] sm:max-w-none"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-settings-title"
@@ -727,7 +727,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
           <legend class="legend px-ui-35 text-xs font-semibold text-muted-foreground">Preferred backend</legend>
           {#each AI_BACKENDS as option (option)}
             <label
-              class="backend-option grid min-h-[3.25rem] cursor-pointer grid-cols-[auto_minmax(0,1fr)_minmax(8rem,auto)] items-center gap-3 rounded-lg border px-3 py-[0.65rem] max-[36rem]:grid-cols-[auto_minmax(0,1fr)] {backendChoice === option
+              class="backend-option grid min-h-[3.25rem] cursor-pointer grid-cols-[auto_minmax(0,1fr)_minmax(8rem,auto)] items-center gap-3 rounded-lg border px-3 py-[0.65rem] wm-stacked:grid-cols-[auto_minmax(0,1fr)] {backendChoice === option
                 ? 'chosen border-primary bg-primary/[0.07]'
                 : 'border-border'}"
             >
@@ -742,7 +742,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
                 <strong class="text-sm font-semibold">{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
                 <span class="text-ui-meta text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
               </span>
-              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-ui-15 text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 max-[36rem]:col-start-2 max-[36rem]:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
+              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-ui-15 text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 wm-stacked:col-start-2 wm-stacked:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
@@ -1024,7 +1024,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
           </p>
         </fieldset>
 
-        <div class="status mb-0 mt-1 flex items-center gap-3 border-b border-t border-border py-3 max-[36rem]:flex-col max-[36rem]:items-stretch" role="status">
+        <div class="status mb-0 mt-1 flex items-center gap-3 border-b border-t border-border py-3 wm-stacked:flex-col wm-stacked:items-stretch" role="status">
           <Button variant="outline" class="secondary rounded-full text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
             {#if testing}Checking…{:else}Check connections{/if}
           </Button>

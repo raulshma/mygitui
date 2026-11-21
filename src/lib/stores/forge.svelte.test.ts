@@ -6,6 +6,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   forgeContext,
+  forgePrFiles,
+  forgePrReviewThreads,
   forgeStatus,
   prChecks,
   prCheckout,
@@ -26,6 +28,8 @@ import {
 } from "$lib/ipc/client";
 import type {
   ForgeContext,
+  ForgePrFile,
+  ForgeReviewThread,
   ForgeStatus,
   PrInfo,
   WorkflowInfo,
@@ -43,6 +47,8 @@ import {
 vi.mock("$lib/ipc/client", () => ({
   forgeStatus: vi.fn(),
   forgeContext: vi.fn(),
+  forgePrFiles: vi.fn(),
+  forgePrReviewThreads: vi.fn(),
   prList: vi.fn(),
   prChecks: vi.fn(),
   prMerge: vi.fn(),
@@ -63,6 +69,8 @@ vi.mock("$lib/ipc/client", () => ({
 
 const mockStatus = vi.mocked(forgeStatus);
 const mockContext = vi.mocked(forgeContext);
+const mockPrFiles = vi.mocked(forgePrFiles);
+const mockReviewThreads = vi.mocked(forgePrReviewThreads);
 const mockPrList = vi.mocked(prList);
 const mockPrChecks = vi.mocked(prChecks);
 const mockPrMerge = vi.mocked(prMerge);
@@ -93,6 +101,7 @@ function pr(number: number, head = "feat"): PrInfo {
     number,
     title: `PR ${number}`,
     head_ref_name: head,
+    head_ref_oid: "",
     base_ref_name: "main",
     state: "OPEN",
     is_draft: false,
@@ -153,10 +162,35 @@ const DETAIL: WorkflowRunDetail = {
   ],
 };
 
+const PR_FILES: ForgePrFile[] = [
+  {
+    path: "src/a.ts",
+    status: "modified",
+    additions: 2,
+    deletions: 1,
+    patch: "@@ -1 +1 @@\n-old\n+new",
+  },
+];
+
+const REVIEW_THREADS: ForgeReviewThread[] = [
+  {
+    id: 5,
+    path: "src/a.ts",
+    line: 12,
+    outdated: false,
+    author: "octocat",
+    body: "Consider extracting this.",
+    created_at: "2026-11-01T10:00:00Z",
+    replies: [{ id: 6, author: "hubot", body: "Done.", created_at: null }],
+  },
+];
+
 beforeEach(() => {
   vi.resetAllMocks();
   mockStatus.mockResolvedValue(STATUS);
   mockContext.mockResolvedValue(CONTEXT);
+  mockPrFiles.mockResolvedValue(PR_FILES);
+  mockReviewThreads.mockResolvedValue(REVIEW_THREADS);
   mockPrList.mockResolvedValue([pr(1), pr(2)]);
   mockPrChecks.mockResolvedValue([
     { name: "build", state: "pass" },
@@ -482,6 +516,51 @@ describe("ForgeStore", () => {
     ]);
     expect(mockRuns).toHaveBeenCalledWith("r1", {});
     expect(store.isDispatchBusy("r1")).toBe(false);
+  });
+
+  // -- PR-detail depth (E2 §9.4; read-only lazy loads) -----------------------
+
+  it("loadPrFiles caches one PR's changed files per repo+number", async () => {
+    const store = new ForgeStore();
+    expect(store.prFilesFor("r1", 12)).toBeNull();
+    const files = await store.loadPrFiles("r1", 12);
+    expect(files).toEqual(PR_FILES);
+    expect(mockPrFiles).toHaveBeenCalledWith("r1", 12);
+    expect(store.prFilesFor("r1", 12)).toEqual(PR_FILES);
+    expect(store.prFilesLoadingFor("r1", 12)).toBe(false);
+    // Like the other lazy loads, a re-open re-runs (no TTL); a different
+    // PR is a different cache entry.
+    await store.loadPrFiles("r1", 12);
+    expect(mockPrFiles).toHaveBeenCalledTimes(2);
+    await store.loadPrFiles("r1", 13);
+    expect(mockPrFiles).toHaveBeenCalledWith("r1", 13);
+  });
+
+  it("prFiles failures surface through the error reader", async () => {
+    const store = new ForgeStore();
+    mockPrFiles.mockRejectedValue(new Error("gh: rate limited") as never);
+    await store.loadPrFiles("r1", 12);
+    expect(store.prFilesFor("r1", 12)).toBeNull();
+    expect(store.prFilesErrorFor("r1", 12)).toBe("gh: rate limited");
+  });
+
+  it("loadReviewThreads caches one PR's threads with replies", async () => {
+    const store = new ForgeStore();
+    expect(store.reviewThreadsFor("r1", 12)).toBeNull();
+    const threads = await store.loadReviewThreads("r1", 12);
+    expect(threads).toEqual(REVIEW_THREADS);
+    expect(mockReviewThreads).toHaveBeenCalledWith("r1", 12);
+    expect(store.reviewThreadsFor("r1", 12)).toEqual(REVIEW_THREADS);
+    expect(store.reviewThreadsLoadingFor("r1", 12)).toBe(false);
+    expect(store.reviewThreadsErrorFor("r1", 12)).toBeNull();
+  });
+
+  it("review-thread failures surface through the error reader", async () => {
+    const store = new ForgeStore();
+    mockReviewThreads.mockRejectedValue(new Error("gh: not found") as never);
+    await store.loadReviewThreads("r1", 12);
+    expect(store.reviewThreadsFor("r1", 12)).toBeNull();
+    expect(store.reviewThreadsErrorFor("r1", 12)).toBe("gh: not found");
   });
 });
 

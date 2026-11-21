@@ -591,5 +591,8 @@
     "hugeicons": "lock-open",
     "phosphor": "lock-simple-open",
     "ri": "lock-unlock-line"
+  },
+  "pull-request": {
+    "lucide": "git-pull-request"
   }
 }

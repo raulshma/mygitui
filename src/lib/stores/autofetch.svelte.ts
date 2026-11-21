@@ -19,9 +19,14 @@
  * `stop(repoId)` clears the timer on tab close. The scheduler API stays
  * repo-id keyed because timers belong to open tabs, not disk paths.
  *
+ * E1 (plan §9.3): the raw `setInterval` loop became a poll-scheduler lane
+ * (`autofetch:<repoId>`) — the store gains the scheduler's hidden-window
+ * pause (zero spawns while the app is hidden) and exponential backoff on
+ * failed fetches for free; its own behavior is unchanged.
+ *
  * Lives in a `.svelte.ts` module because `$state` only compiles there.
- * Backend access goes exclusively through `$lib/ipc/client`; the scheduler
- * (`setInterval`/`clearInterval`) and storage are injectable for tests.
+ * Backend access goes exclusively through `$lib/ipc/client`; the poll
+ * scheduler and storage are injectable for tests.
  */
 
 import { branches, fetchRepo, remotes } from "$lib/ipc/client";
@@ -30,9 +35,18 @@ import { tabStore } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
 import { describeError } from "$lib/errors";
 import { appSettings } from "$lib/state/appSettings.svelte";
+import {
+  PollScheduler,
+  pollScheduler as sharedScheduler,
+} from "$lib/stores/pollScheduler.svelte";
 
 /** localStorage key: `{ [root]: minutes }` (root-keyed since the re-key). */
 export const AUTOFETCH_STORAGE_KEY = "mygitui.autofetch";
+
+/** Scheduler lane key of one repo's auto-fetch lane. */
+export function autofetchLaneKey(repoId: RepoId): string {
+  return `autofetch:${repoId}`;
+}
 
 /** Max "upstream moved" toasts per fetch cycle (M12). */
 export const UPSTREAM_MOVED_TOAST_CAP = 3;
@@ -42,17 +56,6 @@ export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
-
-/** Injectable scheduler (tests use fake timers through these). */
-export interface Scheduler {
-  setInterval(handler: () => void, ms: number): unknown;
-  clearInterval(handle: unknown): void;
-}
-
-const defaultScheduler: Scheduler = {
-  setInterval: (handler, ms) => setInterval(handler, ms),
-  clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
-};
 
 /** Returns `localStorage` when available, else `null` (never throws). */
 function defaultStorage(): StorageLike | null {
@@ -100,7 +103,6 @@ function parseConfig(raw: string | null): Record<string, number> {
 }
 
 interface RunningFetch {
-  timer: unknown;
   remote: string;
   /** Persistence key (repo root) this repo's interval came from. */
   root: string;
@@ -144,7 +146,8 @@ export class AutofetchStore {
   fetching: Record<RepoId, number> = $state({});
 
   #storage: StorageLike | null;
-  #scheduler: Scheduler;
+  /** The poll scheduler owning the lanes (injectable for tests). */
+  #scheduler: PollScheduler;
   #running = new Map<RepoId, RunningFetch>();
   /**
    * Bumped by every start AND stop. `start` awaits its remote lookup before
@@ -157,7 +160,7 @@ export class AutofetchStore {
 
   constructor(
     storage: StorageLike | null = defaultStorage(),
-    scheduler: Scheduler = defaultScheduler,
+    scheduler: PollScheduler = sharedScheduler,
   ) {
     this.#storage = storage;
     this.#scheduler = scheduler;
@@ -251,43 +254,50 @@ export class AutofetchStore {
     if (this.#startToken.get(repoId) !== token) return;
     if (this.getInterval(root) <= 0 || this.#running.has(repoId)) return;
 
-    const tick = (): void => {
+    const tick = async (): Promise<void> => {
       this.#beginFetch(repoId);
-      fetchRepo(repoId, { remote, prune: true, refs: [], depth: null })
-        .then((stats: NetStats) => {
-          // A stop during the fetch must not toast for a closed repo.
-          if (this.#startToken.get(repoId) !== token) return;
-          if (stats.updated_refs.length > 0) {
-            toast(`${remote} updated: ${stats.updated_refs.length} refs`);
-            // M12: after refs moved, check which local branches fell behind
-            // their upstream and toast the deltas (capped, deduped).
-            void this.reportUpstreamMoved(repoId);
-          }
-        })
-        .catch((err: unknown) => {
-          if (this.#startToken.get(repoId) !== token) return;
-          toast(
-            `Auto-fetch failed: ${describeError(err)}`,
-            { kind: "error" },
-          );
-        })
-        .finally(() => this.#endFetch(repoId));
+      try {
+        const stats: NetStats = await fetchRepo(repoId, {
+          remote,
+          prune: true,
+          refs: [],
+          depth: null,
+        });
+        // A stop during the fetch must not toast for a closed repo.
+        if (this.#startToken.get(repoId) !== token) return;
+        if (stats.updated_refs.length > 0) {
+          toast(`${remote} updated: ${stats.updated_refs.length} refs`);
+          // M12: after refs moved, check which local branches fell behind
+          // their upstream and toast the deltas (capped, deduped).
+          await this.reportUpstreamMoved(repoId);
+        }
+      } catch (err: unknown) {
+        if (this.#startToken.get(repoId) !== token) return;
+        toast(`Auto-fetch failed: ${describeError(err)}`, { kind: "error" });
+        // Re-throw so the scheduler lane backs off after repeated failures.
+        throw err;
+      } finally {
+        this.#endFetch(repoId);
+      }
     };
 
-    const timer = this.#scheduler.setInterval(tick, minutes * 60_000);
-    this.#running.set(repoId, { timer, remote, root });
+    this.#scheduler.register(autofetchLaneKey(repoId), {
+      intervalMs: minutes * 60_000,
+      work: tick,
+    });
+    this.#running.set(repoId, { remote, root });
   }
 
   /** Stops the background fetch for a repo (tab close). No-op when off. */
   stop(repoId: RepoId): void {
     // Tombstone first: a start still awaiting its remote lookup must not
-    // register a timer after this returns.
+    // register a lane after this returns.
     this.#bumpToken(repoId);
     const running = this.#running.get(repoId);
     if (!running) return;
     this.#running.delete(repoId);
     this.#lastBehind.delete(repoId);
-    this.#scheduler.clearInterval(running.timer);
+    this.#scheduler.unregister(autofetchLaneKey(repoId));
   }
 
   #bumpToken(repoId: RepoId): number {

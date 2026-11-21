@@ -269,7 +269,7 @@
       hint="Enable it again in AI settings to use the assistant and the AI features."
     >
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         variant="secondary"
         type="button"
         onclick={() => emitUiEvent("open-ai-settings")}
@@ -285,7 +285,7 @@
       hint="Enable it again in AI settings (Features → Assistant) to use the chat."
     >
       <Button
-        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+        class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
         variant="secondary"
         type="button"
         onclick={() => emitUiEvent("open-ai-settings")}
@@ -344,7 +344,7 @@
           {#snippet child({ props })}
             <Button
               {...props}
-              class="h-auto whitespace-nowrap rounded-sm px-1.5 py-px text-ui-tiny font-normal"
+              class="h-auto whitespace-nowrap rounded-sm px-1.5 py-px text-ui-meta font-normal"
               variant="secondary"
               type="button"
               aria-label="Clear the activity history"
@@ -366,7 +366,7 @@
           hint="The assistant reads repo data you explicitly select (diffs, history, pasted notes) to answer questions. It never modifies anything."
         >
           <Button
-            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             type="button"
             onclick={() => ai.setOptIn(repoId, true)}
           >
@@ -376,7 +376,7 @@
       {:else}
         <!-- Advisory contract, always visible above the transcript. -->
         <p
-          class="banner flex flex-none items-start gap-1.5 border-b border-border bg-muted/50 px-2.5 py-1 text-ui-tiny text-muted-foreground"
+          class="banner flex flex-none items-start gap-1.5 border-b border-border bg-muted/50 px-2.5 py-1 text-ui-meta text-muted-foreground"
           role="note"
         >
           <span class="mt-[2px] flex-none text-muted-foreground" aria-hidden="true">
@@ -405,7 +405,7 @@
               </p>
               <div class="quick flex flex-wrap gap-1.5" aria-label="Quick prompts">
                 <Button
-                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
                   variant="secondary"
                   type="button"
                   onclick={() => send("Explain what the current working copy changes do.")}
@@ -413,7 +413,7 @@
                   Explain working copy
                 </Button>
                 <Button
-                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+                  class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
                   variant="secondary"
                   type="button"
                   onclick={() => send("Summarize the recent commit history and what the branch is working on.")}
@@ -508,7 +508,7 @@
         <div class="composer flex flex-none flex-col gap-1.5 border-t border-border bg-popover px-2.5 py-2">
           <div class="chips flex flex-wrap items-center gap-1" role="group" aria-label="Context for the next question">
             <button
-              class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {ctxStaged
+              class="chip rounded-full border px-2 py-px text-ui-micro transition-colors {ctxStaged
                 ? 'border-primary/60 bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
@@ -518,7 +518,7 @@
               Staged diff
             </button>
             <button
-              class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {agentic
+              class="chip rounded-full border px-2 py-px text-ui-micro transition-colors {agentic
                 ? 'border-primary/60 bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
@@ -529,7 +529,7 @@
               Tools
             </button>
             <button
-              class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {ctxCommits
+              class="chip rounded-full border px-2 py-px text-ui-micro transition-colors {ctxCommits
                 ? 'border-primary/60 bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
@@ -543,7 +543,7 @@
                 {#snippet child({ props })}
                   <button
                     {...props}
-                    class="chip max-w-[14rem] truncate rounded-full border px-2 py-px text-ui-tiny transition-colors {ctxFile
+                    class="chip max-w-[14rem] truncate rounded-full border px-2 py-px text-ui-micro transition-colors {ctxFile
                       ? 'border-primary/60 bg-primary/10 text-foreground'
                       : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                     type="button"
@@ -556,7 +556,7 @@
               </Hint>
             {/if}
             <button
-              class="chip rounded-full border px-2 py-px text-ui-tiny transition-colors {ctxPasted.trim()
+              class="chip rounded-full border px-2 py-px text-ui-micro transition-colors {ctxPasted.trim()
                 ? 'border-primary/60 bg-primary/10 text-foreground'
                 : 'border-border text-muted-foreground hover:bg-accent'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
               type="button"
@@ -585,7 +585,7 @@
             ></textarea>
             {#if busy}
               <Button
-                class="h-auto whitespace-nowrap rounded-sm px-2 py-1.5 text-ui-tiny font-normal"
+                class="h-auto whitespace-nowrap rounded-sm px-2 py-1.5 text-ui-meta font-normal"
                 variant="secondary"
                 type="button"
                 onclick={() => ai.chat.stop(root)}
@@ -623,24 +623,24 @@
           <div class="cards mb-2 flex flex-none flex-wrap gap-1.5">
             <div class="card flex min-w-[6rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
               <span class="card-value text-sm font-semibold tabular-nums">{todaySummary.runs}</span>
-              <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">runs today</span>
+              <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">runs today</span>
             </div>
             <div class="card flex min-w-[6rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
               <span class="card-value text-sm font-semibold tabular-nums">{todaySummary.totalTokens}</span>
-              <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">tokens today</span>
+              <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">tokens today</span>
             </div>
             <div class="card flex min-w-[6rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
               <span class="card-value text-sm font-semibold tabular-nums">{weekSummary.runs}</span>
-              <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">runs 7d</span>
+              <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">runs 7d</span>
             </div>
             <div class="card flex min-w-[6rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
               <span class="card-value text-sm font-semibold tabular-nums">{weekSummary.totalTokens}</span>
-              <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">tokens 7d</span>
+              <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">tokens 7d</span>
             </div>
           </div>
 
           {#if Object.keys(weekSummary.byFeature).length > 0}
-            <ul class="byfeature mb-2 m-0 flex list-none flex-wrap gap-x-3 gap-y-px p-0 text-ui-tiny text-muted-foreground" aria-label="Usage per feature (7 days)">
+            <ul class="byfeature mb-2 m-0 flex list-none flex-wrap gap-x-3 gap-y-px p-0 text-ui-meta text-muted-foreground" aria-label="Usage per feature (7 days)">
               {#each Object.entries(weekSummary.byFeature) as [kind, bucket] (kind)}
                 <li>
                   <span class="text-foreground">{aiFeatureLabel(kind as AiFeatureTag)}</span>
@@ -671,19 +671,19 @@
                     {aiFeatureLabel(record.feature)}
                   </span>
                   <span class="repo min-w-0 flex-none text-muted-foreground">{record.repoName ?? record.repoId}</span>
-                  <span class="spacer min-w-0 flex-1 truncate text-ui-tiny text-muted-foreground">
+                  <span class="spacer min-w-0 flex-1 truncate text-ui-meta text-muted-foreground">
                     {#if record.model}{record.model}{/if}
                   </span>
-                  <span class="tokens flex-none tabular-nums text-ui-tiny text-muted-foreground">
+                  <span class="tokens flex-none tabular-nums text-ui-meta text-muted-foreground">
                     {aiUsageLabel(record.usage) ?? ""}
                   </span>
-                  <span class="elapsed flex-none tabular-nums text-ui-tiny text-muted-foreground">
+                  <span class="elapsed flex-none tabular-nums text-ui-meta text-muted-foreground">
                     {aiResultSeconds(record.elapsedMs)}
                   </span>
-                  <span class="age flex-none text-ui-tiny text-muted-foreground" title={new Date(record.startedAt).toLocaleString()}>
+                  <span class="age flex-none text-ui-meta text-muted-foreground" title={new Date(record.startedAt).toLocaleString()}>
                     {formatRelativeTime(Math.floor(record.startedAt / 1000))}
                   </span>
-                  <span class="status w-14 flex-none text-right text-ui-tiny {record.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
+                  <span class="status w-14 flex-none text-right text-ui-meta {record.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}">
                     {statusLabel[record.status]}
                   </span>
                 </button>
@@ -691,7 +691,7 @@
                   <div class="detail flex flex-col gap-1.5 border-t border-border px-2.5 py-1.5">
                     {#if record.agentic !== null && record.agentic.steps.length > 0}
                       <div>
-                        <h4 class="m-0 mb-px text-ui-tiny font-medium text-muted-foreground">Tools</h4>
+                        <h4 class="m-0 mb-px text-ui-meta font-medium text-muted-foreground">Tools</h4>
                         <ul class="m-0 flex list-none flex-col gap-px p-0" aria-label="Agentic tool transcript">
                           {#each record.agentic.steps as step (step.id)}
                             <li class="flex items-baseline gap-1.5 text-ui-micro">
@@ -714,7 +714,7 @@
                     {#if record.agentic !== null && (agenticApprovalsLabel(record.agentic) !== null || record.agentic.budgetStopped)}
                       <!-- Also shown with zero steps: a wall-clock stop
                            before the first tool call still reports here. -->
-                      <p class="m-0 text-ui-tiny text-muted-foreground">
+                      <p class="m-0 text-ui-meta text-muted-foreground">
                         {#if agenticApprovalsLabel(record.agentic) !== null}
                           {agenticApprovalsLabel(record.agentic)}
                         {/if}
@@ -726,22 +726,22 @@
                     {/if}
                     {#if record.promptPreview}
                       <div>
-                        <h4 class="m-0 mb-px text-ui-tiny font-medium text-muted-foreground">Prompt</h4>
+                        <h4 class="m-0 mb-px text-ui-meta font-medium text-muted-foreground">Prompt</h4>
                         <pre class="m-0 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-muted/60 p-1.5 font-mono text-ui-micro leading-[1.4] [overflow-wrap:anywhere]">{record.promptPreview}</pre>
                       </div>
                     {/if}
                     {#if record.error}
-                      <p class="m-0 text-ui-tiny text-destructive" role="alert">{record.error}</p>
+                      <p class="m-0 text-ui-meta text-destructive" role="alert">{record.error}</p>
                     {/if}
                     {#if record.text}
                       <div>
-                        <h4 class="m-0 mb-px text-ui-tiny font-medium text-muted-foreground">Response</h4>
+                        <h4 class="m-0 mb-px text-ui-meta font-medium text-muted-foreground">Response</h4>
                         <div class="rounded bg-muted/60 p-1.5">
                           <AiMarkdown text={record.text} />
                         </div>
                       </div>
                     {:else if !record.error && record.status === "cancelled"}
-                      <p class="m-0 text-ui-tiny text-muted-foreground">Cancelled before a response arrived.</p>
+                      <p class="m-0 text-ui-meta text-muted-foreground">Cancelled before a response arrived.</p>
                     {/if}
                   </div>
                 {/if}

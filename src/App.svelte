@@ -28,6 +28,7 @@
   import { opStore } from "$lib/stores/ops.svelte";
   import { syncWindowTitle } from "$lib/stores/windowTitle.svelte";
   import { flushSplits, layouts } from "$lib/layout";
+  import { startWidthMode, stopWidthMode } from "$lib/layout/widthMode.svelte";
   import { flushHistoryPrefs } from "$lib/stores/historyPrefs";
   import { flushWorkspaceSessions } from "$lib/stores/workspaceSession.svelte";
   import { flushAgentSessions } from "$lib/agent/agentSession.svelte";
@@ -46,6 +47,7 @@
   import TabStrip from "$lib/components/TabStrip.svelte";
   import StatusBar from "$lib/components/layout/StatusBar.svelte";
   import TitleBar from "$lib/components/layout/TitleBar.svelte";
+  import AppBarMenu from "$lib/components/layout/AppBarMenu.svelte";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import AgentModeToggle from "$lib/agent/AgentModeToggle.svelte";
   import { agentMode } from "$lib/agent/agentMode.svelte";
@@ -570,6 +572,14 @@
       window.removeEventListener("pagehide", flushPendingLayoutWrites);
     });
 
+    // Window width modes (plan §4.2): resolve once and mirror the window
+    // width onto <html data-width-mode="…"> on resize — the `wm-*` Tailwind
+    // variants key off it. Popouts track their own (often narrower) window.
+    // Resize work is change-guarded (one attribute write per mode flip), so
+    // no debounce is needed.
+    startWidthMode();
+    cleanups.push(stopWidthMode);
+
     // Relaunch polish: reopen the tabs (and the focused one) from the last
     // session. Runs before the CLI-arg/deep-link listeners below, so an
     // explicit `mygitui <path>` still wins the focus when it lands.
@@ -598,7 +608,7 @@
       };
     }
 
-    // M4 F2: global keyboard shortcuts (Ctrl/Cmd+Shift+P palette et al).
+    // M4 F2: global keyboard shortcuts (Ctrl/Cmd+K palette et al).
     cleanups.push(startKeybinds((commandId) => {
       void executeCommandById(commandId);
     }));
@@ -683,74 +693,24 @@
 <div class="app-shell flex h-full flex-col overflow-hidden bg-background text-foreground">
   <!-- Custom window chrome (decorations are off on Windows/Linux; macOS
        overlays its traffic lights over this bar). First child so every
-       view — popout, tab strip, launch, home — sits below it. -->
-  <TitleBar />
+       view — popout, tab strip, launch, home — sits below it. Workstream A:
+       the repo tab strip renders INSIDE the bar (one ~40px top row); with
+       no workspace (popout/home/launch) the bar stays a plain title bar. -->
+  {#snippet repoTabs()}
+    <TabStrip openFolder={openFromDisk}>
+      {#snippet trailing()}
+        <!-- Status cluster (AI health dot + agent toggle) — the update
+             chip self-hides while idle and shows only when there is
+             update state, so it stays a visible attention badge. -->
+        <UpdateChip compact />
+        <AiHealthChip compact />
+        <AgentModeToggle />
+        <AppBarMenu onOpenSettings={() => (settingsOpen = true)} />
+      {/snippet}
+    </TabStrip>
+  {/snippet}
+  <TitleBar tabs={!launching && tabsOpen ? repoTabs : undefined} />
   {#if popout}
-    <!-- M4 F1 popout window: exactly one panel, own store wiring. -->
-    <main class="popout-view flex min-h-0 flex-1 [&>*]:min-h-0 [&>*]:flex-1">
-      {#if popout.panel === "history"}
-        {#await import("$lib/components/panels/HistoryView.svelte") then HistoryViewModule}
-          <HistoryViewModule.default repoId={popout.repoId} />
-        {/await}
-      {:else if popout.panel === "filehistory"}
-        {#await import("$lib/components/panels/FileHistoryView.svelte") then FileHistoryViewModule}
-          <FileHistoryViewModule.default
-            repoId={popout.repoId}
-            path={popout.path ?? ""}
-          />
-        {/await}
-      {:else if popout.panel === "workflowrun"}
-        {#await import("$lib/components/forge/WorkflowRunView.svelte") then WorkflowRunViewModule}
-          <WorkflowRunViewModule.default
-            repoId={popout.repoId}
-            runId={popout.runId ?? 0}
-          />
-        {/await}
-      {:else if popout.panel === "actionrun"}
-        {#await import("$lib/components/actions/ActionRunView.svelte") then ActionRunViewModule}
-          <ActionRunViewModule.default
-            repoId={popout.repoId}
-            runId={popout.actionRunId ?? ""}
-          />
-        {/await}
-      {:else if popout.panel === "commitdetail"}
-        {#await import("$lib/components/layout/PopoutCommitDetail.svelte") then PopoutCommitDetailModule}
-          <PopoutCommitDetailModule.default
-            repoId={popout.repoId}
-            sha={popout.sha ?? ""}
-          />
-        {/await}
-      {:else}
-        {#await import("$lib/components/layout/PopoutDiff.svelte") then PopoutDiffModule}
-          <PopoutDiffModule.default repoId={popout.repoId} />
-        {/await}
-      {/if}
-    </main>
-  {:else}
-    {#if !launching && tabsOpen}
-      <TabStrip openFolder={openFromDisk}>
-        {#snippet trailing()}
-          <UpdateChip compact />
-          <AiHealthChip compact />
-          <AgentModeToggle />
-          <Hint label="Settings (Ctrl+,)">
-            {#snippet child({ props })}
-              <Button
-                {...props}
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Open settings"
-                onclick={() => (settingsOpen = true)}
-              >
-                <Icon icon={iconSettings} size={16} />
-              </Button>
-            {/snippet}
-          </Hint>
-          <ThemeToggle />
-        {/snippet}
-      </TabStrip>
-    {/if}
 
     {#if launching}
       <!-- Launch restore is still opening the stored repo: hold this frame
@@ -911,7 +871,7 @@
                   >mygitui</span
                 >
                 <span
-                  class="brand-tag max-[720px]:hidden text-ui-micro text-muted-foreground"
+                  class="brand-tag wm-stacked:hidden text-ui-micro text-muted-foreground"
                   >your local git workspace</span
                 >
               </span>
@@ -942,7 +902,7 @@
       <!-- Only the middle scrolls: header and footer stay pinned above/below it. -->
       <div class="home-scroll min-h-0 flex-1 overflow-y-auto">
         <div
-          class="home-body flex flex-col items-center gap-9 px-5 pb-8 pt-11 max-[720px]:pt-7"
+          class="home-body flex flex-col items-center gap-9 px-5 pb-8 pt-11 wm-stacked:pt-7"
         >
         <section
           class="recent w-full min-w-0 max-w-[44rem]"
@@ -1117,7 +1077,7 @@
                     </span>
                     {#if when}
                     <span
-                      class="repo-when max-[720px]:hidden flex-none whitespace-nowrap text-ui-micro text-muted-foreground"
+                      class="repo-when wm-stacked:hidden flex-none whitespace-nowrap text-ui-micro text-muted-foreground"
                       >{when}</span
                     >
                     {/if}
@@ -1474,13 +1434,13 @@
           <!-- KbdGroup keeps chord keys tighter (gap-1) than the chord→label
                gap, so each chord reads as one key unit. -->
           <KbdGroup><Kbd>{primaryModifierLabel()}</Kbd><Kbd>K</Kbd></KbdGroup>
-          <span class="ml-0.5">quick switcher</span>
-        </span>
-        <span class="hint inline-flex items-center gap-1.5">
-          <KbdGroup><Kbd>{primaryModifierLabel()}</Kbd><Kbd>Shift</Kbd><Kbd>P</Kbd></KbdGroup>
           <span class="ml-0.5">command palette</span>
         </span>
-        <span class="foot-note ml-auto opacity-85 max-[720px]:hidden"
+        <span class="hint inline-flex items-center gap-1.5">
+          <KbdGroup><Kbd>{primaryModifierLabel()}</Kbd><Kbd>Shift</Kbd><Kbd>K</Kbd></KbdGroup>
+          <span class="ml-0.5">quick switcher</span>
+        </span>
+        <span class="foot-note ml-auto opacity-85 wm-stacked:hidden"
           >Tip: drop a folder here to open it</span
         >
       </footer>

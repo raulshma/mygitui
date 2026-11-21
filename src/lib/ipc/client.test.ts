@@ -787,6 +787,7 @@ const COMMIT_OPTIONS: CommitOptions = {
   no_verify: false,
   allow_empty: false,
   author: null,
+  signoff: false,
 };
 
 const SIGNING_INFO: SigningInfo = { active: true, format: "ssh", key_id: "SHA256:abc" };

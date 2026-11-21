@@ -4,17 +4,28 @@
    *
    * Banner first: gh missing → install link, gh unauthenticated → copyable
    * `gh auth login`, non-GitHub origin → explanation. When ready, the panel
-   * shows four tabs. "Pull requests": the current branch's PR card (state
+   * shows four tabs in the E2 order `prs | actions | issues |
+   * notifications`. "Pull requests": the current branch's PR card (state
    * chips, author/stats/labels, checks with pass/fail/pending icons +
    * refresh/watch, merge/close/reopen/edit, draft↔ready, checkout, comments
-   * and reviews) and the filtered repo PR list. "Issues" (Phase 6): the
-   * filtered issue list with lazily loaded detail (sanitized-markdown body
-   * + comments) and close/reopen. "Notifications" (Phase 6): the user's
-   * unread threads with mark-read + deep navigation into the PR/issue tabs
-   * (commit/release kinds open GitHub). "Actions": workflow runs. All three
-   * list tabs load on activation and refresh on demand — only PR checks
-   * auto-poll. "Create PR" opens {@link CreatePrDialog}, "New issue" opens
-   * {@link CreateIssueDialog}; a successful create refreshes context + list.
+   * and reviews) and the filtered repo PR list — plus the E2 PR-detail
+   * depth: the PR diff rendered through the shared DiffViewer
+   * (`forge_pr_files`, Workstream C files|diff / chip-strip grammar) and
+   * read-only review threads (`forge_pr_review_threads`) whose Reply /
+   * Approve / Request-changes buttons open the existing write dialogs.
+   * "Actions": workflow runs (the runs list the run-view breadcrumb links
+   * back to). "Issues" (Phase 6): the filtered issue list with lazily
+   * loaded detail (sanitized-markdown body + comments) and close/reopen.
+   * "Notifications" (Phase 6): the user's unread threads with mark-read +
+   * deep navigation into the PR/issue tabs (commit/release kinds open
+   * GitHub). All three list tabs load on activation and refresh on demand —
+   * only PR checks auto-poll. "Create PR" opens {@link CreatePrDialog},
+   * "New issue" opens {@link CreateIssueDialog}; a successful create
+   * refreshes context + list. E2 extras: the merge dialog remembers the
+   * last-used method per repo (squash-if-allowed initially) and surfaces
+   * gh rejections verbatim with a Retry; the checkout button opens a
+   * confirm dialog that offers a named, restorable stash on a dirty
+   * worktree (the footer popover's checkout hard-refuses instead).
    *
    * MOUNTING CONTRACT (docs/contracts.md "M6 FE contracts"): this component
    * takes `{ repoId }` and needs a `"forge"` PanelId registry entry to be
@@ -22,6 +33,7 @@
    * adds the id + `PANEL_META` + the RepoView snippet + `TREE_PANELS`.
    */
   import { untrack } from "svelte";
+  import { pollScheduler } from "$lib/stores/pollScheduler.svelte";
   import type {
     ForgeIssue,
     ForgeIssueDetail,
@@ -35,8 +47,9 @@
     WorkflowRun,
     WorkflowRunFilters,
   } from "$lib/ipc/client";
+  import { stashPush } from "$lib/ipc/client";
   import { forgeStore, openExternal } from "$lib/stores/forge.svelte";
-  import { refreshStatus } from "$lib/stores/tabs.svelte";
+  import { refreshStatus, tabStore } from "$lib/stores/tabs.svelte";
   import { emitUiEvent } from "$lib/palette/events";
   import { toast } from "$lib/toast";
   import DialogShell from "$lib/components/safety/DialogShell.svelte";
@@ -44,8 +57,19 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import AiMarkdown from "$lib/components/ai/AiMarkdown.svelte";
+  import DiffViewer from "$lib/components/diff/DiffViewer.svelte";
+  import { createWidthTracker } from "$lib/layout/containerWidth.svelte";
+  import { checkoutRefusal, dirtyChangeCount } from "$lib/forge/checkoutGuard";
+  import {
+    initialMergeMethod,
+    loadMergeMethod,
+    saveMergeMethod,
+  } from "$lib/forge/mergeMethodPref";
   import CreatePrDialog from "./CreatePrDialog.svelte";
   import CreateIssueDialog from "./CreateIssueDialog.svelte";
+  import { prFilesToFileDiffs } from "./prDiffModel";
+  import { fileChangeKind, fileKindLetter } from "$lib/components/diff/rowModel";
+  import type { FileDiff } from "$lib/ipc/types";
   import {
     GH_AUTH_COMMAND,
     GH_INSTALL_DOCS_URL,
@@ -85,7 +109,18 @@
   } from "./forgeModel";
   import { describeError } from "$lib/errors";
 
-  let { repoId }: { repoId: string } = $props();
+  let {
+    repoId,
+    requestedTab = null,
+  }: {
+    repoId: string;
+    /**
+     * Sub-tab requested by a `focus-panel { panel: "forge", tab }` event
+     * (E2: a run view's breadcrumb → runs list); `{tab, n}` so repeating
+     * the same tab still re-applies.
+     */
+    requestedTab?: { tab: string; n: number } | null;
+  } = $props();
 
   // Tailwind replacements for the removed scoped styles: chip/icon tones per
   // state class plus the shared toolbar-button utilities.
@@ -180,6 +215,24 @@
   let textBody = $state("");
   let textError = $state("");
 
+  // Checkout confirm dialog (E2 §9.4): on a dirty worktree it offers a
+  // NAMED, restorable stash (`stash_push` with the entered message; the
+  // Stashes panel lists and restores it) before `pr_checkout` runs.
+  let checkoutOpen = $state(false);
+  let checkoutTarget = $state<PrInfo | null>(null);
+  let checkoutStash = $state(true);
+  let checkoutStashName = $state("");
+  let checkoutError = $state("");
+
+  // PR-detail depth (E2 §9.4): the pull request diff (`forge_pr_files` →
+  // DiffViewer) and the read-only review threads, one PR open at a time.
+  let filesNumber = $state<number | null>(null);
+  let threadsNumber = $state<number | null>(null);
+  /** The rendered PR diff viewer (file chips/rows reveal a file). */
+  let prDiffViewer = $state<ReturnType<typeof DiffViewer> | null>(null);
+  /** Panel-width tracker — the diff follows the Workstream C grammar. */
+  const diffTracker = createWidthTracker();
+
   $effect(() => {
     if (ensuredRepo === repoId) return;
     ensuredRepo = repoId;
@@ -189,10 +242,14 @@
     runsEnsuredFor = null;
     issuesEnsuredFor = null;
     notificationsEnsuredFor = null;
+    filesNumber = null;
+    threadsNumber = null;
     branchFilter = "";
     statusFilter = "";
     workflowFilter = "";
     dispatchOpen = false;
+    checkoutOpen = false;
+    checkoutTarget = null;
     void forgeStore.ensure(repoId);
     const active = untrack(() => tab);
     if (active === "actions") {
@@ -207,23 +264,55 @@
     }
   });
 
-  // Check watcher: one interval for every toggled PR; cleanup on unmount.
-  // Gated on document visibility like the runs refresh: each tick spawns one
-  // `gh pr checks` subprocess per watched PR.
+  // Check watcher (E1 migration): one poll-scheduler lane per toggled PR
+  // (`forge:panel-checks:<repo>:<n>`, 10 s) instead of a raw component
+  // interval — the scheduler adds the hidden-window pause and serializes
+  // runs; cleanup on unmount unregisters every lane.
   $effect(() => {
     const numbers = watching;
-    if (numbers.length === 0) return;
     const targetRepo = repoId;
-    const timer = setInterval(() => {
-      if (
-        typeof document !== "undefined" &&
-        document.visibilityState === "hidden"
-      ) {
-        return;
-      }
-      for (const number of numbers) void forgeStore.refreshChecks(targetRepo, number);
-    }, 10_000);
-    return () => clearInterval(timer);
+    if (numbers.length === 0) return;
+    const unsubscribes = numbers.map((number) =>
+      pollScheduler.register(`forge:panel-checks:${targetRepo}:${number}`, {
+        intervalMs: 10_000,
+        work: async () => {
+          await forgeStore.refreshChecks(targetRepo, number);
+        },
+      }),
+    );
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    };
+  });
+
+  // A focus-panel sub-tab request (run-view breadcrumb → runs list) opens
+  // the requested tab once per event; unknown names are ignored.
+  $effect(() => {
+    const tabName = requestedTab?.tab;
+    if (
+      tabName === "prs" ||
+      tabName === "actions" ||
+      tabName === "issues" ||
+      tabName === "notifications"
+    ) {
+      selectTab(tabName);
+    }
+  });
+
+  // PR-detail depth loads ride the same lazily-loaded pattern as the issue
+  // detail: fetch when a PR's block opens; `untrack` keeps the fetch from
+  // depending on the loading state it writes.
+  $effect(() => {
+    const number = filesNumber;
+    const targetRepo = repoId;
+    if (number === null) return;
+    untrack(() => void forgeStore.loadPrFiles(targetRepo, number));
+  });
+  $effect(() => {
+    const number = threadsNumber;
+    const targetRepo = repoId;
+    if (number === null) return;
+    untrack(() => void forgeStore.loadReviewThreads(targetRepo, number));
   });
 
   const banner = $derived(statusBanner(forgeStore.status));
@@ -270,20 +359,46 @@
     return () => clearInterval(timer);
   });
 
+  // Actions-tab active-runs refresh (E1 migration): one scheduler lane
+  // (`forge:panel-runs:<repo>`, 10 s, silent) — the toolbar must not flash
+  // "Loading…" on a background tick, hidden windows pause for free.
   $effect(() => {
     if (tab !== "actions" || activeRunCount === 0) return;
     const targetRepo = repoId;
     const filters = currentRunFilters();
-    const timer = setInterval(() => {
-      if (
-        typeof document !== "undefined" &&
-        document.visibilityState === "hidden"
-      ) {
-        return;
-      }
-      void forgeStore.refreshRuns(targetRepo, filters, true);
-    }, 10_000);
-    return () => clearInterval(timer);
+    const unsubscribe = pollScheduler.register(`forge:panel-runs:${targetRepo}`, {
+      intervalMs: 10_000,
+      work: async () => {
+        await forgeStore.refreshRuns(targetRepo, filters, true);
+      },
+    });
+    return unsubscribe;
+  });
+
+  // Panel lists (E1 §9.3: "panel lists on-open + 60 s"): while the panel is
+  // mounted the PR list (and the run list on the Actions tab) re-read on a
+  // 60 s scheduler lane; on-open loading stays with the ensure() bundle.
+  $effect(() => {
+    const targetRepo = repoId;
+    const unsubscribe = pollScheduler.register(`forge:panel-lists:${targetRepo}`, {
+      intervalMs: 60_000,
+      work: async () => {
+        const onActions = untrack(() => tab === "actions");
+        if (onActions) {
+          await Promise.all([
+            forgeStore.refreshPrs(targetRepo, untrack(() => forgeStore.filterFor(targetRepo))),
+            forgeStore.refreshRuns(
+              targetRepo,
+              untrack(() => currentRunFilters()),
+              true,
+            ),
+          ]);
+        } else {
+          await forgeStore.refreshPrs(targetRepo, untrack(() => forgeStore.filterFor(targetRepo)));
+        }
+      },
+    });
+    return unsubscribe;
   });
 
   $effect(() => {
@@ -308,6 +423,21 @@
   );
   const textBusy = $derived(
     textTarget ? forgeStore.isBusy(repoId, textTarget.number) : false,
+  );
+
+  // Checkout safety (E2 §9.4): the decision reads the tab store's latest
+  // RepoStatus — the same payload the STATUS panel renders.
+  const tabStatus = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.status ?? null,
+  );
+  const checkoutRefusalText = $derived(checkoutRefusal(tabStatus));
+  const checkoutDirtyCount = $derived(dirtyChangeCount(tabStatus));
+  /** Repo root — the stable per-repo key for persisted prefs. */
+  const repoRoot = $derived(
+    tabStore.tabs.find((tab) => tab.id === repoId)?.root ?? "",
+  );
+  const checkoutBusy = $derived(
+    checkoutTarget ? forgeStore.isBusy(repoId, checkoutTarget.number) : false,
   );
 
   /** Opens a URL in the system browser (toast on failure). */
@@ -337,6 +467,11 @@
 
   function errorText(err: unknown): string {
     return describeError(err);
+  }
+
+  /** One-letter change badge for a PR file row/chip (viewer grammar). */
+  function fileChangeLetter(file: FileDiff): string {
+    return fileKindLetter(fileChangeKind(file));
   }
 
   function refresh(): void {
@@ -473,7 +608,9 @@
   function openMerge(pr: PrInfo): void {
     mergeTarget = pr;
     mergeError = "";
-    mergeMethod = "squash";
+    // E2 §9.4: the last-used method per repo pre-selects; with no memory
+    // yet, squash-if-allowed else merge (see `initialMergeMethod`).
+    mergeMethod = loadMergeMethod(repoRoot) ?? initialMergeMethod(pr);
     deleteBranch = true;
     autoMerge = false;
     mergeOpen = true;
@@ -491,6 +628,8 @@
         deleteBranch,
         autoMerge,
       );
+      // A successful merge is what makes the method worth remembering.
+      saveMergeMethod(repoRoot, mergeMethod);
       mergeOpen = false;
       toast(
         autoMerge
@@ -500,6 +639,8 @@
       );
       mergeTarget = null;
     } catch (err) {
+      // Branch-protection (and every other gh) rejection surfaces verbatim;
+      // the dialog stays open — Retry re-submits the same request.
       mergeError = errorText(err);
     }
   }
@@ -610,16 +751,63 @@
     }
   }
 
-  async function checkout(pr: PrInfo): Promise<void> {
+  /** Default stash message for the checkout confirm dialog. */
+  function stashNameFor(pr: PrInfo): string {
+    return `Before checkout of #${pr.number} (${pr.head_ref_name})`;
+  }
+
+  /**
+   * Panel checkout (E2 §9.4): opens a confirm dialog that offers a NAMED,
+   * restorable stash when the worktree is dirty (the footer popover's
+   * checkout hard-refuses instead — see `checkoutRefusal`). An in-progress
+   * operation (merge/rebase/…) blocks without a stash offer — there is
+   * nothing coherent to stash mid-sequence.
+   */
+  function requestCheckout(pr: PrInfo): void {
+    checkoutTarget = pr;
+    checkoutStash = checkoutDirtyCount > 0;
+    checkoutStashName = stashNameFor(pr);
+    checkoutError = "";
+    checkoutOpen = true;
+  }
+
+  async function confirmCheckout(): Promise<void> {
+    const pr = checkoutTarget;
+    if (pr === null) return;
+    checkoutError = "";
     try {
+      if (checkoutDirtyCount > 0 && checkoutStash) {
+        const name = checkoutStashName.trim() || stashNameFor(pr);
+        await stashPush(repoId, name);
+        toast(`Stashed changes as "${name}"`, { kind: "success" });
+      }
       await forgeStore.checkoutPr(repoId, pr.number);
       await refreshStatus(repoId);
       toast(`Checked out #${pr.number} (${pr.head_ref_name})`, {
         kind: "success",
       });
+      checkoutOpen = false;
+      checkoutTarget = null;
     } catch (err) {
-      toast(errorText(err), { kind: "error" });
+      // gh's refusal (protection rules, conflicts…) surfaces verbatim; the
+      // dialog stays open so the stash choice can be adjusted and retried.
+      checkoutError = errorText(err);
     }
+  }
+
+  // -- PR-detail depth (E2 §9.4) ---------------------------------------------
+
+  function togglePrFiles(number: number): void {
+    filesNumber = filesNumber === number ? null : number;
+  }
+
+  function toggleThreads(number: number): void {
+    threadsNumber = threadsNumber === number ? null : number;
+  }
+
+  /** Chip/row click: scroll the PR diff to the file's header row. */
+  function revealPrFile(path: string): void {
+    prDiffViewer?.revealFile(path);
   }
 
   // -- PR edit dialog -------------------------------------------------------
@@ -797,7 +985,11 @@
   }
 </script>
 
-<aside class="forge-panel flex min-h-0 flex-col overflow-y-auto text-ui-base" aria-label="Pull requests">
+<aside
+  class="forge-panel flex min-h-0 flex-col overflow-y-auto text-ui-base"
+  aria-label="Pull requests"
+  bind:this={diffTracker.el}
+>
   {#snippet prMeta(pr: PrInfo)}
     {@const review = reviewDecisionLabel(pr.review_decision)}
     <div class="pr-meta mt-ui-3 flex flex-wrap items-center gap-ui-375 text-ui-micro text-muted-foreground">
@@ -831,7 +1023,7 @@
       {#if pr.labels.length > 0}
         <span class="labels inline-flex min-w-0 flex-wrap gap-ui-2">
           {#each pr.labels as label (label)}
-            <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-tiny">{label}</span>
+            <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-micro">{label}</span>
           {/each}
         </span>
       {/if}
@@ -872,7 +1064,7 @@
           type="button"
           title="Check out this branch locally"
           disabled={busy}
-          onclick={() => void checkout(pr)}
+          onclick={() => requestCheckout(pr)}
         >
           Checkout
         </Button>
@@ -930,7 +1122,7 @@
           type="button"
           title="Check out this branch locally"
           disabled={busy}
-          onclick={() => void checkout(pr)}
+          onclick={() => requestCheckout(pr)}
         >
           Checkout
         </Button>
@@ -953,7 +1145,7 @@
     <div class="checks mt-2 border-t border-border pt-ui-375">
       <div class="checks-head flex items-center gap-ui-375">
         <span
-          class="chip {worstChipClass(summary.worst)} {chipTone[worstChipClass(summary.worst)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+          class="chip {worstChipClass(summary.worst)} {chipTone[worstChipClass(summary.worst)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-micro font-semibold"
         >
           {checkSummaryLabel(summary)}
         </span>
@@ -1009,6 +1201,210 @@
     </div>
   {/snippet}
 
+  {#snippet prFilesBlock(pr: PrInfo)}
+    {@const files = forgeStore.prFilesFor(repoId, pr.number)}
+    {@const filesLoading = forgeStore.prFilesLoadingFor(repoId, pr.number)}
+    {@const filesError = forgeStore.prFilesErrorFor(repoId, pr.number)}
+    {@const viewerFiles = files === null ? [] : prFilesToFileDiffs(files)}
+    <div class="pr-files mt-2 border-t border-border pt-ui-375">
+      <div class="files-head flex items-center gap-ui-375">
+        <span class="files-label flex-none text-ui-meta font-semibold text-muted-foreground">Files changed</span>
+        {#if pr.changed_files > 0}
+          <span class="file-count flex-none text-ui-micro text-muted-foreground">
+            {pr.changed_files} file{pr.changed_files === 1 ? "" : "s"} · <span class="add text-[var(--app-added)]">+{pr.additions}</span> <span class="del text-[var(--app-deleted)]">−{pr.deletions}</span>
+          </span>
+        {/if}
+        <span class="spacer ml-auto"></span>
+        <Button class={tb} variant="outline"
+          type="button"
+          title={filesNumber === pr.number
+            ? "Hide the pull request diff"
+            : "Show the pull request diff"}
+          onclick={() => togglePrFiles(pr.number)}
+        >
+          {filesNumber === pr.number ? "Hide diff" : "View diff"}
+        </Button>
+      </div>
+      {#if filesNumber === pr.number}
+        {#if filesError}
+          <p class="error my-1 text-ui-meta text-destructive [overflow-wrap:anywhere]" role="alert">Could not load files: {filesError}</p>
+          <Button class={tb} variant="outline" type="button" onclick={() => void forgeStore.loadPrFiles(repoId, pr.number)}>
+            Retry
+          </Button>
+        {:else if files === null}
+          <p class="muted my-1 text-ui-meta text-muted-foreground" aria-live="polite">
+            {filesLoading ? "Loading files…" : ""}
+          </p>
+        {:else if viewerFiles.length === 0}
+          <p class="muted my-1 text-ui-meta text-muted-foreground">This pull request has no file changes.</p>
+        {:else if diffTracker.narrow}
+          <!-- Narrow container (Workstream C grammar): horizontal chip
+               strip above a unified diff (DiffViewer auto-unifies via
+               containerNarrow). -->
+          <div class="pr-diff mt-1 flex h-96 min-h-0 flex-col overflow-hidden rounded-sm border border-border bg-background">
+            <ul class="filelist flex flex-none items-center gap-1 overflow-x-auto border-b border-border bg-muted/40 py-1 pr-2 pl-2 text-ui-meta" aria-label="Pull request changed files">
+              {#each viewerFiles as file (file.path)}
+                <li class="fchip flex-none">
+                  <button
+                    class="flex max-w-48 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-ui-meta hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                    type="button"
+                    title={file.path}
+                    onclick={() => revealPrFile(file.path)}
+                  >
+                    <span class="fstat flex-none font-mono text-ui-micro font-bold {file.additions > 0 && file.deletions === 0
+                      ? "text-[var(--app-added)]"
+                      : file.deletions > 0 && file.additions === 0
+                        ? "text-[var(--app-deleted)]"
+                        : "text-[var(--app-modified)]"}">{fileChangeLetter(file)}</span>
+                    <span class="min-w-0 truncate font-mono text-foreground">{file.path}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+            <div class="min-h-0 flex-1">
+              <DiffViewer
+                bind:this={prDiffViewer}
+                files={viewerFiles}
+                containerNarrow={diffTracker.narrow}
+              />
+            </div>
+          </div>
+        {:else}
+          <!-- Wide container: changed-files column | diff (Workstream C
+               grammar; the split is a plain grid — no user resize here). -->
+          <div class="pr-diff mt-1 grid h-96 min-h-0 grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)] overflow-hidden rounded-sm border border-border bg-background">
+            <ul class="filelist m-0 flex min-h-0 list-none flex-col gap-px overflow-y-auto py-1 text-ui-meta" aria-label="Pull request changed files">
+              {#each viewerFiles as file (file.path)}
+                <li>
+                  <button
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-none border-none bg-transparent px-2 py-0.5 text-left hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                    type="button"
+                    title={file.path}
+                    onclick={() => revealPrFile(file.path)}
+                  >
+                    <span class="fstat flex-none font-mono text-ui-micro font-bold {file.additions > 0 && file.deletions === 0
+                      ? "text-[var(--app-added)]"
+                      : file.deletions > 0 && file.additions === 0
+                        ? "text-[var(--app-deleted)]"
+                        : "text-[var(--app-modified)]"}">{fileChangeLetter(file)}</span>
+                    <Hint label={file.path}>
+                      {#snippet child({ props })}
+                        <span class="fpath min-w-0 flex-1 truncate font-mono text-foreground" {...props}>{file.path}</span>
+                      {/snippet}
+                    </Hint>
+                    <span class="fstat-counts flex-none font-mono text-ui-micro text-muted-foreground">+{file.additions} −{file.deletions}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+            <div class="min-h-0 border-l border-border">
+              <DiffViewer
+                bind:this={prDiffViewer}
+                files={viewerFiles}
+                containerNarrow={diffTracker.narrow}
+              />
+            </div>
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {/snippet}
+
+  {#snippet prThreadsBlock(pr: PrInfo)}
+    {@const threads = forgeStore.reviewThreadsFor(repoId, pr.number)}
+    {@const threadsLoading = forgeStore.reviewThreadsLoadingFor(repoId, pr.number)}
+    {@const threadsError = forgeStore.reviewThreadsErrorFor(repoId, pr.number)}
+    <div class="pr-threads mt-2 border-t border-border pt-ui-375">
+      <div class="threads-head flex items-center gap-ui-375">
+        <span class="threads-label flex-none text-ui-meta font-semibold text-muted-foreground">Review threads</span>
+        {#if threads !== null && threads.length > 0}
+          <span class="thread-count flex-none text-ui-micro text-muted-foreground">{threads.length}</span>
+        {/if}
+        <span class="spacer ml-auto"></span>
+        <Button class={tb} variant="outline"
+          type="button"
+          title={threadsNumber === pr.number
+            ? "Hide the review threads"
+            : "Show the review threads"}
+          onclick={() => toggleThreads(pr.number)}
+        >
+          {threadsNumber === pr.number ? "Hide threads" : "Show threads"}
+        </Button>
+      </div>
+      {#if threadsNumber === pr.number}
+        {#if threadsError}
+          <p class="error my-1 text-ui-meta text-destructive [overflow-wrap:anywhere]" role="alert">Could not load review threads: {threadsError}</p>
+          <Button class={tb} variant="outline" type="button" onclick={() => void forgeStore.loadReviewThreads(repoId, pr.number)}>
+            Retry
+          </Button>
+        {:else if threads === null}
+          <p class="muted my-1 text-ui-meta text-muted-foreground" aria-live="polite">
+            {threadsLoading ? "Loading review threads…" : ""}
+          </p>
+        {:else if threads.length === 0}
+          <p class="muted my-1 text-ui-meta text-muted-foreground">No review comments on this pull request yet.</p>
+        {:else}
+          <!-- Read-only thread display (E2): state rides `outdated`, authors
+               and existing replies render inline; the Reply button opens the
+               existing comment dialog (`pr_comment`). -->
+          <ul class="thread-list m-0 mt-1 flex list-none flex-col gap-ui-35 p-0" role="list" aria-label="Review threads">
+            {#each threads as thread (thread.id)}
+              <li class="thread rounded-lg border border-border bg-card px-2 py-ui-35">
+                <div class="thread-head flex flex-wrap items-baseline gap-ui-375 text-ui-micro text-muted-foreground">
+                  <Hint label={thread.line !== null ? `${thread.path}:${thread.line}` : thread.path}>
+                    {#snippet child({ props })}
+                      <span class="thread-path min-w-0 max-w-48 truncate font-mono text-foreground" {...props}>
+                        {thread.path}{thread.line !== null ? `:${thread.line}` : ""}
+                      </span>
+                    {/snippet}
+                  </Hint>
+                  {#if thread.outdated}
+                    <span class="outdated flex-none rounded-full bg-accent px-2 py-px">Outdated</span>
+                  {/if}
+                  <span class="author flex-none font-semibold text-foreground">{thread.author || "ghost"}</span>
+                  {#if prAgeLabel(thread.created_at)}
+                    <span class="age flex-none">commented {prAgeLabel(thread.created_at)} ago</span>
+                  {/if}
+                  <span class="spacer ml-auto"></span>
+                  <Button class={tb} variant="outline"
+                    type="button"
+                    title="Add a comment on this pull request"
+                    onclick={() => openText("comment", pr)}
+                  >
+                    Reply
+                  </Button>
+                </div>
+                <div class="thread-body mt-1 text-ui-meta text-muted-foreground">
+                  <AiMarkdown text={thread.body} />
+                </div>
+                {#if thread.replies.length > 0}
+                  <ul class="replies m-0 mt-1 flex list-none flex-col gap-ui-35 border-l-2 border-border pl-2 pt-1" role="list" aria-label="Replies">
+                    {#each thread.replies as reply (reply.id)}
+                      <li class="reply">
+                        <div class="reply-head flex flex-wrap items-baseline gap-ui-375 text-ui-micro text-muted-foreground">
+                          <span class="author flex-none font-semibold text-foreground">{reply.author || "ghost"}</span>
+                          {#if prAgeLabel(reply.created_at)}
+                            <span class="age flex-none">replied {prAgeLabel(reply.created_at)} ago</span>
+                          {/if}
+                        </div>
+                        <div class="reply-body mt-ui-15 text-ui-meta text-muted-foreground">
+                          <AiMarkdown text={reply.body} />
+                        </div>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          <p class="thread-note my-1 text-ui-micro text-muted-foreground">
+            Read-only here — Reply posts a pull-request comment.
+          </p>
+        {/if}
+      {/if}
+    </div>
+  {/snippet}
+
   <div class="toolbar sticky top-0 z-1 flex flex-none flex-wrap items-center gap-ui-375 bg-background px-2 py-ui-375">
     <div
       class="tabs inline-flex flex-none gap-ui-125 rounded-full border border-border p-ui-1"
@@ -1026,6 +1422,19 @@
         onclick={() => selectTab("prs")}
       >
         Pull requests
+      </button>
+      <!-- E2 §9.4 tab order: prs | actions | issues | notifications. -->
+      <button
+        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "actions"
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground"}"
+        class:active={tab === "actions"}
+        type="button"
+        role="tab"
+        aria-selected={tab === "actions"}
+        onclick={() => selectTab("actions")}
+      >
+        Actions
       </button>
       <button
         class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "issues"
@@ -1050,18 +1459,6 @@
         onclick={() => selectTab("notifications")}
       >
         Notifications
-      </button>
-      <button
-        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "actions"
-          ? "bg-accent font-semibold text-accent-foreground"
-          : "text-muted-foreground"}"
-        class:active={tab === "actions"}
-        type="button"
-        role="tab"
-        aria-selected={tab === "actions"}
-        onclick={() => selectTab("actions")}
-      >
-        Actions
       </button>
     </div>
     {#if forgeStore.status?.available}
@@ -1279,7 +1676,7 @@
                         onclick={() => openRun(run)}
                       >
                         <span
-                          class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-ui-15 whitespace-nowrap rounded-full px-2 py-px text-ui-tiny font-semibold"
+                          class="run-chip {runStateClass(kind)} {chipTone[runStateClass(kind)] ?? "bg-accent text-foreground"} mt-[0.05rem] inline-flex flex-none items-center gap-ui-15 whitespace-nowrap rounded-full px-2 py-px text-ui-micro font-semibold"
                         >
                           <span aria-hidden="true">{runStateIcon(kind)}</span>
                           {runStateLabel(run)}
@@ -1307,7 +1704,7 @@
                           {/if}
                           <Hint label="Trigger event">
                             {#snippet child({ props })}
-                              <span class="wf-event whitespace-nowrap rounded-full border border-border px-ui-35 text-ui-tiny" {...props}>
+                              <span class="wf-event whitespace-nowrap rounded-full border border-border px-ui-35 text-ui-micro" {...props}>
                                 {workflowEventLabel(run.event)}
                               </span>
                             {/snippet}
@@ -1425,7 +1822,7 @@
                           {expandedIssue === issue.number ? "▾" : "▸"}
                         </span>
                         <span
-                          class="chip {issueStateClass(issue.state)} {chipTone[issueStateClass(issue.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+                          class="chip {issueStateClass(issue.state)} {chipTone[issueStateClass(issue.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-micro font-semibold"
                         >{issueStateLabel(issue.state)}</span>
                         <Hint label={issue.title}>
                           {#snippet child({ props })}
@@ -1436,7 +1833,7 @@
                         {#if issue.labels.length > 0}
                           <span class="labels inline-flex min-w-0 max-w-[35%] flex-none flex-wrap gap-ui-2">
                             {#each issue.labels as label (label)}
-                              <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-tiny">{label}</span>
+                              <span class="label max-w-36 truncate rounded-full border border-border px-2 py-[0.02rem] text-ui-micro">{label}</span>
                             {/each}
                           </span>
                         {/if}
@@ -1568,7 +1965,7 @@
                         type="button"
                         onclick={() => void openNotification(item)}
                       >
-                        <span class="notif-kind flex-none rounded-full border border-border px-2 py-px text-ui-tiny text-muted-foreground">
+                        <span class="notif-kind flex-none rounded-full border border-border px-2 py-px text-ui-micro text-muted-foreground">
                           {notificationKindLabel(item.kind)}
                         </span>
                         <Hint label={item.subject_title}>
@@ -1620,10 +2017,10 @@
       <div class="card current mx-2 my-1 rounded-lg border border-border bg-card px-2.5 py-2">
         <div class="card-head flex min-w-0 flex-wrap items-center gap-ui-375">
           <span
-            class="chip {prStateClass(branchPr.state)} {chipTone[prStateClass(branchPr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+            class="chip {prStateClass(branchPr.state)} {chipTone[prStateClass(branchPr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-micro font-semibold"
           >{prStateLabel(branchPr.state)}</span>
           {#if branchPr.is_draft}
-            <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-tiny font-semibold text-muted-foreground">Draft</span>
+            <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-micro font-semibold text-muted-foreground">Draft</span>
           {/if}
           <Hint label={branchPr.title}>
             {#snippet child({ props })}
@@ -1650,6 +2047,8 @@
         {#if isPrOpen(branchPr.state)}
           {@render checksBlock(branchPr)}
         {/if}
+        {@render prFilesBlock(branchPr)}
+        {@render prThreadsBlock(branchPr)}
       </div>
     {:else}
       <div class="card empty mx-2 my-1 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-2.5 py-2">
@@ -1695,10 +2094,10 @@
                         {expandedNumber === pr.number ? "▾" : "▸"}
                       </span>
                       <span
-                        class="chip {prStateClass(pr.state)} {chipTone[prStateClass(pr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-tiny font-semibold"
+                        class="chip {prStateClass(pr.state)} {chipTone[prStateClass(pr.state)] ?? "bg-accent text-foreground"} flex-none rounded-full px-2 py-px text-ui-micro font-semibold"
                       >{prStateLabel(pr.state)}</span>
                       {#if pr.is_draft}
-                        <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-tiny font-semibold text-muted-foreground">Draft</span>
+                        <span class="chip chip-draft flex-none rounded-full border border-border bg-transparent px-2 py-px text-ui-micro font-semibold text-muted-foreground">Draft</span>
                       {/if}
                       <Hint label={pr.title}>
                         {#snippet child({ props })}
@@ -1732,6 +2131,8 @@
                   {#if isPrOpen(pr.state)}
                     {@render checksBlock(pr)}
                   {/if}
+                  {@render prFilesBlock(pr)}
+                  {@render prThreadsBlock(pr)}
                 </div>
               {/if}
             </li>
@@ -1846,6 +2247,8 @@
       Enable auto-merge (merge when required checks pass)
     </Label>
     {#if mergeError}
+      <!-- Branch-protection (and other gh) rejections surface verbatim above;
+           Retry re-submits the same request without touching the fields. -->
       <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{mergeError}</p>
     {/if}
     {#snippet actions()}
@@ -1860,8 +2263,84 @@
       >
         Cancel
       </button>
+      {#if mergeError}
+        <button
+          class="sdlg-secondary"
+          type="button"
+          disabled={mergeBusy}
+          onclick={() => void confirmMerge()}
+        >
+          Retry
+        </button>
+      {/if}
       <button class="sdlg-primary" type="submit" disabled={mergeBusy}>
         {autoMerge ? "Enable auto-merge" : "Merge"}
+      </button>
+    {/snippet}
+  </DialogShell>
+
+  <DialogShell
+    bind:open={checkoutOpen}
+    labelledBy="forge-checkout-title"
+    onCancel={() => (checkoutTarget = null)}
+    onsubmit={() => void confirmCheckout()}
+  >
+    <h2 class="sdlg-title" id="forge-checkout-title">Check out #{checkoutTarget?.number}</h2>
+    <p class="sdlg-message">
+      Switches this repository to
+      <code class="rounded-sm bg-accent px-1 font-mono">{checkoutTarget?.head_ref_name}</code>.
+    </p>
+    {#if checkoutRefusalText !== null}
+      <p class="dialog-error m-0 mt-2 text-xs text-destructive" role="alert">
+        {checkoutRefusalText}{checkoutDirtyCount > 0
+          ? ` (${checkoutDirtyCount} path${checkoutDirtyCount === 1 ? "" : "s"})`
+          : ""}{checkoutDirtyCount > 0
+          ? " — stash them to check out this pull request."
+          : " — finish or abort it before checking out."}
+      </p>
+      {#if checkoutDirtyCount > 0}
+        <Label class="dialog-check mt-2 flex items-center gap-2 text-ui-base text-muted-foreground">
+          <input type="checkbox" bind:checked={checkoutStash} />
+          Stash the changes (restore later from the Stashes panel)
+        </Label>
+        {#if checkoutStash}
+          <Label class="dialog-field mt-2 flex items-center gap-2 text-ui-base">
+            <span>Stash name</span>
+            <input
+              class="dialog-text mt-0 w-auto min-w-0 flex-1 rounded-sm border border-border bg-background p-2 text-ui-base text-foreground"
+              aria-label="Stash name"
+              bind:value={checkoutStashName}
+            />
+          </Label>
+        {/if}
+      {/if}
+    {/if}
+    {#if checkoutError}
+      <p class="dialog-error m-0 mt-[0.6rem] text-xs text-destructive" role="alert">{checkoutError}</p>
+    {/if}
+    {#snippet actions()}
+      <button
+        class="sdlg-secondary"
+        type="button"
+        onclick={() => {
+          checkoutOpen = false;
+          checkoutTarget = null;
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        class="sdlg-primary"
+        type="submit"
+        disabled={checkoutBusy ||
+          (checkoutRefusalText !== null &&
+            (checkoutDirtyCount === 0 || !checkoutStash))}
+      >
+        {checkoutBusy
+          ? "Checking out…"
+          : checkoutDirtyCount > 0 && checkoutStash
+            ? "Stash & check out"
+            : "Check out"}
       </button>
     {/snippet}
   </DialogShell>

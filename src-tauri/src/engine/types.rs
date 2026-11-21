@@ -409,6 +409,10 @@ pub struct CommitOptions {
     pub allow_empty: bool,
     /// Override author (name/email); committer stays the configured identity.
     pub author: Option<GitSignature>,
+    /// Append a `Signed-off-by:` trailer for the configured committer
+    /// identity (`git commit -s`). Additive: absent on the wire = false.
+    #[serde(default)]
+    pub signoff: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

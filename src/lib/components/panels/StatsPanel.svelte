@@ -164,7 +164,7 @@
         {#snippet child({ props })}
           <Button
             {...props}
-            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             variant="secondary"
             type="button"
             onclick={clearAuthorFilter}
@@ -178,7 +178,7 @@
         {#snippet child({ props })}
           <Button
             {...props}
-            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             variant="secondary"
             type="button"
             bind:ref={colorsButton}
@@ -193,7 +193,7 @@
         {#snippet child({ props })}
           <Button
             {...props}
-            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal"
+            class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             variant="secondary"
             type="button"
             onclick={refresh}
@@ -207,7 +207,7 @@
     {#if error}
       <p class="error m-0 flex flex-none items-center gap-2 rounded-md bg-destructive/10 px-2 py-1 text-destructive" role="alert">
         {error}
-        <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal" variant="secondary" type="button" onclick={refresh}>Retry</Button>
+        <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal" variant="secondary" type="button" onclick={refresh}>Retry</Button>
       </p>
     {/if}
 
@@ -225,23 +225,23 @@
       <div class="cards flex flex-none flex-wrap gap-1.5">
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
           <span class="card-value text-sm font-semibold tabular-nums">{summary.commits}</span>
-          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">commits</span>
+          <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">commits</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
           <span class="card-value text-sm font-semibold tabular-nums">{summary.activeDays}</span>
-          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">active days</span>
+          <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">active days</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
           <span class="card-value text-sm font-semibold tabular-nums">{summary.avgPerDay}</span>
-          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">avg / active day</span>
+          <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">avg / active day</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
           <span class="card-value text-sm font-semibold tabular-nums">{streakSummary.current}</span>
-          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">current streak</span>
+          <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">current streak</span>
         </div>
         <div class="card flex min-w-[4.5rem] flex-col gap-[1px] rounded-md border border-border bg-card px-2.5 py-[5px]">
           <span class="card-value text-sm font-semibold tabular-nums">{streakSummary.longest}</span>
-          <span class="card-label text-ui-tiny uppercase tracking-[0.03em] text-muted-foreground">longest streak</span>
+          <span class="card-label text-ui-meta uppercase tracking-[0.03em] text-muted-foreground">longest streak</span>
         </div>
       </div>
 
@@ -249,7 +249,7 @@
            tabindex makes the scrollable region keyboard-scrollable. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="heatmap-wrap flex-none overflow-x-auto pb-px" role="region" aria-label="Contribution heatmap" tabindex="0">
-        <table class="heatmap border-separate border-spacing-[2px] text-ui-tiny text-muted-foreground">
+        <table class="heatmap border-separate border-spacing-[2px] text-ui-meta text-muted-foreground">
           <thead>
             <tr>
               {#each grid.weeks as _, week (week)}
@@ -280,7 +280,7 @@
             {/each}
           </tbody>
         </table>
-        <div class="legend mt-1 flex items-center gap-[3px] text-ui-tiny text-muted-foreground" aria-hidden="true">
+        <div class="legend mt-1 flex items-center gap-[3px] text-ui-meta text-muted-foreground" aria-hidden="true">
           <span>Less</span>
           {#each [0, 1, 2, 3, 4] as level (level)}
             <span class="cell legend-cell inline-block h-[11px] w-[11px] flex-none rounded-[2px]" style:background={levelBackground(level)}></span>
@@ -310,7 +310,7 @@
                   ></span>
                 </span>
                 <span class="ccount text-right tabular-nums">{c.count}</span>
-                <span class="crange whitespace-nowrap text-ui-tiny text-muted-foreground">{c.first_day} → {c.last_day}</span>
+                <span class="crange whitespace-nowrap text-ui-meta text-muted-foreground">{c.first_day} → {c.last_day}</span>
               </li>
             {/each}
           </ul>
@@ -337,7 +337,7 @@
             <Icon icon={iconClose} size={12} />
           </button>
         </div>
-        <p class="colors-hint m-0 text-ui-tiny text-muted-foreground">
+        <p class="colors-hint m-0 text-ui-meta text-muted-foreground">
           Patterns match branch names on graph rows: <code class="font-mono">feature/*</code>
           (prefix), <code class="font-mono">*-hotfix</code> (suffix), <code class="font-mono">main</code>
           (exact), <code class="font-mono">*</code> (all). First match wins; matching rows are
@@ -351,7 +351,7 @@
               <li class="rule flex items-center gap-1.5">
                 <span class="swatch h-3.5 w-3.5 flex-none rounded-[3px] border border-border" style:background={rule.color}></span>
                 <input
-                  class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-tiny text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+                  class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                   aria-label={`Pattern ${index + 1}`}
                   value={rule.pattern}
                   onchange={(e) =>
@@ -390,7 +390,7 @@
           }}
         >
           <input
-            class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-tiny text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+            class="rule-pattern min-w-0 flex-1 rounded-sm border border-border bg-background px-[5px] py-px font-mono text-ui-meta text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
             placeholder="Pattern (feature/*)"
             aria-label="New rule pattern"
             value={newPattern}
@@ -403,7 +403,7 @@
             value={defaultRuleColor}
             oninput={(e) => (newColor = (e.currentTarget as HTMLInputElement).value)}
           />
-          <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-tiny font-normal" variant="secondary" type="submit">Add</Button>
+          <Button class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal" variant="secondary" type="submit">Add</Button>
         </form>
       </div>
     {/if}

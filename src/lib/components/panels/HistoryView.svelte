@@ -88,7 +88,14 @@
   } from "$lib/components/menu/contextMenuStore.svelte";
   import { openPanelPopout } from "$lib/layout/popout";
   import SplitPane from "$lib/components/layout/SplitPane.svelte";
-  import { readSplitRatio, writeSplitRatio } from "$lib/layout/splitPrefs";
+  import {
+    readSplitModeOpen,
+    readSplitRatio,
+    writeSplitModeOpen,
+    writeSplitRatio,
+  } from "$lib/layout/splitPrefs";
+  import { widthMode } from "$lib/layout/widthMode.svelte";
+  import { createWidthTracker } from "$lib/layout/containerWidth.svelte";
   import PromptDialog from "$lib/components/safety/PromptDialog.svelte";
   import ResetDialog from "$lib/components/safety/ResetDialog.svelte";
   import TagAtDialog from "$lib/components/panels/TagAtDialog.svelte";
@@ -111,17 +118,19 @@
   import { appIcon } from "$lib/components/icons/library.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import AuthorAvatar from "$lib/components/panels/AuthorAvatar.svelte";
+  import RefBadge from "$lib/components/panels/RefBadge.svelte";
+  import { floating } from "$lib/components/overlay/floating";
 
   const iconSearch = $derived(appIcon("search")!);
   const iconPopout = $derived(appIcon("open-in-new")!);
   const iconCollapse = $derived(appIcon("right-panel-close")!);
   const iconFilters = $derived(appIcon("filter-list")!);
-  const iconClearFilters = $derived(appIcon("filter-list-off")!);
   const iconCompare = $derived(appIcon("compare-arrows")!);
   const iconClose = $derived(appIcon("close")!);
   const iconRetry = $derived(appIcon("restart-alt")!);
   const iconCheckout = $derived(appIcon("alt-route")!);
   const iconBranch = $derived(appIcon("fork-right")!);
+  const iconGraph = $derived(appIcon("account-tree")!);
 
   let {
     repoId,
@@ -180,8 +189,71 @@
 
   /** Must match the row height passed to (and defaulted by) GraphCanvas. */
   const ROW_HEIGHT = 28;
-  const GRAPH_WIDTH = 220;
   const OVERSCAN = 10;
+
+  // -- graph column (plan §8.3) ---------------------------------------------------
+
+  /**
+   * The graph column's persisted prefs key: a `splitPrefs` slot shared by
+   * the list↔graph ratio and the per-width-mode collapsed flag (one key,
+   * both dimensions — the envelope holds `ratio` + `modes`).
+   */
+  const GRAPH_PREFS_KEY = "history-graph";
+  /** Container width below which the graph auto-collapses (plan §8.3). */
+  const GRAPH_AUTO_COLLAPSE_PX = 560;
+  /**
+   * Graph width as the LIST pane's fraction: clamped tighter than the
+   * global splitter range so the graph stays a column (12–45% of the row),
+   * never a co-equal half. Default ≈ the old fixed 220px at typical panel
+   * widths (list 78% / graph 22%).
+   */
+  const GRAPH_RATIO_DEFAULT = 0.78;
+  const GRAPH_RATIO_MIN = 0.55;
+  const GRAPH_RATIO_MAX = 0.88;
+
+  /** List pane fraction (the graph takes the rest), persisted per app. */
+  let graphRatio = $state(readSplitRatio(GRAPH_PREFS_KEY, GRAPH_RATIO_DEFAULT));
+
+  function setGraphRatio(raw: number): void {
+    const clamped = Math.min(GRAPH_RATIO_MAX, Math.max(GRAPH_RATIO_MIN, raw));
+    graphRatio = clamped;
+    writeSplitRatio(GRAPH_PREFS_KEY, clamped);
+  }
+
+  /**
+   * User collapse state, persisted per width mode (the §4.2 overlay-state
+   * pattern — the graph is an overlay-ish visibility, so mode-scoped like
+   * the drawers). `false` default = visible.
+   */
+  let graphCollapsed = $state(
+    readSplitModeOpen(GRAPH_PREFS_KEY, widthMode.current, false),
+  );
+
+  function toggleGraph(): void {
+    graphCollapsed = !graphCollapsed;
+    writeSplitModeOpen(GRAPH_PREFS_KEY, widthMode.current, graphCollapsed);
+  }
+
+  $effect(() => {
+    // The collapse state is stored per width mode: when the window mode
+    // changes, restore THAT mode's choice (the toggle above writes the
+    // current mode's slot; this read-only re-arm makes the stored value
+    // follow the mode ladder).
+    const mode = widthMode.current;
+    untrack(() => {
+      graphCollapsed = readSplitModeOpen(GRAPH_PREFS_KEY, mode, false);
+    });
+  });
+
+  /**
+   * The panel's own width tracker: the graph auto-collapses when the
+   * history container (not the window) is too narrow to show a column
+   * beside the list. Bound to the section root below.
+   */
+  const historyWidth = createWidthTracker(GRAPH_AUTO_COLLAPSE_PX);
+
+  /** Effective visibility: user toggle AND the container-width floor. */
+  const graphVisible = $derived(!graphCollapsed && !historyWidth.narrow);
 
   // Capturing the initial `root` is intended: the prop is fixed per mounting
   // site (RepoView passes the worktree root; popouts pass nothing), so the
@@ -200,12 +272,132 @@
   let selectedInfo = $state<CommitInfo | null>(null);
   let detailOpen = $state(false);
   let showCompare = $state(false);
-  /** Sidebar variant: reveal author/path/date/pickaxe filters. */
-  let showAdvanced = $state(false);
   let compare = $state<CompareResult | null>(null);
 
   /** Live `CommitDetail` instance (palette blame toggle; null when closed). */
   let detailRef = $state<ReturnType<typeof CommitDetail> | null>(null);
+
+  // -- filter popover (plan §8.4: ONE search input + ONE filter menu) ----------
+
+  /**
+   * The advanced filters (author / path / date range / ref scope / regex /
+   * pickaxe) collapsed into one icon-triggered popover. The text search
+   * stays an always-visible input beside the icon; state and semantics are
+   * the store's (`store.filter`), untouched by this consolidation.
+   */
+  let filtersOpen = $state(false);
+  let filtersAnchor = $state<HTMLElement | null>(null);
+  let filtersEl = $state<HTMLElement | null>(null);
+
+  function toggleFilters(): void {
+    if (filtersOpen) {
+      filtersOpen = false;
+      filtersAnchor?.focus();
+    } else {
+      filtersOpen = true;
+    }
+  }
+
+  /** Active advanced-filter count (the icon's badge): every non-empty
+   *  field plus the regex flag; the text search is the bar's own input. */
+  const advancedFilterCount = $derived.by(() => {
+    const f = store.filter;
+    return (
+      [
+        f.author,
+        f.path,
+        f.after,
+        f.before,
+        f.pickaxe,
+        f.pickaxeRegex ?? "",
+        f.scopeRef ?? "",
+      ].filter((v) => v !== "").length + (f.regex ? 1 : 0)
+    );
+  });
+
+  // The popover is portaled to <body> (BranchSwitcher idiom): outside-click
+  // closes, Escape closes and restores the trigger's focus.
+  $effect(() => {
+    if (!filtersOpen) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null;
+      if (filtersEl?.contains(target) || filtersAnchor?.contains(target)) return;
+      filtersOpen = false;
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        filtersOpen = false;
+        filtersAnchor?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  });
+
+  // -- refs popover (plan §8.2: `+n` chip lists ALL refs w/ copy/checkout) ------
+
+  /**
+   * The open refs popover: the commit whose refs are listed plus the `+n`
+   * chip anchoring it (null = closed). One at a time; rows offer Copy for
+   * every ref and checkout through the commit's existing confirm dialog.
+   */
+  let refsPopover = $state<{ sha: string; refs: string[] } | null>(null);
+  let refsAnchor = $state<HTMLElement | null>(null);
+  let refsEl = $state<HTMLElement | null>(null);
+
+  function openRefsPopover(sha: string, refs: string[], anchor: HTMLElement): void {
+    refsPopover = { sha, refs };
+    refsAnchor = anchor;
+  }
+
+  function closeRefsPopover(): void {
+    refsPopover = null;
+    refsAnchor?.focus();
+  }
+
+  // Same outside/Esc contract as the filter popover above.
+  $effect(() => {
+    if (refsPopover === null) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null;
+      if (refsEl?.contains(target) || refsAnchor?.contains(target)) return;
+      refsPopover = null;
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        refsPopover = null;
+        refsAnchor?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  });
+
+  /** Copies a ref's display name (the refs popover row action). */
+  async function copyRef(ref: string): Promise<void> {
+    await copyText(shortRefName(ref), "branch name");
+  }
+
+  /**
+   * Checkout through the row's existing confirm dialog, targeting THIS ref
+   * when it names a local branch (switch to that branch — the dialog
+   * resolves stash/dirty choices as usual) and the commit otherwise
+   * (detach at sha, like the hover action).
+   */
+  function checkoutRef(sha: string, ref: string): void {
+    const branch = classifyRef(ref) === "local" ? shortRefName(ref) : undefined;
+    requestCheckout(sha, branch);
+  }
 
   // -- resizable panes (SplitPane ratios, persisted as global prefs) --------
 
@@ -246,13 +438,16 @@
   /** "Reset current branch to here…" ResetDialog. */
   let resetTo = $state<DialogState<{ sha: string }>>(closedDialog());
   /**
-   * "Checkout commit" ConfirmDialog (row hover action + context menu).
-   * The sha travels with open like the dialogs above; the summary only
-   * feeds the dialog text and may degrade to "" after a restart.
+   * "Checkout commit" ConfirmDialog (row hover action, context menu, refs
+   * popover). The sha travels with open like the dialogs above; the
+   * summary only feeds the dialog text and may degrade to "" after a
+   * restart. `branch` pins the switch target at open time — the refs
+   * popover checks out a SPECIFIC local branch — and undefined resolves
+   * to the commit's first local branch at open (hover-action semantics).
    */
-  let checkoutAt = $state<DialogState<{ sha: string; summary: string }>>(
-    closedDialog(),
-  );
+  let checkoutAt = $state<
+    DialogState<{ sha: string; summary: string; branch?: string }>
+  >(closedDialog());
 
   /** HEAD sha from the tab status (null when unknown/unloaded). */
   const headSha = $derived(
@@ -277,10 +472,18 @@
     return null;
   }
 
-  /** Opens the checkout confirmation for `sha` (hover action / menu entry). */
-  function requestCheckout(sha: string): void {
+  /**
+   * Opens the checkout confirmation for `sha` (hover action / menu entry /
+   * refs popover). Without `branch`, the commit's first local branch is
+   * resolved at open time (switch instead of detach — VSCode parity).
+   */
+  function requestCheckout(sha: string, branch?: string): void {
     const row = commits.find((c) => c.sha === sha);
-    checkoutAt = openDialog({ sha, summary: row?.summary ?? "" });
+    checkoutAt = openDialog({
+      sha,
+      summary: row?.summary ?? "",
+      branch: branch ?? (row ? (localBranchAt(row) ?? undefined) : undefined),
+    });
   }
 
   /**
@@ -417,6 +620,47 @@
     void total;
     sync.updateOwnRange();
     if (sync.renderWindow().end >= total && total > 0) store.loadMore();
+  });
+
+  $effect(() => {
+    // Graph collapse (user toggle or the <560px container floor): the
+    // canvas unmounts, so its last reported window would go stale —
+    // renderWindow() prefers it over the local window and a scrolled list
+    // would keep rendering the pre-collapse rows. Drop it and re-window
+    // from the list scroller (the same fallback the sidebar variant always
+    // runs); on re-expand the canvas remounts and reports a fresh window.
+    // The bound scroll element / handle are cleared explicitly too: the
+    // sync's ports select strategies by their ABSENCE, and a detached
+    // leftover element would be mistaken for a live fast path.
+    const hidden = !graphVisible;
+    if (!hidden) return;
+    canvasWindow = null;
+    untrack(() => {
+      canvasScrollEl = undefined;
+      canvasRef = null;
+      sync.updateOwnRange();
+    });
+  });
+
+  $effect(() => {
+    // Feed the panel root to the width tracker (one bind:this per element —
+    // the section root is already bound to `panelEl` for the virtualizer's
+    // ResizeObserver above).
+    historyWidth.el = panelEl ?? undefined;
+  });
+
+  $effect(() => {
+    // Graph (re)mount — expand from a collapse, or the first paint of the
+    // full variant: seed the canvas's scroll offset from the list BEFORE
+    // the canvas reports its drawn window. A fresh canvas sits at scrollTop
+    // 0; unseeded, `sync.onCanvasVisible` would see list≠canvas and drag a
+    // deeply scrolled list back to the top (§14's scroll-sync risk).
+    // Deliberately NOT re-run on scroll: scrollTop writes are DOM-only and
+    // untracked, so direct canvas scrolling never fights this.
+    const canvas = canvasScrollEl;
+    const list = scrollerEl;
+    if (!canvas || !list) return;
+    if (canvas.scrollTop !== list.scrollTop) canvas.scrollTop = list.scrollTop;
   });
 
   // -- lifecycle ------------------------------------------------------------------
@@ -1271,6 +1515,14 @@
   $effect(() => {
     const unlisteners = [
       onUiEvent("history-focus-filter", () => filterTextEl?.focus()),
+      // Ctrl+F follows focus (the keybinds engine owns the combo globally —
+      // see the `diff.find` command): inside this panel it focuses the
+      // search input. Keep-alive mounting means several instances are live,
+      // so the focus guard picks the one the user is working in.
+      onUiEvent("history-filter", () => {
+        if (!panelEl?.contains(document.activeElement)) return;
+        filterTextEl?.focus();
+      }),
       onUiEvent("history-clear-filter", () => store.clearFilter()),
       onUiEvent("history-refresh", () => {
         store.restart();
@@ -1454,7 +1706,7 @@
 </script>
 
 <section
-  class="history flex h-full min-h-0 flex-col bg-card [&>.split]:flex-1 [&>.split]:min-h-0"
+  class="history @container flex h-full min-h-0 flex-col bg-card [&>.split]:flex-1 [&>.split]:min-h-0"
   class:sidebar
   aria-label="Commit history"
   bind:this={panelEl}
@@ -1529,137 +1781,46 @@
       />
     </span>
 
-    {#if sidebar}
-      <Hint label="More filters">
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            class="relative after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filterActive
-              ? 'text-primary'
-              : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
-            variant="ghost"
-            size="icon-xs"
-            type="button"
-            aria-label="More filters"
-            aria-pressed={showAdvanced}
-            aria-expanded={showAdvanced}
-            onclick={() => (showAdvanced = !showAdvanced)}
-          >
-            <Icon icon={iconFilters} size={16} />
-          </Button>
-        {/snippet}
-      </Hint>
-    {/if}
-
-    {#if !sidebar || showAdvanced}
-      <!-- Branch scope: backend LogFilter.refs — "" walks all refs + HEAD,
-           "HEAD" the checked-out branch, a name only that branch's history.
-           Restarts the stream through the same debounced setFilter path as
-           the other filter fields. -->
-      <Hint label="Limit the log to one branch's history">
-        {#snippet child({ props })}
-          <label
-            {...props}
-            class="scope flex items-center gap-1 text-muted-foreground"
-          >
-            <span class="dl">scope</span>
-            <select
-              class="h-auto rounded-sm border border-input bg-card px-ui-3 py-0.5 text-ui-micro text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
-              aria-label="Branch scope"
-              bind:this={scopeSelectEl}
-              onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
-            >
-              <option value="">All branches</option>
-              <option value="HEAD">Current branch</option>
-              {#each scopeOptions as name (name)}
-                <option value={name}>{name}</option>
-              {/each}
-            </select>
-          </label>
-        {/snippet}
-      </Hint>
-      <Input
-        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
-        placeholder="Author"
-        aria-label="Filter by author"
-        value={store.filter.author}
-        oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
-      />
-      <Input
-        class="f h-auto w-48 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
-        placeholder="Path (comma-separates)"
-        aria-label="Filter by path (comma or newline separated for multiple)"
-        value={store.filter.path}
-        oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
-      />
-      {#if pathFilterCount > 1}
-        <!-- Multi-pathspec walk: the backend ignores rename-following there
-             (no single name to shift through renames) — say so up front. -->
-        <Hint label="Rename-following is off while filtering multiple paths (a multi-path walk has no single name to follow through renames)">
-          {#snippet child({ props })}
+    <!-- Workstream D §8.4: the advanced filters (author / path / date range /
+         ref scope / regex / pickaxe) collapse into ONE icon-triggered
+         popover — the fields render in the portaled panel at the bottom of
+         the view. The dot counts the active advanced fields; the text
+         search stays an always-visible input beside it. -->
+    <Hint
+      label={advancedFilterCount > 0
+        ? `Filters — ${advancedFilterCount} active`
+        : "Filters (author, path, dates, ref)"}
+    >
+      {#snippet child({ props })}
+        <Button
+          bind:ref={filtersAnchor}
+          {...props}
+          class="relative flex-none after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filtersOpen ||
+          advancedFilterCount > 0
+            ? 'text-primary'
+            : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label={advancedFilterCount > 0
+            ? `Filters — ${advancedFilterCount} active`
+            : "Filters (author, path, dates, ref)"}
+          aria-haspopup="dialog"
+          aria-expanded={filtersOpen}
+          onclick={toggleFilters}
+        >
+          <Icon icon={iconFilters} size={16} />
+          {#if advancedFilterCount > 0}
             <span
-              {...props}
-              class="inline-flex flex-none items-center rounded-full bg-muted px-1.5 py-0 text-ui-micro leading-[1.4] text-muted-foreground"
-            >{pathFilterCount} paths · follow off</span>
-          {/snippet}
-        </Hint>
-      {/if}
-      <label class="date flex items-center gap-1 text-muted-foreground">
-        <span class="dl">after</span>
-        <Input
-          type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-ui-3 py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
-          aria-label="Commits after this date"
-          value={store.filter.after}
-          onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
-        />
-      </label>
-      <label class="date flex items-center gap-1 text-muted-foreground">
-        <span class="dl">before</span>
-        <Input
-          type="date"
-          class="h-auto rounded-sm bg-card dark:bg-card px-ui-3 py-0.5 text-ui-micro md:text-ui-micro placeholder:text-muted-foreground/80"
-          aria-label="Commits before this date"
-          value={store.filter.before}
-          onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
-        />
-      </label>
-      <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
-      <Hint label="Treat the search text as a regular expression">
-        {#snippet child({ props })}
-          <label
-            {...props}
-            class="regex flex items-center gap-1 text-muted-foreground"
-          >
-            <Checkbox
-              checked={store.filter.regex}
-              onCheckedChange={(checked) => store.setFilter({ regex: checked === true })}
-              aria-label="Treat the search text as a regular expression"
-            />
-            <span>Regex</span>
-          </label>
-        {/snippet}
-      </Hint>
-      <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
-      <Input
-        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
-        placeholder="Changes containing… (-S)"
-        aria-label="Pickaxe: patches adding or removing this string"
-        value={store.filter.pickaxe}
-        oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
-      />
-      <!-- M12: pickaxe -G — commits whose patch adds/removes lines matching
-           this regex. -S and -G may BOTH be set: the values are forwarded
-           verbatim and the backend intersects them (simplest contract — no
-           cross-clearing UI to get out of sync). -->
-      <Input
-        class="f h-auto w-36 flex-none rounded-sm bg-card dark:bg-card px-2 py-0.5 text-xs md:text-xs placeholder:text-muted-foreground/80"
-        placeholder="patch regex (-G)"
-        aria-label="Pickaxe: patches adding or removing lines matching this regex"
-        value={store.filter.pickaxeRegex ?? ""}
-        oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
-      />
-    {/if}
+              class="absolute -top-1 -right-1 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-ui-micro leading-[1.3] font-semibold text-primary-foreground tabular-nums"
+              aria-hidden="true"
+            >
+              {advancedFilterCount > 9 ? "9+" : advancedFilterCount}
+            </span>
+          {/if}
+        </Button>
+      {/snippet}
+    </Hint>
 
     {#if scopeLabel}
       <!-- Scope chip stays visible even with the advanced filters collapsed
@@ -1690,19 +1851,30 @@
       </Hint>
     {/if}
 
-    {#if filterActive}
-      <Hint label="Clear all filters">
+    {#if !sidebar}
+      <!-- Workstream D §8.3: graph column toggle (collapse to 0; the column
+           ALSO auto-collapses below a 560px container — see
+           GRAPH_AUTO_COLLAPSE_PX — so the toggle reflects the user state
+           and the tooltip explains the width rule). -->
+      <Hint
+        label={graphCollapsed
+          ? "Show the commit graph"
+          : historyWidth.narrow
+            ? "Hide the commit graph (stays hidden while the panel is narrower than 560px)"
+            : "Hide the commit graph"}
+      >
         {#snippet child({ props })}
           <Button
             {...props}
-            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
+            class="relative text-muted-foreground after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground [&_svg:not([class*='size-'])]:size-4"
             variant="ghost"
             size="icon-xs"
             type="button"
-            aria-label="Clear filters"
-            onclick={() => store.clearFilter()}
+            aria-label={graphCollapsed ? "Show the commit graph" : "Hide the commit graph"}
+            aria-pressed={graphCollapsed}
+            onclick={toggleGraph}
           >
-            <Icon icon={iconClearFilters} size={16} />
+            <Icon icon={iconGraph} size={16} />
           </Button>
         {/snippet}
       </Hint>
@@ -1771,9 +1943,24 @@
         <Spinner class="size-3" role="presentation" aria-hidden="true" />
         Streaming…
       {:else}
-        {total}
-        {total === 1 ? "commit" : "commits"}
-        {#if store.hasMore}({store.pendingCount} pages buffered — scroll to load){/if}
+        <!-- Workstream D §8.1: the count line is "N commits" — the buffered-
+             pages debug detail ("N pages buffered…") moved into the tooltip
+             (kept one hover away, off the primary surface). -->
+        {#if store.hasMore}
+          <Hint
+            label={`${total.toLocaleString()} ${total === 1 ? "commit" : "commits"} loaded · ${store.pendingCount} pages buffered — scroll to the bottom to load more`}
+          >
+            {#snippet child({ props })}
+              <span {...props} class="cursor-help">
+                {total.toLocaleString()}
+                {total === 1 ? "commit" : "commits"}
+              </span>
+            {/snippet}
+          </Hint>
+        {:else}
+          {total.toLocaleString()}
+          {total === 1 ? "commit" : "commits"}
+        {/if}
       {/if}
     </span>
   </div>
@@ -1811,7 +1998,7 @@
         onclick={closeJump}
       >✕</Button>
       {#if jumpError !== null}
-        <span class="jump-error w-full text-ui-tiny text-destructive" role="alert">{jumpError}</span>
+        <span class="jump-error w-full text-ui-meta text-destructive" role="alert">{jumpError}</span>
       {/if}
     </div>
   {/if}
@@ -1824,7 +2011,7 @@
        Declared as a snippet: it renders standalone (detail closed) or as
        pane `a` of the detail SplitPane (detail open) — one copy of the
        virtualizer markup. -->
-  {#snippet logPane()}
+  {#snippet listOnly()}
   <div class="listwrap relative flex min-h-0 flex-1">
     <!-- The scroller stays MOUNTED across loading/empty states: swapping it
          out per state destroyed `scrollerEl` on every stream restart, and a
@@ -1873,10 +2060,16 @@
             <!-- VSCode Source Control Graph row: avatar → subject →
                  branch labels → hover actions → relative time. The hash
                  lives in the summary tooltip, the copy chip, and the
-                 detail pane. -->
+                 detail pane. §8.5: the avatar is a hover/wide affordance —
+                 hidden by default, shown on row hover, always shown once
+                 the container is ≥40rem (the narrow rows need the width
+                 for the message). -->
             <Hint label={`${v.commit.author.name}${v.commit.author.email ? ` <${v.commit.author.email}>` : ""}`}>
               {#snippet child({ props })}
-                <span {...props} class="avatar-cell flex-none cursor-help">
+                <span
+                  {...props}
+                  class="avatar-cell hidden flex-none cursor-help group-hover:flex @[40rem]:flex"
+                >
                   <AuthorAvatar name={v.commit.author.name} email={v.commit.author.email} />
                 </span>
               {/snippet}
@@ -1897,49 +2090,27 @@
                 </span>
               {/snippet}
             </Hint>
-            {#each v.commit.refs.slice(0, 3) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
-              {@const kind = classifyRef(ref)}
-              {@const scope =
-                kind === "local"
-                  ? "Local"
-                  : kind === "remote"
-                    ? "Remote"
-                    : kind === "tag"
-                      ? "Tag"
-                      : "HEAD"}
-              {@const refTint =
-                kind === "local"
-                  ? "border-transparent bg-primary/10 text-primary"
-                  : kind === "remote"
-                    ? "border-border text-muted-foreground"
-                    : kind === "tag"
-                      ? "border-transparent bg-accent text-accent-foreground"
-                      : "border-primary bg-primary/10 text-primary"}
-              <Hint label={`${scope}: ${shortRefName(ref)}`}>
-                {#snippet child({ props })}
-                  <span
-                    {...props}
-                    class="ref ref-{kind} inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] {sidebar ? 'max-w-24' : 'max-w-36'} {refTint}"
-                    aria-label={`${scope}: ${shortRefName(ref)}`}
-                  >
-                    <span class="ref-scope flex-none text-ui-tiny font-bold uppercase tracking-[0.025em] opacity-80 {sidebar ? 'hidden' : ''}" aria-hidden="true">{scope}</span>
-                    <span class="ref-name min-w-0 truncate">{shortRefName(ref)}</span>
-                  </span>
-                {/snippet}
-              </Hint>
+            <!-- §8.2: first 2 refs + a `+n` chip opening the refs popover
+                 (all refs, copy/checkout). One tint language for every
+                 kind: branch=blue, tag=purple, remote=muted, HEAD=accent
+                 (RefBadge). -->
+            {#each v.commit.refs.slice(0, 2) as ref, i (`${v.commit.sha}:${i}:${ref}`)}
+              <RefBadge {ref} compact={sidebar} maxWidthClass={sidebar ? "max-w-24" : "max-w-28"} />
             {/each}
-            {#if v.commit.refs.length > 3}
-              <Hint label={v.commit.refs.slice(3).map(shortRefName).join(", ")}>
-                {#snippet child({ props })}
-                  <span
-                    {...props}
-                    class="ref ref-more inline-flex flex-none items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
-                    aria-label={`${v.commit.refs.length - 3} more refs`}
-                  >
-                    +{v.commit.refs.length - 3}
-                  </span>
-                {/snippet}
-              </Hint>
+            {#if v.commit.refs.length > 2}
+              <button
+                type="button"
+                class="ref ref-more inline-flex flex-none cursor-pointer items-center whitespace-nowrap rounded-sm border border-transparent bg-muted px-1 text-ui-micro leading-[1.4] tabular-nums text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                aria-label={`${v.commit.refs.length - 2} more refs: ${v.commit.refs.slice(2).map(shortRefName).join(", ")}`}
+                aria-haspopup="dialog"
+                aria-expanded={refsPopover?.sha === v.commit.sha}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  openRefsPopover(v.commit.sha, v.commit.refs, e.currentTarget);
+                }}
+              >
+                +{v.commit.refs.length - 2}
+              </button>
             {/if}
             <!-- Hover actions: copy hash, checkout, create branch. `hidden`
                  (not opacity) keeps the cluster out of hit-testing and the
@@ -2015,19 +2186,22 @@
         {/each}
       </div>
     </div>
-    {#if !sidebar}
-      <div class="graphcol h-full min-h-0 flex-none border-l border-border bg-card" style:width={`${GRAPH_WIDTH}px`}>
-        <GraphCanvas
-          pages={store.pages}
-          rowHeight={ROW_HEIGHT}
-          onCommitClick={(sha) => select(sha)}
-          onReachEnd={() => store.loadMore()}
-          onVisibleRowsChange={sync.onCanvasVisible}
-          {bookmarks}
-          {branchColors}
-          bind:scrollEl={canvasScrollEl}
-          bind:this={canvasRef}
-        />
+    {#if store.loading && total > 0}
+      <!-- Workstream D §8.1: load-on-scroll is a subtle spinner row pinned
+           to the list's bottom edge — no layout shift, no modal overlay
+           (the status line beside the filters still carries the streaming
+           state; deliberately NOT role="status" so the two never
+           double-announce). -->
+      <div
+        class="load-more pointer-events-none absolute inset-x-0 bottom-1 z-10 flex justify-center"
+        aria-hidden="true"
+      >
+        <span
+          class="inline-flex items-center gap-ui-4 rounded-full border border-border bg-popover px-2 py-0.5 text-ui-micro text-muted-foreground shadow-sm"
+        >
+          <Spinner class="size-3" role="presentation" aria-hidden="true" />
+          Loading more…
+        </span>
       </div>
     {/if}
     {#if store.loading && total === 0}
@@ -2056,6 +2230,46 @@
       </div>
     {/if}
   </div>
+  {/snippet}
+
+  {#snippet logPane()}
+    <!-- Workstream D §8.3: the graph column is a resizable SplitPane pane
+         (ratio persisted under the `history-graph` splitPrefs key, clamped
+         to 12–45% of the row) and disappears entirely when collapsed or
+         when the container is narrower than 560px — the list reflows to the
+         full width and the scroll sync degrades to its local-window mode
+         (the sidebar variant's normal path). -->
+    {#if !sidebar && graphVisible}
+      <div class="graphsplit flex min-h-0 min-w-0 flex-1">
+        <SplitPane
+          axis="x"
+          ratio={graphRatio}
+          onRatio={setGraphRatio}
+          label="Resize commit list and graph"
+        >
+          {#snippet a()}
+            {@render listOnly()}
+          {/snippet}
+          {#snippet b()}
+            <div class="graphcol h-full min-h-0 border-l border-border bg-card">
+              <GraphCanvas
+                pages={store.pages}
+                rowHeight={ROW_HEIGHT}
+                onCommitClick={(sha) => select(sha)}
+                onReachEnd={() => store.loadMore()}
+                onVisibleRowsChange={sync.onCanvasVisible}
+                {bookmarks}
+                {branchColors}
+                bind:scrollEl={canvasScrollEl}
+                bind:this={canvasRef}
+              />
+            </div>
+          {/snippet}
+        </SplitPane>
+      </div>
+    {:else}
+      {@render listOnly()}
+    {/if}
   {/snippet}
 
   {#if sidebar}
@@ -2156,8 +2370,7 @@
   {#if checkoutAt.open}
     {@const sha = checkoutAt.sha}
     {@const summary = checkoutAt.summary}
-    {@const target = commits.find((c) => c.sha === sha)}
-    {@const branch = target ? localBranchAt(target) : null}
+    {@const branch = checkoutAt.branch ?? null}
     <ConfirmDialog
       open={true}
       title={branch ? `Switch to ${branch}` : `Checkout ${sha.slice(0, 7)}`}
@@ -2196,5 +2409,220 @@
         {/if}
       {/snippet}
     </ConfirmDialog>
+  {/if}
+
+  {#if filtersOpen}
+    <!-- Workstream D §8.4: the ONE filter menu (author / path / date range /
+         ref / regex / pickaxe) behind the filter icon. Portaled to <body>
+         (the bar clips in narrow panels); every input keeps its original
+         aria-label — only the container moved, the filter semantics are the
+         store's and unchanged. -->
+    <div
+      bind:this={filtersEl}
+      class="filters-popover fixed z-60 flex max-h-[min(32rem,calc(100vh-2rem))] w-80 max-w-[calc(100vw-1rem)] flex-col gap-2.5 overflow-y-auto rounded-lg border border-border bg-popover p-3 text-ui-base text-popover-foreground shadow-md"
+      role="dialog"
+      aria-label="Commit filters"
+      use:floating={{ anchor: filtersAnchor ?? undefined, alignEnd: true }}
+    >
+      <div class="flex flex-none items-center gap-2">
+        <span class="min-w-0 flex-1 text-ui-meta font-semibold">Filters</span>
+        {#if filterActive}
+          <Button
+            class="h-6 flex-none rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+            variant="ghost"
+            type="button"
+            onclick={() => store.clearFilter()}
+          >Clear all</Button>
+        {/if}
+        <Button
+          class="size-6 flex-none rounded-sm p-0 text-muted-foreground"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Close filters"
+          onclick={toggleFilters}
+        >
+          <Icon icon={iconClose} size={12} />
+        </Button>
+      </div>
+      <label class="flex flex-col gap-1 text-ui-micro text-muted-foreground">
+        Author
+        <Input
+          class="h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta placeholder:text-muted-foreground/80"
+          placeholder="Author"
+          aria-label="Filter by author"
+          value={store.filter.author}
+          oninput={(e) => store.setFilter({ author: e.currentTarget.value })}
+        />
+      </label>
+      <label class="flex flex-col gap-1 text-ui-micro text-muted-foreground">
+        Path
+        <Input
+          class="h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta placeholder:text-muted-foreground/80"
+          placeholder="Path (comma-separates)"
+          aria-label="Filter by path (comma or newline separated for multiple)"
+          value={store.filter.path}
+          oninput={(e) => store.setFilter({ path: e.currentTarget.value })}
+        />
+        {#if pathFilterCount > 1}
+          <!-- Multi-pathspec walk: the backend ignores rename-following there
+               (no single name to shift through renames) — say so up front. -->
+          <Hint label="Rename-following is off while filtering multiple paths (a multi-path walk has no single name to follow through renames)">
+            {#snippet child({ props })}
+              <span
+                {...props}
+                class="inline-flex flex-none items-center self-start rounded-full bg-muted px-1.5 py-0 text-ui-micro leading-[1.4] text-muted-foreground"
+              >{pathFilterCount} paths · follow off</span>
+            {/snippet}
+          </Hint>
+        {/if}
+      </label>
+      <div class="flex gap-2">
+        <label class="flex min-w-0 flex-1 flex-col gap-1 text-ui-micro text-muted-foreground">
+          After
+          <Input
+            type="date"
+            class="h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta"
+            aria-label="Commits after this date"
+            value={store.filter.after}
+            onchange={(e) => store.setFilter({ after: e.currentTarget.value })}
+          />
+        </label>
+        <label class="flex min-w-0 flex-1 flex-col gap-1 text-ui-micro text-muted-foreground">
+          Before
+          <Input
+            type="date"
+            class="h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta"
+            aria-label="Commits before this date"
+            value={store.filter.before}
+            onchange={(e) => store.setFilter({ before: e.currentTarget.value })}
+          />
+        </label>
+      </div>
+      <label class="flex flex-col gap-1 text-ui-micro text-muted-foreground">
+        Ref scope
+        <select
+          class="h-auto rounded-sm border border-input bg-card px-2 py-1 text-ui-meta text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-1"
+          aria-label="Branch scope"
+          bind:this={scopeSelectEl}
+          onchange={(e) => store.setFilter({ scopeRef: e.currentTarget.value })}
+        >
+          <option value="">All branches</option>
+          <option value="HEAD">Current branch</option>
+          {#each scopeOptions as name (name)}
+            <option value={name}>{name}</option>
+          {/each}
+        </select>
+      </label>
+      <div class="flex flex-col gap-2 border-t border-border pt-2.5">
+        <!-- M9: regex mode is live (backend `LogFilter.regex`). -->
+        <Hint label="Treat the search text as a regular expression">
+          {#snippet child({ props })}
+            <label
+              {...props}
+              class="regex flex cursor-pointer items-center gap-2 text-ui-meta text-muted-foreground"
+            >
+              <Checkbox
+                checked={store.filter.regex}
+                onCheckedChange={(checked) => store.setFilter({ regex: checked === true })}
+                aria-label="Treat the search text as a regular expression"
+              />
+              <span>Regex</span>
+            </label>
+          {/snippet}
+        </Hint>
+        <!-- M10: pickaxe -S — commits whose patch adds/removes the string. -->
+        <Input
+          class="f h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta placeholder:text-muted-foreground/80"
+          placeholder="Changes containing… (-S)"
+          aria-label="Pickaxe: patches adding or removing this string"
+          value={store.filter.pickaxe}
+          oninput={(e) => store.setFilter({ pickaxe: e.currentTarget.value })}
+        />
+        <!-- M12: pickaxe -G — commits whose patch adds/removes lines matching
+             this regex. -S and -G may BOTH be set: the values are forwarded
+             verbatim and the backend intersects them (simplest contract — no
+             cross-clearing UI to get out of sync). -->
+        <Input
+          class="f h-auto rounded-sm bg-card dark:bg-card px-2 py-1 text-ui-meta md:text-ui-meta placeholder:text-muted-foreground/80"
+          placeholder="patch regex (-G)"
+          aria-label="Pickaxe: patches adding or removing lines matching this regex"
+          value={store.filter.pickaxeRegex ?? ""}
+          oninput={(e) => store.setFilter({ pickaxeRegex: e.currentTarget.value })}
+        />
+      </div>
+    </div>
+  {/if}
+
+  {#if refsPopover !== null}
+    {@const pop = refsPopover}
+    <!-- Workstream D §8.2: the `+n` chip's popover — ALL of the commit's
+         refs, each with Copy and (for commits HEAD is not on) checkout
+         through the same confirm dialog as the row hover action. -->
+    <div
+      bind:this={refsEl}
+      class="refs-popover fixed z-60 flex w-72 max-w-[calc(100vw-1rem)] flex-col rounded-lg border border-border bg-popover text-ui-base text-popover-foreground shadow-md"
+      role="dialog"
+      aria-label={`Refs — commit ${pop.sha.slice(0, 7)}`}
+      use:floating={{ anchor: refsAnchor ?? undefined, alignEnd: true, above: true, gap: 6 }}
+    >
+      <div class="flex flex-none items-center gap-2 border-b border-border px-3 py-1.5">
+        <span class="min-w-0 flex-1 truncate text-ui-meta font-semibold">Refs — {pop.sha.slice(0, 7)}</span>
+        <Button
+          class="size-6 flex-none rounded-sm p-0 text-muted-foreground"
+          variant="ghost"
+          size="icon-xs"
+          type="button"
+          aria-label="Close refs"
+          onclick={closeRefsPopover}
+        >
+          <Icon icon={iconClose} size={12} />
+        </Button>
+      </div>
+      <ul class="refs-list max-h-56 overflow-y-auto p-1" aria-label="All refs">
+        {#each pop.refs as ref (ref)}
+          <li class="flex items-center gap-1 rounded-sm px-1.5 py-1 hover:bg-accent">
+            <RefBadge {ref} compact maxWidthClass="max-w-36" />
+            <span class="min-w-0 flex-1"></span>
+            <Hint label={`Copy ${shortRefName(ref)}`} side="left">
+              {#snippet child({ props })}
+                <button
+                  {...props}
+                  type="button"
+                  class="inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                  aria-label={`Copy ${shortRefName(ref)}`}
+                  onclick={() => void copyRef(ref)}
+                >
+                  <span class="text-ui-micro font-semibold" aria-hidden="true">⧉</span>
+                </button>
+              {/snippet}
+            </Hint>
+            {#if pop.sha !== headSha && classifyRef(ref) !== "head"}
+              {@const isLocal = classifyRef(ref) === "local"}
+              {@const refName = shortRefName(ref)}
+              <Hint
+                label={isLocal ? `Switch to ${refName}` : "Checkout commit (detached HEAD)"}
+                side="left"
+              >
+                {#snippet child({ props })}
+                  <button
+                    {...props}
+                    type="button"
+                    class="inline-flex size-5 flex-none cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                    aria-label={isLocal ? `Switch to ${refName}` : "Checkout commit (detached HEAD)"}
+                    onclick={() => {
+                      refsPopover = null;
+                      checkoutRef(pop.sha, ref);
+                    }}
+                  >
+                    <Icon icon={iconCheckout} size={14} />
+                  </button>
+                {/snippet}
+              </Hint>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
 </section>

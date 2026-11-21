@@ -28,7 +28,11 @@
   const reduceMotion =
     typeof window !== "undefined" &&
     (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const motion = reduceMotion ? 0 : 160;
+  // Motion grammar (app.css): enter ≤150ms ease-out, exit ≤100ms. Svelte's
+  // JS-driven `fly` can't reach the CSS reduced-motion rule, so the query is
+  // handled here (0 = instant).
+  const inDuration = reduceMotion ? 0 : 150;
+  const outDuration = reduceMotion ? 0 : 100;
 </script>
 
 <div class="toaster fixed right-4 bottom-4 z-1000 flex max-w-[min(24rem,calc(100vw-2rem))] flex-col gap-2">
@@ -40,8 +44,8 @@
       data-kind={item.kind}
       onpointerenter={() => pauseToast(item.id)}
       onpointerleave={() => resumeToast(item.id)}
-      in:fly={{ y: 8, duration: motion }}
-      out:fly={{ y: 4, duration: motion }}
+      in:fly={{ y: 8, duration: inDuration }}
+      out:fly={{ y: 4, duration: outDuration }}
     >
       <!-- Semantic accents: shape + glyph carry the meaning, color reinforces it. -->
       <span
@@ -67,7 +71,7 @@
       {/if}
       {#if item.count > 1}
         <span
-          class="repeat flex-none rounded-full bg-muted px-1.5 py-0.5 text-ui-tiny font-semibold leading-none text-muted-foreground tabular-nums"
+          class="repeat flex-none rounded-full bg-muted px-1.5 py-0.5 text-ui-micro font-semibold leading-none text-muted-foreground tabular-nums"
           aria-label={t("toaster.repeated", { count: item.count })}
         >×{item.count}</span>
       {/if}

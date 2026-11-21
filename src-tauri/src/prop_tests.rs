@@ -109,6 +109,7 @@ fn stage_commit(repo: &Repository, message: &str) -> String {
                 no_verify: true,
                 allow_empty: false,
                 author: None,
+                signoff: false,
             },
         )
         .expect("commit")

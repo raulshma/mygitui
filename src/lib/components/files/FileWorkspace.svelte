@@ -40,6 +40,7 @@
   import { toast } from "$lib/toast";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
+  import UnifiedTabStrip from "$lib/components/layout/UnifiedTabStrip.svelte";
 
   /** One open file (RepoView state). */
   export interface OpenFileInfo {
@@ -337,84 +338,101 @@
     { id: "split", label: "Split", title: "Source and preview side by side" },
     { id: "preview", label: "Preview", title: "Rendered preview only" },
   ];
+
+  /**
+   * Strip items for the shared {@link UnifiedTabStrip}: the open-file info
+   * itself (the cell snippet reads `dirty`/`meta`) plus the fields the
+   * strip engine needs — `id` (the path) and the ⋯ overflow label.
+   */
+  type FileStripTab = OpenFileInfo & { id: string; label: string };
+  const fileTabs: FileStripTab[] = $derived(
+    openFiles.map((file) => ({ ...file, id: file.path, label: basename(file.path) })),
+  );
 </script>
 
 <div class="workspace flex h-full min-h-0 min-w-0 flex-col bg-card" aria-label="File workspace">
   <!-- Tab strip + header actions: the actions live OUTSIDE the scroll
        container (flex-none at the right edge), so they stay visible no
-       matter how many tabs scroll underneath the divider. -->
+       matter how many tabs scroll underneath the divider. The strip itself
+       is the shared UnifiedTabStrip (plan §4.3) — the engine owns the
+       tablist semantics, roving-tabindex keyboard navigation, wheel
+       translation and the "⋯" overflow menu for width-hidden tabs; the
+       cell markup (file icon, dirty dot, close button), middle-click close
+       and the per-tab context menu stay here. -->
   <div class="strip flex flex-none items-stretch border-b border-border bg-card">
-    <div
-      class="tscroll flex min-w-0 flex-1 items-stretch gap-0 overflow-x-auto [scrollbar-width:thin]"
-      role="tablist"
-      aria-label="Open files"
+    <UnifiedTabStrip
+      tabs={fileTabs}
+      activeId={active}
+      label="Open files"
+      class="flex-1"
+      stripClass="tscroll gap-0 [scrollbar-width:thin]"
+      edgeFades={false}
+      onActivate={(item) => onActivate(item.path)}
     >
-    {#each openFiles as file (file.path)}
-      {@const isActive = file.path === active}
-      <Hint label={file.path}>
-        {#snippet child({ props })}
-          <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
-               handling lives on the tab strip's focusable row buttons + menus -->
-          <div
-            {...props}
-            class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {isActive
-              ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
-              : 'text-muted-foreground hover:bg-accent'}"
-            class:active={isActive}
-            role="tab"
-            aria-selected={isActive}
-            tabindex="-1"
-            onclick={() => onActivate(file.path)}
-            onauxclick={(event) => {
-              if (event.button === 1) requestClose(file.path);
-            }}
-            oncontextmenu={(event) => tabMenu(event, file.path)}
-          >
-            <span
-              class="ticon inline-flex flex-none"
-              style={`color:${fileIconColorForPath(file.path, fileIconPreferences.theme)}`}
+      {#snippet tab(file, cell)}
+        {@const isActive = file.id === active}
+        <Hint label={file.path}>
+          {#snippet child({ props })}
+            <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard
+                 handling lives on the tab strip's focusable row buttons + menus -->
+            <div
+              {...props}
+              {...cell.triggerProps}
+              class="tab flex h-8 max-w-56 flex-none cursor-pointer items-center gap-ui-3 border-r border-border py-0 pl-2.5 pr-ui-3 whitespace-nowrap select-none text-ui-meta {isActive
+                ? 'bg-card text-foreground shadow-[inset_0_2px_0_var(--primary)]'
+                : 'text-muted-foreground hover:bg-accent'}"
+              class:active={isActive}
+              onclick={() => onActivate(file.path)}
+              onauxclick={(event) => {
+                if (event.button === 1) requestClose(file.path);
+              }}
+              oncontextmenu={(event) => tabMenu(event, file.path)}
             >
-              <Icon
-                icon={fileIconForPath(file.path, fileIconPreferences.theme)}
-                size={14}
-              />
-            </span>
-            <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
-            {#if file.dirty}
-              <Hint label="Unsaved changes">
-                {#snippet child({ props: dotProps })}
-                  <span
-                    {...dotProps}
-                    tabindex="-1"
-                    class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]"
-                  ></span>
+              <span
+                class="ticon inline-flex flex-none"
+                style={`color:${fileIconColorForPath(file.path, fileIconPreferences.theme)}`}
+              >
+                <Icon
+                  icon={fileIconForPath(file.path, fileIconPreferences.theme)}
+                  size={14}
+                />
+              </span>
+              <span class="tname min-w-0 overflow-hidden text-ellipsis">{basename(file.path)}</span>
+              {#if file.dirty}
+                <Hint label="Unsaved changes">
+                  {#snippet child({ props: dotProps })}
+                    <span
+                      {...dotProps}
+                      tabindex="-1"
+                      class="dirty size-[7px] flex-none rounded-full bg-[var(--app-modified)]"
+                    ></span>
+                  {/snippet}
+                </Hint>
+              {/if}
+              <Hint label="Close (middle-click)">
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label={`Close ${basename(file.path)}`}
+                    tabindex={-1}
+                    onclick={(event) => {
+                      event.stopPropagation();
+                      requestClose(file.path);
+                    }}
+                  >
+                    <Icon icon={iconClose} size={12} />
+                  </Button>
                 {/snippet}
               </Hint>
-            {/if}
-            <Hint label="Close (middle-click)">
-              {#snippet child({ props })}
-                <Button
-                  {...props}
-                  class="tclose size-5 rounded-full text-muted-foreground opacity-65 hover:bg-accent hover:text-accent-foreground hover:opacity-100 [&_svg:not([class*='size-'])]:size-3"
-                  variant="ghost"
-                  size="icon-sm"
-                  type="button"
-                  aria-label={`Close ${basename(file.path)}`}
-                  tabindex={-1}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    requestClose(file.path);
-                  }}
-                >
-                  <Icon icon={iconClose} size={12} />
-                </Button>
-              {/snippet}
-            </Hint>
-          </div>
-        {/snippet}
-      </Hint>
-    {/each}
-    </div>
+            </div>
+          {/snippet}
+        </Hint>
+      {/snippet}
+    </UnifiedTabStrip>
     <div class="tactions flex flex-none items-center gap-0.5 border-l border-border bg-card px-1">
       {#if mdActive}
         <div class="seg inline-flex flex-none items-center gap-0 rounded-full border border-border px-1" role="group" aria-label="Markdown view">

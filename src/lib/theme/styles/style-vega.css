@@ -215,7 +215,10 @@
   }
 
   .cn-command-input-group {
-    @apply bg-input/30 border-input/30 h-8! rounded-lg! shadow-none! *:data-[slot=input-group-addon]:pl-2!;
+    /* The group border is the palette input's interactive edge — dark mode
+     * gets the full --input token (≥3:1, plan §4.1); light keeps the
+     * subtle vendored tint. */
+    @apply bg-input/30 border-input/30 dark:border-input h-8! rounded-lg! shadow-none! *:data-[slot=input-group-addon]:pl-2!;
   }
 
   .cn-command-input-icon {

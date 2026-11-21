@@ -666,18 +666,58 @@ describe("StatusBar", () => {
     expect(within(running).getByText("Push")).not.toBeNull();
   });
 
-  it("auto-fetch chip mirrors the repo cadence (hidden when off) and opens the Remotes panel", async () => {
+  it("the cadence chip mirrors the repo cadence and its popover changes it", async () => {
+    // Workstream D §8.6: the "auto 5m" text became an icon whose
+    // accessible name carries the cadence; the click opens the cadence
+    // popover whose radio rows write the per-repo override (the old
+    // Remotes-panel click-through stays as the popover's footer row).
     tabStore.tabs = [tab({ status: status() })];
     tabStore.activeId = "r1";
-    const { unmount } = render(StatusBar);
-    expect(screen.queryByText("auto 5m")).toBeNull();
-    unmount();
+
+    // Off is still reachable (the chip renders dimmed with an "off" name).
+    const first = render(StatusBar);
+    expect(
+      screen.getByRole("button", {
+        name: "Auto-fetch off — click to set a cadence",
+      }),
+    ).not.toBeNull();
+    first.unmount();
 
     autofetch.config = { "/repo": 5 };
     render(StatusBar);
     await tick();
-    expect(screen.getByText("auto 5m")).not.toBeNull();
+    const chip = screen.getByRole("button", {
+      name: "Auto-fetch every 5 min",
+    });
 
+    await fireEvent.click(chip);
+    const popover = await screen.findByRole("dialog", {
+      name: "Auto-fetch cadence",
+    });
+    // Cadence rows are pressed toggle-buttons (not a roving radiogroup).
+    // (Scoped to the git-fetch section: the E1 GitHub cadence section below
+    // offers its own "Every 5 minutes" row.)
+    const fetchGroup = within(popover).getByRole("group", {
+      name: "Fetch every",
+    });
+    expect(
+      within(fetchGroup)
+        .getByRole("button", { name: "Every 5 minutes" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    // Picking a cadence writes the per-repo override immediately.
+    await fireEvent.click(
+      within(fetchGroup).getByRole("button", { name: "Every 15 minutes" }),
+    );
+    expect(autofetch.config["/repo"]).toBe(15);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Auto-fetch every 15 min" }),
+      ).not.toBeNull(),
+    );
+
+    // The old click-through survives as the popover's footer row.
     const events: CustomEvent[] = [];
     const spy = (event: Event): void => {
       events.push(event as CustomEvent);
@@ -685,12 +725,17 @@ describe("StatusBar", () => {
     document.addEventListener("focus-panel", spy);
     try {
       await fireEvent.click(
-        screen.getByRole("button", { name: "auto 5m" }),
+        within(popover).getByRole("button", {
+          name: "More fetch settings — Remotes panel",
+        }),
       );
     } finally {
       document.removeEventListener("focus-panel", spy);
     }
     expect(events[0]?.detail).toEqual({ panel: "remotes", repoId: "r1" });
+    expect(
+      screen.queryByRole("dialog", { name: "Auto-fetch cadence" }),
+    ).toBeNull();
   });
 
   it("shows the remote device connection for remote tabs", () => {

@@ -222,7 +222,7 @@
         <span
           {...props}
           tabindex="-1"
-          class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-ui-tiny leading-none font-bold ${
+          class={`fkind fk-${change} inline-flex h-[1.05rem] w-[1.05rem] shrink-0 items-center justify-center rounded-[3px] font-mono text-ui-micro leading-none font-bold ${
             change === "added"
               ? "text-[var(--app-added)] bg-[var(--app-added-bg)]"
               : change === "deleted"
@@ -248,8 +248,8 @@
         </span>
       {/snippet}
     </Hint>
-    {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
-    {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-tiny leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
+    {#if row.file.is_image}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-micro leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">image</span>{/if}
+    {#if row.file.binary}<span class="chip shrink-0 rounded-full border border-border px-2 text-ui-micro leading-[1.4] uppercase tracking-[0.04em] text-muted-foreground">binary</span>{/if}
     <span class="counts flex shrink-0 gap-ui-3 font-mono text-ui-micro tabular-nums">
       <span class="adds rounded-[3px] px-1 text-[var(--app-added)] bg-[var(--app-added-bg)]">+{row.file.additions}</span>
       <span class="dels rounded-[3px] px-1 text-[var(--app-deleted)] bg-[var(--app-deleted-bg)]">−{row.file.deletions}</span>
@@ -272,13 +272,13 @@
   >
     <span class="hh overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px] leading-[20px] font-medium text-muted-foreground [tab-size:8] group-hover/hh:text-foreground">@@ -{row.oldStart},{row.oldCount} +{row.newStart},{row.newCount} @@</span>
     {#if selectionCount > 0}
-      <span class="sel-count shrink-0 whitespace-nowrap text-ui-tiny tabular-nums text-primary" aria-live="polite">{selectionCount} selected</span>
+      <span class="sel-count shrink-0 whitespace-nowrap text-ui-micro tabular-nums text-primary" aria-live="polite">{selectionCount} selected</span>
     {/if}
     <span class="hunk-actions ml-auto shrink-0 items-center gap-1 {selectionCount > 0 ? "inline-flex" : "hidden"} group-hover/hh:inline-flex group-focus-within/hh:inline-flex group-focus-visible/hh:inline-flex">
       {#if selectionCount > 0 && onStageSelection}
         <button
           type="button"
-          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-meta font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
           disabled={actionBusy}
           onclick={(e) => {
             e.stopPropagation();
@@ -289,7 +289,7 @@
       {#if selectionCount > 0 && onDiscardSelection}
         <button
           type="button"
-          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-tiny font-semibold text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+          class="sel discard cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-meta font-semibold text-destructive disabled:cursor-not-allowed disabled:opacity-50"
           disabled={actionBusy}
           onclick={(e) => {
             e.stopPropagation();
@@ -300,7 +300,7 @@
       {#if onStageHunk}
         <button
           type="button"
-          class="cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          class="cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-meta text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           disabled={actionBusy}
           onclick={() => onStageHunk?.(row.fileIndex, row.hunkIndex)}
         >{stageLabel}</button>
@@ -308,7 +308,7 @@
       {#if onDiscardHunk}
         <button
           type="button"
-          class="discard cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+          class="discard cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-meta text-destructive disabled:cursor-not-allowed disabled:opacity-50"
           disabled={actionBusy}
           onclick={() => onDiscardHunk?.(row.fileIndex, row.hunkIndex)}
         >Discard hunk</button>
@@ -319,7 +319,7 @@
             <button
               {...props}
               type="button"
-              class="explain cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-tiny text-[var(--app-renamed)]"
+              class="explain cursor-pointer rounded-lg border border-border bg-background px-2 py-px font-sans text-ui-meta text-[var(--app-renamed)]"
               onclick={(e) => {
                 e.stopPropagation();
                 onExplainHunk?.(row.fileIndex, row.hunkIndex);

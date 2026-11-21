@@ -1,5 +1,6 @@
 /**
- * Quick-switcher store (cmd/ctrl+K, B4 lane).
+ * Quick-switcher store (cmd/ctrl+Shift+K since §11; Ctrl+K belongs to the
+ * command palette — see $lib/palette/keybinds DEFAULT_BINDINGS).
  *
  * Lives in a `.svelte.ts` module because the open/closed flag is a `$state`
  * rune. Also hosts the switcher's pure pieces so they are unit-testable

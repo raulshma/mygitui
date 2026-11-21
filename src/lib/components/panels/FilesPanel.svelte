@@ -10,13 +10,19 @@
     handled by RepoView); chevron/Enter toggles dirs; submodules open as
     their own repo tab.
   - Keyboard: arrows/Home/End navigate, Right/Left expand/collapse,
-    Enter opens, F2 renames, Delete deletes, typing jumps to the filter.
+    Enter opens, F2 renames, Delete deletes, typing jumps to the filter
+    (Ctrl+F too, routed through the keybinds engine while the tree holds
+    focus).
   - Virtualized: fixed 24px rows via the shared VirtualList (spacer +
     absolutely-positioned window, overscan), like BlameView.
   - Context menu: open, diff (when changed), file history, blame, copy
     paths, reveal in status, external editor, new/rename/delete.
+  - Workstream A §5.6: one PanelHeader row (title + inline filter on
+    toggle + refresh + overflow) replaced the toolbar stack; per-row file
+    sizes are hidden by default (toggle in the overflow, persisted).
 -->
 <script lang="ts">
+  import { tick } from "svelte";
   import type { RepoStatus } from "$lib/ipc/types";
   import { onRepoChange } from "$lib/events/repoEvents";
   import {
@@ -42,7 +48,9 @@
   } from "./fileTreeModel";
   import { fileTreePrefs } from "./fileTreePrefs.svelte";
   import VirtualList from "$lib/components/layout/VirtualList.svelte";
-  import { fileIconForPath, fileIconColorForPath } from "$lib/components/icons/fileIcons";
+  import PanelHeader from "$lib/components/layout/PanelHeader.svelte";
+  import OverflowMenu from "$lib/components/layout/OverflowMenu.svelte";
+  import { fileIconForPath, fileIconColorForPath, type FileIconTheme } from "$lib/components/icons/fileIcons";
   import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -50,6 +58,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import { contextMenu, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
@@ -82,7 +91,6 @@
   const iconChevronDown = $derived(appIcon("chevron-down")!);
   const iconChevronRight = $derived(appIcon("chevron-right")!);
   const iconFolder = $derived(appIcon("folder")!);
-  const iconMore = $derived(appIcon("more-horiz")!);
   const iconRefresh = $derived(appIcon("refresh")!);
   const iconReveal = $derived(appIcon("file-open")!);
   const iconSearch = $derived(appIcon("search")!);
@@ -97,6 +105,15 @@
   let tree = $state<FileNode>(createRoot());
   /** Local filter query ("" = plain tree view). */
   let filter = $state("");
+  /**
+   * Filter input visibility (Workstream A §5.6): the input expands inline
+   * in the PanelHeader row on toggle instead of squatting in the toolbar.
+   */
+  let filterOn = $state(false);
+  /** The filter input element (focus hand-off from Ctrl+F / typed keys). */
+  let filterInputEl: HTMLInputElement | undefined = $state(undefined);
+  /** The panel root (Ctrl+F routing: only the focused panel reacts). */
+  let panelEl: HTMLElement | undefined = $state(undefined);
   let rootLoading = $state(false);
   let loadError = $state<string | null>(null);
   /** Path of the single selected row (selection model = one). */
@@ -375,6 +392,17 @@
     });
   });
 
+  // Ctrl+F follows focus (the keybinds engine owns the combo globally —
+  // see the `diff.find` command): inside this panel it filters files. Keep
+  // -alive mounting means several instances are live, so the focus guard
+  // picks the one the user is working in.
+  $effect(() => {
+    return onUiEvent("files-filter", () => {
+      if (!panelEl?.contains(document.activeElement)) return;
+      void openFilter();
+    });
+  });
+
   // --- File ops ---------------------------------------------------------------
 
   /** One file-tree prompt dialog: args (incl. the submit action) travel with open. */
@@ -580,40 +608,31 @@
     showMenuAt(event, entries);
   }
 
-  function overflowMenu(event: MouseEvent): void {
-    const iconTheme = fileIconPreferences.theme;
-    showMenuAt(event, [
-      {
-        id: "ignored",
-        label: fileTreePrefs.showIgnored ? "Hide ignored files" : "Show ignored files",
-        run: () => {
-          fileTreePrefs.setShowIgnored(!fileTreePrefs.showIgnored);
-          void refreshTree();
-        },
-      },
-      { separator: true },
-      {
-        id: "icons-colorful",
-        label: `${iconTheme === "colorful" ? "✓ " : ""}Colorful file icons`,
-        run: () => fileIconPreferences.setTheme("colorful"),
-      },
-      {
-        id: "icons-material",
-        label: `${iconTheme === "material" ? "✓ " : ""}Material file icons`,
-        run: () => fileIconPreferences.setTheme("material"),
-      },
-      {
-        id: "icons-minimal",
-        label: `${iconTheme === "minimal" ? "✓ " : ""}Minimal file icons`,
-        run: () => fileIconPreferences.setTheme("minimal"),
-      },
-    ]);
-  }
-
   // --- Keyboard ---------------------------------------------------------------
 
+  /** Shows the filter input (if hidden) and focuses it once mounted. */
+  async function openFilter(): Promise<void> {
+    filterOn = true;
+    await tick();
+    filterInputEl?.focus();
+  }
+
+  /** PanelHeader filter toggle: off also drops the query. */
+  async function toggleFilter(next: boolean): Promise<void> {
+    filterOn = next;
+    if (!next) {
+      filter = "";
+      return;
+    }
+    await openFilter();
+  }
+
   function focusFilter(): void {
-    list?.element()?.closest(".files")?.querySelector("input")?.focus();
+    if (!filterOn) {
+      void openFilter();
+      return;
+    }
+    filterInputEl?.focus();
   }
 
   function onTreeKeydown(event: KeyboardEvent): void {
@@ -716,113 +735,141 @@
 
   const activeFilePath = $derived(selectedPath);</script>
 
-<div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-ui-base text-foreground">
-  <div class="toolbar flex shrink-0 items-center gap-[2px] border-b border-border bg-card px-1.5 py-1">
-    <Hint label="New file">
-      {#snippet child({ props })}
-        <Button
-          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          {...props}
-          aria-label="New file"
-          onclick={() => startCreate("file")}
+<div class="files flex h-full min-h-0 min-w-0 flex-col bg-background text-ui-base text-foreground" bind:this={panelEl}>
+  <!-- Workstream A §5.6: one PanelHeader row (title + filter-match count +
+       inline filter + refresh + overflow) replaced the toolbar/filter
+       stack. New file/folder + reveal + sizes + icon themes live in the
+       overflow; the tree itself is unchanged. -->
+  <PanelHeader
+    title="Files"
+    count={filter.trim() !== "" ? rows.length : undefined}
+    filterOn={filterOn}
+    onFilterToggle={(next) => void toggleFilter(next)}
+    class="bg-card"
+  >
+    {#snippet filterInput()}
+      {#if filterOn}
+        <div
+          class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-px text-muted-foreground"
+          role="search"
         >
-          <Icon icon={iconAddFile} size={14} />
-        </Button>
-      {/snippet}
-    </Hint>
-    <Hint label="New folder">
-      {#snippet child({ props })}
-        <Button
-          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          {...props}
-          aria-label="New folder"
-          onclick={() => startCreate("dir")}
-        >
-          <Icon icon={iconAddFolder} size={14} />
-        </Button>
-      {/snippet}
-    </Hint>
-    <Hint label="Refresh tree">
-      {#snippet child({ props })}
-        <Button
-          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          {...props}
-          aria-label="Refresh"
-          onclick={() => void refreshTree()}
-        >
-          <Icon icon={iconRefresh} size={14} />
-        </Button>
-      {/snippet}
-    </Hint>
-    <Button
-      class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-      variant="ghost"
-      size="icon-xs"
-      type="button"
-      aria-label="Reveal active file"
-      title="Reveal the open file in the tree"
-      disabled={activeFile === null}
-      onclick={() => {
-        if (activeFile !== null) {
-          emitUiEvent("files-reveal-path", { repoId, path: activeFile });
-        }
-      }}
-    >
-      <Icon icon={iconReveal} size={14} />
-    </Button>
-    <span class="spacer flex-1"></span>
-    <div
-      class="filter flex min-w-16 max-w-56 flex-1 items-center gap-1 rounded-full border border-border bg-background px-1.5 py-px text-muted-foreground"
-      role="search"
-    >
-      <Icon icon={iconSearch} size={14} />
-      <!-- svelte-ignore a11y_autofocus -->
-      <Input
-        type="text"
-        class="h-auto min-w-0 flex-1 rounded-none border-none bg-transparent px-0 py-0 text-xs md:text-xs text-foreground shadow-none outline-none focus-visible:ring-0 dark:bg-transparent placeholder:text-muted-foreground"
-        placeholder="Filter files"
-        bind:value={filter}
-        aria-label="Filter files"
-        onkeydown={(event) => {
-          if (event.key === "Escape" && filter !== "") {
-            filter = "";
-            event.stopPropagation();
-          }
-          if (event.key === "ArrowDown") {
-            list?.element()?.focus();
-            event.preventDefault();
-          }
-        }}
-      />
-      {#if filter !== ""}
-        <span class="fcount flex-none text-ui-tiny tabular-nums text-muted-foreground">{rows.length}</span>
+          <Icon icon={iconSearch} size={14} />
+          <!-- svelte-ignore a11y_autofocus -->
+          <Input
+            type="text"
+            bind:ref={filterInputEl}
+            class="h-auto min-w-0 flex-1 rounded-none border-none bg-transparent px-0 py-0 text-xs md:text-xs text-foreground shadow-none outline-none focus-visible:ring-0 dark:bg-transparent placeholder:text-muted-foreground"
+            placeholder="Filter files"
+            bind:value={filter}
+            aria-label="Filter files"
+            onkeydown={(event) => {
+              if (event.key === "Escape") {
+                if (filter !== "") {
+                  filter = "";
+                } else {
+                  filterOn = false;
+                }
+                event.stopPropagation();
+              }
+              if (event.key === "ArrowDown") {
+                list?.element()?.focus();
+                event.preventDefault();
+              }
+            }}
+          />
+          {#if filter !== ""}
+            <span class="fcount flex-none text-ui-micro tabular-nums text-muted-foreground">{rows.length}</span>
+          {/if}
+        </div>
       {/if}
-    </div>
-    <Hint label="File icons and ignored files">
-      {#snippet child({ props })}
-        <Button
-          class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
-          variant="ghost"
-          size="icon-xs"
-          type="button"
-          {...props}
-          aria-label="More options"
-          onclick={(event) => overflowMenu(event)}
-        >
-          <Icon icon={iconMore} size={14} />
-        </Button>
-      {/snippet}
-    </Hint>
-  </div>
+    {/snippet}
+    {#snippet trailing()}
+      <Hint label="Refresh tree">
+        {#snippet child({ props })}
+          <Button
+            class="text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5"
+            variant="ghost"
+            size="icon-xs"
+            type="button"
+            {...props}
+            aria-label="Refresh"
+            onclick={() => void refreshTree()}
+          >
+            <Icon icon={iconRefresh} size={14} />
+          </Button>
+        {/snippet}
+      </Hint>
+      <OverflowMenu label="File options">
+        {#snippet content()}
+          <DropdownMenu.Item
+            class="cursor-pointer gap-ui-3"
+            onclick={() => startCreate("file")}
+          >
+            <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+              <Icon icon={iconAddFile} size={16} />
+            </span>
+            New file…
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="cursor-pointer gap-ui-3"
+            onclick={() => startCreate("dir")}
+          >
+            <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+              <Icon icon={iconAddFolder} size={16} />
+            </span>
+            New folder…
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="cursor-pointer gap-ui-3"
+            disabled={activeFile === null}
+            onclick={() => {
+              if (activeFile !== null) {
+                emitUiEvent("files-reveal-path", { repoId, path: activeFile });
+              }
+            }}
+          >
+            <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+              <Icon icon={iconReveal} size={16} />
+            </span>
+            Reveal active file
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator />
+          <DropdownMenu.CheckboxItem
+            class="cursor-pointer"
+            checked={fileTreePrefs.showIgnored}
+            onCheckedChange={(next) => {
+              fileTreePrefs.setShowIgnored(next === true);
+              void refreshTree();
+            }}
+          >
+            Show ignored files
+          </DropdownMenu.CheckboxItem>
+          <DropdownMenu.CheckboxItem
+            class="cursor-pointer"
+            checked={fileTreePrefs.showSizes}
+            onCheckedChange={(next) => fileTreePrefs.setShowSizes(next === true)}
+          >
+            Show file sizes
+          </DropdownMenu.CheckboxItem>
+          <DropdownMenu.Separator />
+          <DropdownMenu.RadioGroup
+            value={fileIconPreferences.theme}
+            onValueChange={(value) => fileIconPreferences.setTheme(value as FileIconTheme)}
+          >
+            <DropdownMenu.RadioItem class="cursor-pointer" value="colorful">
+              Colorful file icons
+            </DropdownMenu.RadioItem>
+            <DropdownMenu.RadioItem class="cursor-pointer" value="material">
+              Material file icons
+            </DropdownMenu.RadioItem>
+            <DropdownMenu.RadioItem class="cursor-pointer" value="minimal">
+              Minimal file icons
+            </DropdownMenu.RadioItem>
+          </DropdownMenu.RadioGroup>
+        {/snippet}
+      </OverflowMenu>
+    {/snippet}
+  </PanelHeader>
 
   {#snippet row(entry: FlatRow, index: number)}
     {@const node = entry.node}
@@ -877,8 +924,10 @@
           <span class="name min-w-0 flex-1 overflow-hidden text-ellipsis" {...props} tabindex={-1}>{node.name}</span>
         {/snippet}
       </Hint>
-      {#if node.kind === "file" && node.size !== null && !isDir}
-        <span class="size flex-none text-ui-tiny tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
+      {#if node.kind === "file" && node.size !== null && !isDir && fileTreePrefs.showSizes}
+        <!-- Sizes are opt-in (§5.6: per-row sizes are noise; the toggle
+             lives in the panel header's overflow, persisted). -->
+        <span class="size flex-none text-ui-meta tabular-nums text-muted-foreground">{formatSize(node.size)}</span>
       {/if}
       {#if node.truncated}
         <Hint label="Listing capped — some entries are missing">

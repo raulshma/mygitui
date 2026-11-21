@@ -97,7 +97,7 @@
   role="group"
   aria-label="Approval needed: {title}"
 >
-  <p class="m-0 flex items-baseline gap-2 text-ui-tiny font-medium text-foreground">
+  <p class="m-0 flex items-baseline gap-2 text-ui-meta font-medium text-foreground">
     <span class="min-w-0 flex-1 [overflow-wrap:anywhere]">{title}</span>
     <span
       class="flex-none text-ui-micro font-normal tabular-nums text-muted-foreground"
@@ -148,7 +148,7 @@
       }}
     >
       <input
-        class="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-ui-tiny text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring disabled:opacity-50"
+        class="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-ui-meta text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring disabled:opacity-50"
         placeholder="Answer (optional)…"
         aria-label="Answer the agent's question"
         bind:value={answer}

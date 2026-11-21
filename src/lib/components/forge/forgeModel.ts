@@ -669,3 +669,30 @@ export function runDetailSignature(
     ),
   ].join("|");
 }
+
+/**
+ * Default file name for a downloaded run log (E2 log download): the run
+ * number, a slugged workflow name and — when one job is targeted — the
+ * slugged job name (`run-42-ci-build.log`). Slugs keep only
+ * alphanumerics; a missing name degrades to `workflow`.
+ */
+export function logDownloadName(
+  runNumber: number,
+  runName: string,
+  jobName: string | null,
+): string {
+  const slug = (value: string): string =>
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((part) => part !== "")
+      .join("-")
+      .slice(0, 40);
+  const parts = [
+    "run",
+    String(runNumber),
+    slug(runName) || "workflow",
+    ...(jobName === null ? [] : [slug(jobName) || "job"]),
+  ];
+  return `${parts.join("-")}.log`;
+}

@@ -10,6 +10,9 @@ import { DEFAULT_BINDINGS } from "./keybinds";
 import {
   matchesShortcutQuery,
   shortcutSections,
+  surfaceShortcutSection,
+  SURFACE_SHORTCUTS,
+  SURFACE_SHORTCUTS_SECTION,
 } from "./shortcutSections";
 
 /** Tiny command + binding fixtures (registry shapes, no run bodies needed). */
@@ -73,5 +76,46 @@ describe("matchesShortcutQuery", () => {
     // No cross-entry match: "beta" is only in the other section/title.
     expect(matchesShortcutQuery(first, "beta")).toBe(false);
     expect(matchesShortcutQuery(second, "nomatch")).toBe(false);
+  });
+});
+
+describe("surfaceShortcutSection (§11 static rows)", () => {
+  it("documents the non-rebindable surface keys under one section", () => {
+    const section = surfaceShortcutSection();
+    expect(section.name).toBe(SURFACE_SHORTCUTS_SECTION);
+    expect(section.entries.map((entry) => entry.combo)).toEqual([
+      "ctrl+shift+enter",
+      "b",
+      "h",
+    ]);
+  });
+
+  it("formats display combos through the shared formatter (mac-safe)", () => {
+    const section = surfaceShortcutSection();
+    // `enter` renders as the ↵ glyph, like every other Kbd hint.
+    expect(section.entries[0]).toMatchObject({
+      display: "Ctrl+Shift+↵",
+      command: expect.objectContaining({ title: "Commit and push (composer)" }),
+    });
+    expect(section.entries[1]).toMatchObject({ display: "B" });
+    expect(section.entries[2]).toMatchObject({ display: "H" });
+  });
+
+  it("stays in sync with the SURFACE_SHORTCUTS data (one row each)", () => {
+    const section = surfaceShortcutSection();
+    expect(section.entries.length).toBe(SURFACE_SHORTCUTS.length);
+    // Synthetic commands are display-only: no run side effects, own section.
+    for (const entry of section.entries) {
+      expect(entry.command.section).toBe(SURFACE_SHORTCUTS_SECTION);
+      expect(() => entry.command.run({ repoId: null, root: null })).not.toThrow();
+    }
+  });
+
+  it("is filterable through the shared query matcher", () => {
+    const [commitPush, blame, history] = surfaceShortcutSection().entries;
+    expect(matchesShortcutQuery(commitPush!, "composer")).toBe(true);
+    expect(matchesShortcutQuery(blame!, "blame")).toBe(true);
+    expect(matchesShortcutQuery(history!, "log")).toBe(true);
+    expect(matchesShortcutQuery(commitPush!, "nomatch")).toBe(false);
   });
 });

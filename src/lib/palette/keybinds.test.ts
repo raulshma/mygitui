@@ -227,7 +227,7 @@ describe("overrides persistence", () => {
   it("drops overrides that equal the default", () => {
     const storage = fakeStorage();
     __resetKeybindsForTests(storage);
-    setBinding("app.palette", "ctrl+shift+p");
+    setBinding("app.palette", "ctrl+k");
     expect(getOverrides()).toEqual({});
     expect(storage.store.get(KEYBINDS_STORAGE_KEY)).toBe("{}");
   });
@@ -303,6 +303,17 @@ describe("conflict detection", () => {
     expect(findConflicts(DEFAULT_BINDINGS)).toEqual([]);
   });
 
+  it("binds the palette to Ctrl+K and moves the quick switcher to Ctrl+Shift+K (§12 P2)", () => {
+    // Plan §12 P2: "command palette (Ctrl+K) over existing commands". The
+    // switcher's old component-owned Ctrl+K moved onto the engine — now
+    // documented in the `?` cheatsheet and rebindable in Settings.
+    expect(DEFAULT_BINDINGS["app.palette"]).toBe("ctrl+k");
+    expect(DEFAULT_BINDINGS["app.quick-switcher"]).toBe("ctrl+shift+k");
+    // Both combos must stay exclusive (the matcher is one-combo-per-command;
+    // the switcher no longer hard-owns ctrl+k in its own window listener).
+    expect(findConflicts(DEFAULT_BINDINGS)).toEqual([]);
+  });
+
   it("binds the diff find + navigation commands to unused combos", () => {
     // PageUp/PageDown combos: modifier+arrows would collide with
     // CodeMirror's move/copy-line default keymap in the file editor.
@@ -351,7 +362,7 @@ describe("startKeybinds (window listener)", () => {
     const onAction = vi.fn();
     const stop = startKeybinds(onAction);
     try {
-      const prevented = dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      const prevented = dispatchKeydown({ key: "k", ctrlKey: true });
       expect(onAction).toHaveBeenCalledWith("app.palette");
       expect(prevented).toBe(true);
     } finally {
@@ -377,7 +388,7 @@ describe("startKeybinds (window listener)", () => {
     const onAction = vi.fn();
     const stop = startKeybinds(onAction);
     try {
-      const prevented = dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true, repeat: true });
+      const prevented = dispatchKeydown({ key: "k", ctrlKey: true, repeat: true });
       expect(onAction).not.toHaveBeenCalled();
       expect(prevented).toBe(false); // repeats pass through untouched
     } finally {
@@ -411,7 +422,7 @@ describe("startKeybinds (window listener)", () => {
       dispatchKeydown({ key: "?", shiftKey: true }, input);
       expect(onAction).not.toHaveBeenCalled();
       // Ctrl/alt combos still fire from inputs.
-      dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true }, input);
+      dispatchKeydown({ key: "k", ctrlKey: true }, input);
       expect(onAction).toHaveBeenCalledWith("app.palette");
       input.remove();
     } finally {
@@ -458,12 +469,12 @@ describe("startKeybinds (window listener)", () => {
       const sink = vi.fn();
       beginKeyCapture(sink);
       // A bound combo: captured raw, never matched — the editor decides.
-      const prevented = dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      const prevented = dispatchKeydown({ key: "k", ctrlKey: true });
       expect(sink).toHaveBeenCalledTimes(1);
       expect(onAction).not.toHaveBeenCalled();
       expect(prevented).toBe(false); // the sink decides what to swallow
       endKeyCapture();
-      dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      dispatchKeydown({ key: "k", ctrlKey: true });
       expect(onAction).toHaveBeenCalledWith("app.palette");
     } finally {
       endKeyCapture();
@@ -477,10 +488,10 @@ describe("startKeybinds (window listener)", () => {
     try {
       const stop2 = startKeybinds(onAction);
       stop2();
-      dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      dispatchKeydown({ key: "k", ctrlKey: true });
       expect(onAction).toHaveBeenCalledTimes(1); // first install still live
       stop();
-      dispatchKeydown({ key: "p", ctrlKey: true, shiftKey: true });
+      dispatchKeydown({ key: "k", ctrlKey: true });
       expect(onAction).toHaveBeenCalledTimes(1); // cleanup detached it
     } finally {
       stop();

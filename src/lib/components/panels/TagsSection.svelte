@@ -316,7 +316,7 @@
               {/snippet}
             </Hint>
             {#if tag.annotated}
-              <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-ui-tiny text-muted-foreground"
+              <Badge variant="outline" class="chip h-auto shrink-0 rounded-full px-1.5 py-0 text-ui-micro text-muted-foreground"
                 >annotated</Badge
               >
             {/if}

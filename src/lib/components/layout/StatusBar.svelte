@@ -23,9 +23,15 @@
    * same area shows a quiet outcome chip (success check / alert icon) that
    * opens the recent-ops popover (`OpHistoryPopover`) — the after-the-fact
    * "what ran and what failed" surface the transient op row never gave.
-   * Right: the in-progress git state
- * (merge/rebase/…), the repo's auto-fetch cadence (click opens the Remotes
-   * panel), and the remote device connection.
+   * Right (E1): the GitHub chips (PR → Checks → Runs, one popover at a
+   * time, worst-state collapse below 1024px), the in-progress git state
+ * (merge/rebase/…), the auto-fetch + GitHub cadence popover, and the
+   * remote device connection.
+   *
+   * §10 Stacked (<800): the matrix trims the bar to "branch + changes
+   * only" — the sync item, the ops/AI rows and the whole extras cluster
+   * hide (`wm-stacked:hidden`); their information stays reachable through
+   * the header's Sync, the full-screen panels and the forge view.
    *
    * Reads the store singletons directly (no props), like the Toaster. The
    * bar itself is never conditionally sized — that constancy is the
@@ -72,6 +78,15 @@
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { showMenuAtElement } from "$lib/components/menu/contextMenuStore.svelte";
+  import { floating } from "$lib/components/overlay/floating";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import ForgeChips from "$lib/components/forge/ForgeChips.svelte";
+  import { forgeChips } from "$lib/forge/chips.svelte";
+  import type { ChipId } from "$lib/forge/indication.svelte";
+  import {
+    activeSnapshotIntervalMs,
+  } from "$lib/forge/chips.svelte";
 
   const iconBranch = $derived(appIcon("account-tree")!);
   const iconSync = $derived(appIcon("sync")!);
@@ -100,6 +115,23 @@
   const repoId = $derived(active?.id ?? null);
   const status = $derived(active?.status ?? null);
 
+  // E1: the GitHub snapshot lanes. start() probes `gh` status once (the
+  // watchHealth idiom); the effect below tracks the open tabs, the active
+  // tab and the cadence setting and re-syncs the scheduler lanes — the
+  // ACTIVE repo at the configurable cadence (0 = off), inactive-open repos
+  // at the fixed 5-minute rate. Tab switches promote via one forced refresh.
+  forgeChips.start();
+  $effect(() => {
+    void tabStore.tabs;
+    void tabStore.activeId;
+    void appSettings.forgeSnapshotSeconds;
+    forgeChips.syncLanes();
+  });
+  $effect(() => {
+    const id = repoId;
+    if (id !== null) forgeChips.promote(id);
+  });
+
   const branchLabel = $derived.by(() => {
     if (status === null) return null;
     if (status.detached) {
@@ -126,6 +158,182 @@
   const autofetchMinutes = $derived(
     active === null ? 0 : autofetch.getInterval(active.root),
   );
+
+  // -- auto-fetch cadence popover (plan §8.6 / §9.3) -----------------------------
+  //
+  // The cadence chip is icon + tooltip (the "auto 1m" text went away) and
+  // opens a popover that CHANGES the git-fetch cadence instead of only
+  // linking to the Remotes panel. Structured for Workstream E1: the
+  // popover renders cadence sections, and §9.3 wants a GitHub section
+  // rendered next to the git-fetch one — E1 appends it below without
+  // touching the chip.
+
+  let cadenceOpen = $state(false);
+  let cadenceAnchor = $state<HTMLElement | null>(null);
+  let cadenceEl = $state<HTMLElement | null>(null);
+
+  /**
+   * The open GitHub chip popover (E1): PR → Checks → Runs, one at a time —
+   * owned here so the chips and the cadence popover stay mutually exclusive
+   * (the chips' bindable writes it; toggling the cadence clears it).
+   */
+  let openChip = $state<ChipId | null>(null);
+
+  /** Minutes options (0 = off); the radio rows of the git-fetch section. */
+  const CADENCE_OPTIONS = [0, 1, 5, 15, 30, 60] as const;
+
+  /** Seconds options (0 = off); the radio rows of the GitHub section. */
+  const FORGE_CADENCE_OPTIONS = [0, 30, 60, 300] as const;
+
+  function toggleCadence(event: MouseEvent): void {
+    const trigger = event.currentTarget as HTMLElement;
+    openChip = null; // one popover at a time across the right cluster
+    if (cadenceOpen) {
+      cadenceOpen = false;
+      cadenceAnchor?.focus();
+    } else {
+      cadenceAnchor = trigger;
+      cadenceOpen = true;
+    }
+  }
+
+  // A chip popover opened by the chips component closes the cadence popover.
+  $effect(() => {
+    if (openChip !== null) cadenceOpen = false;
+  });
+
+  /** Writes the per-repo override (0 clears it — the app default applies). */
+  function setCadence(minutes: number): void {
+    if (active === null) return;
+    autofetch.setInterval(active.root, minutes);
+  }
+
+  /** Writes the global GitHub snapshot cadence (seconds; 0 = off). */
+  function setForgeCadence(seconds: number): void {
+    appSettings.update({ forgeSnapshotSeconds: seconds });
+  }
+
+  const cadenceTitle = $derived(
+    autofetchMinutes > 0
+      ? `Auto-fetch every ${autofetchMinutes} min`
+      : "Auto-fetch off — click to set a cadence",
+  );
+
+  /** The persisted entry is an override when config carries this root. */
+  const cadenceIsOverride = $derived(
+    active !== null && autofetch.config[active.root] !== undefined,
+  );
+
+  // The popover is portaled to <body> (BranchSwitcher idiom): outside-click
+  // closes, Escape closes and restores the trigger's focus.
+  $effect(() => {
+    if (!cadenceOpen) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null;
+      if (cadenceEl?.contains(target) || cadenceAnchor?.contains(target)) return;
+      cadenceOpen = false;
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        cadenceOpen = false;
+        cadenceAnchor?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  });
+
+  // -- AI default-model chip (plan §6.3 / §8.6, deferred from Workstream B) ------
+  //
+  // ONE global default model lives in the AI settings; this chip SHOWS it
+  // and offers the same change set compactly: server default, the current
+  // custom id, a free-text id, or the full settings dialog. Per-repo
+  // overrides stay in the composers' AiModelPicker carets — this chip never
+  // touches `modelChoice`.
+
+  const aiChipVisible = $derived(ai.isEnabled());
+  const aiBackendLabel = $derived(
+    ai.config.backend === "openrouter" ? "OpenRouter" : "OpenCode",
+  );
+  /** The global default model id for the active backend ("" = server default). */
+  const aiDefaultModel = $derived(
+    ai.config.backend === "openrouter"
+      ? (ai.config.openrouterModel ?? "")
+      : (ai.config.opencodeModel ?? ""),
+  );
+  const aiChipLabel = $derived(aiDefaultModel === "" ? "AI" : aiDefaultModel);
+  const aiChipTitle = $derived(
+    aiDefaultModel === ""
+      ? `AI model — server default (${aiBackendLabel}) — click to change`
+      : `AI model — ${aiDefaultModel} — click to change`,
+  );
+
+  /** Free-text entry for the custom default model id (anchored card). */
+  let aiModelOpen = $state(false);
+  let aiModelText = $state("");
+  let aiChipEl = $state<HTMLElement | null>(null);
+
+  function openAiModelMenu(event: MouseEvent): void {
+    const entries = [
+      {
+        id: "ai-model-default",
+        label: `${aiDefaultModel === "" ? "✓ " : ""}Default (${aiBackendLabel})`,
+        run: () => {
+          if (ai.config.backend === "openrouter") ai.setOpenrouterModel(undefined);
+          else ai.setOpencodeModel(undefined);
+        },
+      },
+      ...(aiDefaultModel !== ""
+        ? [
+            {
+              id: "ai-model-current",
+              label: `✓ ${aiDefaultModel}`,
+              run: () => {
+                if (ai.config.backend === "openrouter") {
+                  ai.setOpenrouterModel(aiDefaultModel);
+                } else {
+                  ai.setOpencodeModel(aiDefaultModel);
+                }
+              },
+            },
+          ]
+        : []),
+      { separator: true as const },
+      {
+        id: "ai-model-custom",
+        label: "Custom model id…",
+        run: () => {
+          aiModelText = aiDefaultModel;
+          aiModelOpen = true;
+        },
+      },
+      { separator: true as const },
+      {
+        id: "ai-model-settings",
+        label: "AI settings…",
+        run: () => emitUiEvent("open-ai-settings"),
+      },
+    ];
+    showMenuAtElement(event.currentTarget as HTMLElement, entries, {
+      align: "end",
+      above: true,
+    });
+  }
+
+  function applyAiModel(): void {
+    const text = aiModelText.trim();
+    if (ai.config.backend === "openrouter") {
+      ai.setOpenrouterModel(text.length > 0 ? text : undefined);
+    } else {
+      ai.setOpencodeModel(text.length > 0 ? text : undefined);
+    }
+    aiModelOpen = false;
+  }
 
   /** Remote-tab device connection (`null` for local repos). */
   const deviceStatus = $derived(
@@ -572,7 +780,7 @@
       {#snippet child({ props })}
         <button
           {...props}
-          class="sb-item inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 font-medium transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:pointer-events-none"
+          class="sb-item inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 font-medium transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary disabled:pointer-events-none wm-stacked:hidden"
           type="button"
           disabled={busy || (primaryVerb !== "fetch" && !canUseBranch)}
           aria-label={syncAriaLabel}
@@ -629,9 +837,11 @@
   </div>
 
   <!-- Middle: every in-flight backend op, any repo. Items appear and vanish
-       inside the fixed-height bar — the workspace above never moves. -->
+       inside the fixed-height bar — the workspace above never moves.
+       Stacked (§10 "branch + changes only"): hidden — the header's Sync and
+       the panels' own surfaces carry the same information below the floor. -->
   <div
-    class="running-ops flex min-w-0 flex-1 items-center gap-ui-3 overflow-hidden"
+    class="running-ops flex min-w-0 flex-1 items-center gap-ui-3 overflow-hidden wm-stacked:hidden"
     aria-label="Running operations"
   >
     {#snippet opMain(row: (typeof opRows)[number])}
@@ -855,8 +1065,10 @@
     {/if}
   </div>
 
-  <!-- Right: hook output + repo state + cadence + device connection. -->
-  <div class="extras flex flex-none items-center gap-ui-2 pr-ui-2">
+  <!-- Right: hook output + repo state + cadence + device connection.
+       Stacked (§10 "branch + changes only"): hidden — the worst-state chip
+       and every other item it hosts are reachable through their panels. -->
+  <div class="extras flex flex-none items-center gap-ui-2 pr-ui-2 wm-stacked:hidden">
     {#if logSession !== null}
       <Hint label={logChipOpen ? `Hide ${logTitle}` : `Show ${logTitle}`}>
         {#snippet child({ props })}
@@ -950,20 +1162,101 @@
         {/snippet}
       </Hint>
     {/if}
-    {#if autofetchMinutes > 0}
-      <Hint label={`Auto-fetch every ${autofetchMinutes} min — click to open the Remotes panel`}>
+    {#if aiChipVisible}
+      <!-- Workstream D §8.6 (deferred from §6.3): the global default AI
+           model as a compact chip — click opens the change menu (server
+           default / current id / custom id / settings). Per-repo run
+           overrides stay in the composers' AiModelPicker carets. -->
+      <span class="sb-ai relative inline-flex flex-none items-center" bind:this={aiChipEl}>
+        <Hint label={aiChipTitle}>
+          {#snippet child({ props })}
+            <button
+              {...props}
+              class="sb-ai-chip inline-flex h-full max-w-40 flex-none items-center gap-ui-2 px-ui-2 transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              type="button"
+              aria-label={aiChipTitle}
+              aria-haspopup="menu"
+              onclick={openAiModelMenu}
+            >
+              <span class="inline-flex flex-none items-center text-primary" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path
+                    d="M12 2l2.09 6.26L20 10.35l-5.91 2.09L12 18.7l-2.09-6.26L4 10.35l5.91-2.09L12 2z"
+                  />
+                  <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
+                </svg>
+              </span>
+              <span class="min-w-0 truncate">{aiChipLabel}</span>
+            </button>
+          {/snippet}
+        </Hint>
+        {#if aiModelOpen}
+          <!-- Free-text entry for the custom default id: portaled + clamped
+               (AiModelPicker's compact grammar); Enter applies, Esc cancels. -->
+          <div
+            class="fixed left-0 top-0 z-60 flex items-center gap-1 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-overlay"
+            use:floating={{ anchor: aiChipEl ?? undefined, above: true, alignEnd: true }}
+          >
+            <input
+              class="h-6 w-44 rounded-sm border border-border bg-background px-1.5 font-mono text-ui-meta text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary"
+              placeholder="provider/model"
+              spellcheck="false"
+              aria-label="Custom model id"
+              bind:value={aiModelText}
+              onkeydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  applyAiModel();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  aiModelOpen = false;
+                }
+              }}
+            />
+            <button
+              class="shrink-0 rounded-sm px-1.5 py-px text-ui-meta text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              type="button"
+              onclick={applyAiModel}
+            >
+              Apply
+            </button>
+            <button
+              class="shrink-0 rounded-sm px-1.5 py-px text-ui-meta text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+              type="button"
+              onclick={() => (aiModelOpen = false)}
+            >
+              Cancel
+            </button>
+          </div>
+        {/if}
+      </span>
+    {/if}
+    {#if repoId !== null}
+      <!-- E1 §9.2: the GitHub chips (PR → Checks → Runs), before the
+           cadence icon. One popover at a time across the cluster via the
+           bindable open-chip state; <1024px collapses to the worst chip. -->
+      <ForgeChips bind:open={openChip} />
+      <!-- Workstream D §8.6: the cadence is icon + tooltip (the "auto 1m"
+           text went away) and the click opens the cadence popover — the
+           single place to change the git-fetch cadence (Workstream E1
+           appends its GitHub section there). Always rendered for an open
+           repo so "off" stays changeable; off renders dimmed. -->
+      <Hint label={cadenceTitle}>
         {#snippet child({ props })}
           <button
             {...props}
-            class="sb-autofetch inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 tabular-nums transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            bind:this={cadenceAnchor}
+            class="sb-autofetch inline-flex h-full flex-none items-center gap-ui-2 px-ui-2 transition-colors duration-[120ms] hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary {autofetchMinutes >
+            0
+              ? ""
+              : "opacity-60"}"
             type="button"
-            onclick={() => {
-              if (repoId !== null)
-                emitUiEvent("focus-panel", { panel: "remotes", repoId });
-            }}
+            aria-label={cadenceTitle}
+            aria-haspopup="dialog"
+            aria-expanded={cadenceOpen}
+            onclick={toggleCadence}
           >
             <Icon icon={iconRefresh} size={12} />
-            auto {autofetchMinutes}m
           </button>
         {/snippet}
       </Hint>
@@ -1013,4 +1306,119 @@
   confirmLabel="Reopen"
   onConfirm={() => void reopenWatchRepo()}
 />
+
+{#if cadenceOpen}
+  <!-- Auto-fetch cadence popover (§8.6): radio rows change the git-fetch
+       cadence in place; the section structure is what Workstream E1
+       extends — §9.3 wants its GitHub cadence rendered here next to the
+       git-fetch section. Portaled (bottom-of-screen anchor opens upward
+       via `above`). -->
+  <div
+    bind:this={cadenceEl}
+    class="cadence-popover fixed z-60 flex w-72 max-w-[calc(100vw-1rem)] flex-col gap-2 rounded-lg border border-border bg-popover p-3 text-ui-base text-popover-foreground shadow-md"
+    role="dialog"
+    aria-label="Auto-fetch cadence"
+    use:floating={{ anchor: cadenceAnchor ?? undefined, above: true, alignEnd: true, gap: 6 }}
+  >
+    <div class="flex items-center gap-2">
+      <span class="min-w-0 flex-1 text-ui-meta font-semibold">Auto-fetch cadence</span>
+      <button
+        class="inline-flex size-5 cursor-pointer items-center justify-center rounded-sm p-0 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+        type="button"
+        aria-label="Close auto-fetch cadence"
+        onclick={() => {
+          cadenceOpen = false;
+          cadenceAnchor?.focus();
+        }}
+      >
+        <Icon icon={iconClose} size={12} />
+      </button>
+    </div>
+    <section aria-label="Git fetch cadence" class="flex flex-col gap-0.5">
+      <span class="text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">Git fetch</span>
+      <!-- Pressed toggle-buttons rather than a role="radiogroup": a radio
+           group wants roving arrow-key focus, and these are plain dialog
+           rows — the dot + pressed state carry the selection honestly. -->
+      <div role="group" aria-label="Fetch every">
+        {#each CADENCE_OPTIONS as minutes (minutes)}
+          <button
+            class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-ui-meta hover:bg-accent aria-pressed:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            aria-pressed={autofetchMinutes === minutes}
+            onclick={() => setCadence(minutes)}
+          >
+            <span
+              class="inline-flex size-3 flex-none items-center justify-center rounded-full border {autofetchMinutes ===
+              minutes
+                ? "border-primary"
+                : "border-muted-foreground/50"}"
+              aria-hidden="true"
+            >
+              {#if autofetchMinutes === minutes}
+                <span class="size-1.5 rounded-full bg-primary"></span>
+              {/if}
+            </span>
+            {minutes === 0 ? "Off" : minutes === 1 ? "Every minute" : `Every ${minutes} minutes`}
+          </button>
+        {/each}
+      </div>
+    </section>
+    <p class="text-ui-micro leading-[1.4] text-muted-foreground">
+      {cadenceIsOverride
+        ? "Per-repository override. \"Off\" clears it and follows the app default."
+        : `Following the app default${appSettings.defaultAutofetchMinutes > 0 ? ` (${appSettings.defaultAutofetchMinutes} min)` : " (off)"}.`}
+    </p>
+    <!-- Workstream E1 (§9.3): the "GitHub" cadence section renders next to
+         the git-fetch one — the active repo's snapshot cadence in seconds
+         (30 s floor; 0 = off, matching the plan's git-fetch semantics).
+         Inactive-open repos always poll at the fixed 5-minute rate. -->
+    <section aria-label="GitHub cadence" class="flex flex-col gap-0.5">
+      <span class="text-ui-micro font-semibold uppercase tracking-[0.04em] text-muted-foreground">GitHub</span>
+      <div role="group" aria-label="GitHub snapshot every">
+        {#each FORGE_CADENCE_OPTIONS as seconds (seconds)}
+          <button
+            class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-ui-meta hover:bg-accent aria-pressed:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            type="button"
+            aria-pressed={appSettings.forgeSnapshotSeconds === seconds}
+            onclick={() => setForgeCadence(seconds)}
+          >
+            <span
+              class="inline-flex size-3 flex-none items-center justify-center rounded-full border {appSettings.forgeSnapshotSeconds ===
+              seconds
+                ? "border-primary"
+                : "border-muted-foreground/50"}"
+              aria-hidden="true"
+            >
+              {#if appSettings.forgeSnapshotSeconds === seconds}
+                <span class="size-1.5 rounded-full bg-primary"></span>
+              {/if}
+            </span>
+            {seconds === 0
+              ? "Off"
+              : seconds < 60
+                ? `Every ${seconds} seconds`
+                : seconds === 60
+                  ? "Every minute"
+                  : `Every ${Math.round(seconds / 60)} minutes`}
+          </button>
+        {/each}
+      </div>
+    </section>
+    <p class="text-ui-micro leading-[1.4] text-muted-foreground">
+      {activeSnapshotIntervalMs(appSettings.forgeSnapshotSeconds) > 0
+        ? "Pull requests, checks and runs for the active repository. Other open repositories poll every 5 minutes."
+        : "Background GitHub polling is off — the chips refresh when you open their popovers."}
+    </p>
+    <Button
+      class="h-6 flex-none self-start rounded-sm px-2 text-ui-micro leading-[1.5] font-normal"
+      variant="outline"
+      type="button"
+      onclick={() => {
+        if (repoId !== null) emitUiEvent("focus-panel", { panel: "remotes", repoId });
+        cadenceOpen = false;
+        cadenceAnchor?.focus();
+      }}
+    >More fetch settings — Remotes panel</Button>
+  </div>
+{/if}
 </div>

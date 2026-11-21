@@ -63,6 +63,8 @@
   import { isTauri } from "$lib/entry/dragdrop";
   import { updater } from "$lib/stores/updater.svelte";
   import { autofetch } from "$lib/stores/autofetch.svelte";
+  import { forgeStore } from "$lib/stores/forge.svelte";
+  import { forgeHosts } from "$lib/ipc/client";
   import { customApps, type CustomAppsStore } from "$lib/openwith/customApps.svelte";
   import {
     terminalThemePref,
@@ -235,6 +237,7 @@
     | "appearance"
     | "repo"
     | "git"
+    | "forge"
     | "editor"
     | "terminal"
     | "openwith"
@@ -305,6 +308,40 @@
   const autofetchOverrides = $derived(
     Object.entries(autofetch.config).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
+
+  // --- GitHub: gh auth state (E1 §9.1) ---------------------------------------
+
+  /**
+   * One-line `gh` state for the GitHub section's auth row (`null` before
+   * the first probe lands — the Refresh button forces one).
+   */
+  function forgeStatusLine(): string | null {
+    const status = forgeStore.status;
+    if (status === null) {
+      return forgeStore.statusLoading ? "Checking for gh…" : null;
+    }
+    if (!status.available) {
+      return "gh not found on PATH — install it from cli.github.com";
+    }
+    return status.authed
+      ? `gh ${status.version} — authenticated`
+      : `gh ${status.version} — not authenticated (run \`gh auth login\`)`;
+  }
+
+  /** Forces a fresh `forge_status` + host-cache refresh (manual refresh). */
+  async function refreshForgeStatus(): Promise<void> {
+    await Promise.all([
+      forgeStore.refreshStatus(),
+      forgeHosts().catch(() => null),
+    ]);
+  }
+
+  // Opening the GitHub section probes gh once when nothing is known yet.
+  $effect(() => {
+    if (active !== "forge") return;
+    if (forgeStore.status !== null || forgeStore.statusLoading) return;
+    untrack(() => void forgeStore.refreshStatus());
+  });
 
   // --- This repository (per-repo overrides, active-tab scoped) ----------------
   //
@@ -1094,6 +1131,69 @@
           title: "Per-repo auto-fetch overrides",
           keywords: "override cadence per repo interval",
           render: "overrides",
+        },
+      ],
+    },
+    {
+      // GitHub (E1, plan §9.1): auth state display, snapshot cadence and the
+      // toast toggles — deliberately minimal; deeper GitHub settings are a
+      // Phase-2 revisit.
+      id: "forge",
+      label: "GitHub",
+      icon: "merge-type",
+      blurb: "gh CLI auth, footer-chip cadence and toasts.",
+      rows: [
+        {
+          kind: "action",
+          id: "forge-auth",
+          title: "GitHub CLI (gh)",
+          description:
+            "mygitui talks to GitHub through the gh CLI — no token is stored in the app. Refresh also re-reads the hosts `gh auth status` reports (GitHub Enterprise remotes).",
+          keywords: "gh auth login token enterprise install github cli",
+          status: forgeStatusLine,
+          buttons: [
+            {
+              label: "Refresh",
+              onclick: () => void refreshForgeStatus(),
+            },
+          ],
+        },
+        {
+          kind: "number",
+          id: "forge-cadence",
+          title: "GitHub snapshot every",
+          description:
+            "How often the active repository's GitHub state (pull request, checks, latest run) refreshes in the footer; 0 disables background polling. Other open repositories poll every 5 minutes; a hidden window never spawns gh.",
+          keywords: "github snapshot cadence poll seconds footer chips",
+          ariaLabel: "GitHub snapshot interval in seconds",
+          min: 0,
+          max: 3600,
+          unit: "s",
+          get: () => settings.forgeSnapshotSeconds,
+          set: (value) =>
+            settings.update({
+              forgeSnapshotSeconds: Number.isFinite(value) ? value : 0,
+            }),
+        },
+        {
+          kind: "toggle",
+          id: "forge-failure-toasts",
+          title: "Toast when checks or runs fail",
+          description:
+            "Failures are the one GitHub event the footer interrupts for. Turn off for fully silent chips.",
+          keywords: "toast failure failing checks run notification",
+          get: () => settings.forgeFailureToasts,
+          set: (value) => settings.update({ forgeFailureToasts: value }),
+        },
+        {
+          kind: "toggle",
+          id: "forge-activity-toasts",
+          title: "Toast on GitHub activity",
+          description:
+            "Opt-in toasts for PR-opened and run-started transitions (off by default — failures above stay governed by their own toggle).",
+          keywords: "toast activity pull request run started",
+          get: () => settings.forgeActivityToasts,
+          set: (value) => settings.update({ forgeActivityToasts: value }),
         },
       ],
     },

@@ -121,6 +121,9 @@ import type {
   WorkflowRun,
   WorkflowRunDetail,
   WorktreeInfo,
+  ForgePrFile,
+  ForgeReviewThread,
+  ForgeSnapshot,
 } from "./types";
 
 // Payload types live in ./types (generated from Rust via ts-rs); the names
@@ -139,6 +142,9 @@ export type {
   ForgeIssueComment,
   ForgeIssueDetail,
   ForgeNotification,
+  ForgePrFile,
+  ForgeReviewThread,
+  ForgeSnapshot,
   ForgeStatus,
   GitignoreTemplate,
   IssueCreated,
@@ -640,6 +646,15 @@ export async function pickSaveFile(
     console.warn("[ipc] save picker failed:", err);
     return null;
   }
+}
+
+/**
+ * Writes UTF-8 text to a save-dialog destination (E2 run-log download —
+ * the same pickSaveFile-then-backend-write flow as the archive export).
+ * Rejects with the backend's error text on failure.
+ */
+export function exportText(destination: string, contents: string): Promise<void> {
+  return invokeTauri("export_text", { destination, contents });
 }
 
 // ---------- M11: repo health / maintenance / sparse / LFS / archive ----------
@@ -1764,9 +1779,69 @@ export function forgeStatus(): Promise<ForgeStatus> {
   return call<ForgeStatus>("forge_status", {});
 }
 
-/** Owner/repo/branch context of one open repo (errors on non-GitHub origin). */
-export function forgeContext(repoId: RepoId): Promise<ForgeContext> {
-  return call<ForgeContext>("forge_context", { repo_id: repoId });
+/**
+ * Hosts `gh auth status` reports (manual refresh of the backend host cache;
+ * `github.com` always included). Rejects with a {@link ForgeIpcError}.
+ */
+export function forgeHosts(): Promise<string[]> {
+  return callForge<string[]>("forge_hosts", {});
+}
+
+/**
+ * Owner/repo/branch context of one open repo (remote defaults to `origin`;
+ * `remote` selects the per-repo override). Rejects with a
+ * {@link ForgeIpcError} — kind `"NotRepo"` when the remote is missing or not
+ * GitHub (the FE's degraded "off" chip shows the reason verbatim).
+ */
+export function forgeContext(repoId: RepoId, remote?: string | null): Promise<ForgeContext> {
+  return callForge<ForgeContext>("forge_context", {
+    repo_id: repoId,
+    remote: remote ?? null,
+  });
+}
+
+/**
+ * One repo's batched GitHub snapshot (E1 footer chips): branch PR, HEAD
+ * check-runs, PR-head check-runs (when the PR head diverges), latest branch
+ * run, `pushed` flag and content hashes. Rejects with a
+ * {@link ForgeIpcError} (kind `"NotRepo"` on non-GitHub remotes; per-part
+ * failures ride inside the resolved snapshot's `error` field).
+ */
+export function forgeSnapshot(
+  repoId: RepoId,
+  remote?: string | null,
+): Promise<ForgeSnapshot> {
+  return callForge<ForgeSnapshot>("forge_snapshot", {
+    repo_id: repoId,
+    remote: remote ?? null,
+  });
+}
+
+/** Commit-level check-runs for an arbitrary sha (E2 commit surfaces). */
+export function forgeCommitChecks(
+  repoId: RepoId,
+  sha: string,
+): Promise<CheckInfo[]> {
+  return call<CheckInfo[]>("forge_commit_checks", { repo_id: repoId, sha });
+}
+
+/** The PR's changed files with their patches (E2's PR diff view). */
+export function forgePrFiles(
+  repoId: RepoId,
+  number: number,
+): Promise<ForgePrFile[]> {
+  return call<ForgePrFile[]>("forge_pr_files", { repo_id: repoId, number });
+}
+
+/** The PR's review threads, read-only (E2's review-thread panel). */
+export function forgePrReviewThreads(
+  repoId: RepoId,
+  number: number,
+): Promise<ForgeReviewThread[]> {
+  return call<ForgeReviewThread[]>("forge_pr_review_threads", {
+    repo_id: repoId,
+    number,
+  });
 }
 
 /**

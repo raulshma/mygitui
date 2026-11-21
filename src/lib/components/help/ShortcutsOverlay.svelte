@@ -23,6 +23,7 @@
   import {
     matchesShortcutQuery,
     shortcutSections,
+    surfaceShortcutSection,
     type ShortcutSection,
   } from "$lib/palette/shortcutSections";
   import { closeShortcuts, isShortcutsOpen } from "./shortcuts.svelte";
@@ -45,7 +46,9 @@
   /**
    * The grouped list, snapshotted once per open (bindings may change
    * mid-session via the Settings editor; the overlay re-mounts per open,
-   * so a snapshot at open time is always current). Filtered per keystroke.
+   * so a snapshot at open time is always current) plus the static §11
+   * "Row & composer keys" section (surface-local, non-rebindable keys the
+   * engine does not own — see `SURFACE_SHORTCUTS`). Filtered per keystroke.
    */
   let sections = $state<ShortcutSection[]>([]);
   // Opening snapshots the bindings and resets the session.
@@ -53,7 +56,7 @@
     if (!open) return;
     triggerEl =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    sections = shortcutSections(currentBindings());
+    sections = [...shortcutSections(currentBindings()), surfaceShortcutSection()];
     query = "";
     inputEl?.focus();
   });

@@ -212,7 +212,10 @@ async function launchWithSession(
 
 /**
  * Waits for the embedded submodule section to settle and reports its state.
- * `red` = the "Submodule error" box is (or was) visible.
+ * `red` = the "Submodule error" box is (or was) visible. Green markers are
+ * the settle-state texts the STATUS submodule accordion renders (Workstream
+ * B removed the per-accordion commit bars, so the list itself is the only
+ * marker).
  */
 async function submoduleOutcome(
   page: Page,
@@ -229,7 +232,7 @@ async function submoduleOutcome(
     }
     const loaded =
       (await page.getByText("No changes in submodule").count()) > 0 ||
-      (await page.locator(".sub-clean-hint, .embedded-commit-bar").count()) > 0;
+      (await page.locator(".sub-clean-hint").count()) > 0;
     if (loaded) {
       // Settle window: an error appearing slightly later still counts.
       await page.waitForTimeout(settleMs);

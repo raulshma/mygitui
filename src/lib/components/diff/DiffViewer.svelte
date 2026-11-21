@@ -3,8 +3,15 @@
    * DiffViewer — the app's primary diff surface (wave-2 lane B1).
    *
    * Contract: `{ files: FileDiff[]; mode?: "split" | "unified" }` (mode is
-   * additionally bindable; the internal toolbar button cycles it). Additive
-   * optional prop: `onLoadImage` supplies real URLs for image diffs.
+   * additionally bindable; the shared DiffToolbar flips it). Additive
+   * optional props: `onLoadImage` supplies real URLs for image diffs,
+   * `containerNarrow` feeds the narrow-container defaults (§7.5: under
+   * 700px the viewer auto-selects Unified and turns wrap off; a user
+   * override sticks for the session, in memory only — the persisted prefs
+   * keep ruling wide containers), and `onOpenInEditor` adds the toolbar
+   * overflow's "Open in editor" item. Surfaces that track their own panel
+   * width (commit detail) pass `containerNarrow`; standalone diff panes
+   * leave it unset and are measured here.
    *
    * Rendering is fully virtualized: buildRowModel flattens the files into
    * uniform-height row buckets (diff/rowModel.ts), buildLayout indexes them
@@ -16,7 +23,7 @@
   import type { FileDiff } from "$lib/ipc/types";
   import { onMount, untrack } from "svelte";
   import { discard, stage } from "$lib/ipc/client";
-  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
+  import { onUiEvent } from "$lib/palette/events";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
   import { ai } from "$lib/ai/ai.svelte";
@@ -50,12 +57,9 @@
   import { GUTTER_PX } from "$lib/components/diff/metrics";
   import { readWrapPref, writeWrapPref } from "$lib/diff/wrapPref";
   import { readDiffModePref, writeDiffModePref } from "$lib/diff/modePref";
-  import {
-    diffPrefs,
-    setHideWs,
-    setIgnoreWs,
-    setWordHighlights,
-  } from "$lib/diff/diffPrefs.svelte";
+  import { NARROW_PANEL_PX } from "$lib/layout/containerWidth.svelte";
+  import DiffToolbar from "./DiffToolbar.svelte";
+  import { diffPrefs } from "$lib/diff/diffPrefs.svelte";
   import { copyText } from "$lib/clipboard";
   import {
     showMenuAt,
@@ -78,7 +82,6 @@
   import DiffRow from "$lib/components/diff/DiffRow.svelte";
   import ExplainHunkPanel from "$lib/components/ai/ExplainHunkPanel.svelte";
   import EmptyState from "../layout/EmptyState.svelte";
-  import { Toggle } from "$lib/components/ui/toggle/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
 
   let {
@@ -93,6 +96,8 @@
     hunkDiscard = false,
     /** Called after a successful hunk stage/unstage/discard. */
     onMutated = undefined,
+    containerNarrow = null,
+    onOpenInEditor = undefined,
     initialScrollTop = undefined,
     initialRow = undefined,
     onScrollChange = undefined,
@@ -108,6 +113,16 @@
     hunkStaging?: "stage" | "unstage";
     hunkDiscard?: boolean;
     onMutated?: () => void;
+    /**
+     * Narrow-container control (plan §7.5): `true`/`false` when the OWNER
+     * tracks the surface's panel width (commit detail passes its panel
+     * measurement, so the files column never tips the diff into the
+     * narrow defaults on its own); `null` (default) makes the viewer
+     * measure its own root width — the standalone diff panes.
+     */
+    containerNarrow?: boolean | null;
+    /** Toolbar overflow "Open in editor" (surfaces that can edit). */
+    onOpenInEditor?: () => void;
     /**
      * Workspace-session restore: scroll position the FIRST landed files
      * batch applies (overriding the reset-to-0 below, once). Read at
@@ -162,12 +177,34 @@
     typeof initialRow === "number" && initialRow > 0 ? initialRow : null;
 
   const collapsedSet = $derived(new Set(Object.keys(collapsed).filter((p) => collapsed[p])));
+
+  // -- narrow-container defaults (plan §7.5) ------------------------------------
+  //
+  // A panel under `NARROW_PANEL_PX` (700px) auto-selects Unified and turns
+  // wrap OFF (horizontal scroll instead of wrapped-line walls) — but a user
+  // override sticks for the session, in memory only: the persisted prefs
+  // keep governing wide containers exactly as before, and the narrow
+  // override is deliberately not written to localStorage (the next session
+  // at a narrow width starts from the auto default again).
+  let modeOverride: DiffMode | null = $state(null);
+  let wrapOverride: boolean | null = $state(null);
+
+  const narrow = $derived(
+    containerNarrow !== null
+      ? containerNarrow
+      : viewportW > 0 && viewportW < NARROW_PANEL_PX,
+  );
+  /** The mode actually rendered: session override > narrow auto > pref. */
+  const effMode = $derived(modeOverride ?? (narrow ? "unified" : mode));
+  /** The wrap actually rendered: session override > narrow auto > pref. */
+  const effWrap = $derived(wrapOverride ?? (narrow ? false : wrap));
+
   // Whitespace toggles (diffPrefs) feed the model: "ignore whitespace"
   // drops the zero-hunk file entries the backend keeps for ws-only deltas,
   // "hide whitespace changes" filters the paired ws-only rows (rowModel.ts
   // owns the heuristic) so counts/virtualization stay consistent.
   const model = $derived(
-    buildRowModel(files, mode, collapsedSet, {
+    buildRowModel(files, effMode, collapsedSet, {
       ignoreWhitespaceFiles: diffPrefs.ignoreWs,
       hideWhitespaceRows: diffPrefs.hideWs,
     }),
@@ -179,7 +216,7 @@
   let heightOverrides = $state<Record<number, number>>({});
 
   /** Wrap metrics for the current viewport width; null = wrap off. */
-  const wrapCtx = $derived(wrap ? wrapMetrics(viewportW, mode) : null);
+  const wrapCtx = $derived(effWrap ? wrapMetrics(viewportW, effMode) : null);
 
   const baseHeights = $derived(
     wrapCtx ? wrappedHeights(model.rows, wrapCtx) : rowHeights(model.rows),
@@ -223,30 +260,23 @@
     wrapFeedback.invalidate();
   });
 
+  /** Sets wrap, remembering the session override (persisted when wide). */
+  function setWrap(next: boolean): void {
+    wrap = next;
+    wrapOverride = next;
+    if (!narrow) writeWrapPref(next);
+  }
+
   function toggleWrap(): void {
-    wrap = !wrap;
-    writeWrapPref(wrap);
+    setWrap(!effWrap);
   }
 
   // Palette command rides the bus; every mounted viewer flips its wrap.
   $effect(() => onUiEvent("diff-toggle-wrap", toggleWrap));
 
   // -- whitespace + word-highlight toggles (diffPrefs, see diffPrefs.svelte) --
-
-  /** Ignore-whitespace flips the backend query: streaming parents re-run. */
-  function toggleIgnoreWs(): void {
-    const next = !diffPrefs.ignoreWs;
-    setIgnoreWs(next);
-    emitUiEvent("diff-ignore-ws-changed", { ignore: next });
-  }
-
-  function toggleHideWs(): void {
-    setHideWs(!diffPrefs.hideWs);
-  }
-
-  function toggleWordHighlights(): void {
-    setWordHighlights(!diffPrefs.wordHighlights);
-  }
+  // The toggles moved into the shared DiffToolbar (which owns the setters
+  // and the re-query event); DiffViewer only reads the store here.
 
   // -- find-in-diff (Ctrl/Cmd+F via the palette `diff.find` event) -----------
   //
@@ -389,6 +419,30 @@
   // -- copy actions (row / file-header context menu; clipboard via the
   //    shared copyText helper, like every other surface) ----------------------
 
+  /** Toolbar overflow "Copy diff": the whole diff as one patch text. */
+  function copyWholeDiff(): void {
+    const parts: string[] = [];
+    for (const file of files) {
+      if (file.binary || file.is_image) continue;
+      parts.push(filePatchText(file));
+    }
+    if (parts.length > 0) void copyText(parts.join("\n"), "diff");
+  }
+
+  /**
+   * Scrolls the diff to `path`'s file-header row (the file lists call this
+   * to navigate a long multi-file diff). Returns false when the row isn't
+   * in the model (unknown path, or the diff is empty/binary-only).
+   */
+  export function revealFile(path: string): boolean {
+    const index = model.rows.findIndex(
+      (row) => row.kind === "file-header" && row.file.path === path,
+    );
+    if (index < 0) return false;
+    scrollToRow(index);
+    return true;
+  }
+
   /**
    * Row context menu: copy the line under the pointer (a split row copies
    * the half it hit), the hunk patch, the whole file patch, or the path.
@@ -475,9 +529,9 @@
    * from the rows.
    */
   const contentMinWidth = $derived.by(() => {
-    if (wrap) return "100%";
+    if (effWrap) return "100%";
     const widest = measureLineWidth(model.maxLineText);
-    if (mode === "unified") {
+    if (effMode === "unified") {
       return `max(100%, calc(${GUTTER_PX.unified}px + ${widest}px))`;
     }
     if (!model.hasSplitRows) {
@@ -494,12 +548,14 @@
   }
 
   function cycleMode(): void {
-    setMode(mode === "split" ? "unified" : "split");
+    setMode(effMode === "split" ? "unified" : "split");
   }
 
+  /** Sets the mode, remembering the session override (persisted when wide). */
   function setMode(next: DiffMode): void {
     mode = next;
-    writeDiffModePref(next);
+    modeOverride = next;
+    if (!narrow) writeDiffModePref(next);
   }
 
   // Palette command rides the bus; every mounted viewer flips its mode.
@@ -882,7 +938,7 @@
   let stopDrag: (() => void) | null = null;
 
   function onContentMouseDown(event: MouseEvent): void {
-    if (event.button !== 0 || mode !== "split") return;
+    if (event.button !== 0 || effMode !== "split") return;
     const half =
       event.target instanceof Element ? event.target.closest(".half") : null;
     if (!half) return;
@@ -905,7 +961,7 @@
 
   /** Double-click selects the word under the caret (native one is blocked). */
   function onContentDblClick(event: MouseEvent): void {
-    if (event.button !== 0 || mode !== "split") return;
+    if (event.button !== 0 || effMode !== "split") return;
     const half =
       event.target instanceof Element ? event.target.closest(".half") : null;
     if (!half) return;
@@ -1019,8 +1075,8 @@
   });
 
   $effect(() => {
-    void mode;
-    void wrap;
+    void effMode;
+    void effWrap;
     selectionCtl.clearSegments();
   });
 
@@ -1065,88 +1121,20 @@
   </div>
 {:else}
   <div class="diff-viewer relative flex h-full min-h-0 flex-col bg-background">
-    <div class="toolbar flex min-h-7 shrink-0 items-center gap-1.5 border-b border-[var(--diff-divider)] bg-card px-2.5 py-0.5">
-      <div class="segmented inline-flex shrink-0 overflow-hidden rounded border border-border" role="group" aria-label="Diff layout">
-        <Hint label="Show old and new side by side">
-          {#snippet child({ props })}
-            <Toggle
-              {...props}
-              class="h-auto rounded-none border-0 px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-              pressed={mode === "split"}
-              onPressedChange={(next) => next && setMode("split")}
-            >Split</Toggle>
-          {/snippet}
-        </Hint>
-        <Hint label="Show old and new in one column">
-          {#snippet child({ props })}
-            <Toggle
-              {...props}
-              class="h-auto rounded-none border-0 border-l border-l-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-              pressed={mode === "unified"}
-              onPressedChange={(next) => next && setMode("unified")}
-            >Unified</Toggle>
-          {/snippet}
-        </Hint>
-      </div>
-      <!-- Option, not a mode: sits outside the Split/Unified group with a
-           wider gap so the two clusters don't read as one four-way switch. -->
-      <Hint
-        label={wrap
-          ? "Long lines wrap — click to scroll instead"
-          : "Long lines scroll — click to wrap"}
-      >
-        {#snippet child({ props })}
-          <Toggle
-            {...props}
-            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-            pressed={wrap}
-            onPressedChange={() => toggleWrap()}
-            aria-label="Wrap long lines"
-          >Wrap</Toggle>
-        {/snippet}
-      </Hint>
-      <!-- Whitespace + word-highlight preferences (persisted globally in
-           diffPrefs; the ws toggles re-query/filter the diff, the
-           highlight toggle gates DiffRow's word-level spans). -->
-      <Hint label="Ignore whitespace-only changes (re-queries the diff)">
-        {#snippet child({ props })}
-          <Toggle
-            {...props}
-            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-            pressed={diffPrefs.ignoreWs}
-            onPressedChange={() => toggleIgnoreWs()}
-            aria-label="Ignore whitespace"
-          >Ignore ws</Toggle>
-        {/snippet}
-      </Hint>
-      <Hint label="Hide whitespace-only changed lines">
-        {#snippet child({ props })}
-          <Toggle
-            {...props}
-            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-            pressed={diffPrefs.hideWs}
-            onPressedChange={() => toggleHideWs()}
-            aria-label="Hide whitespace changes"
-          >Hide ws</Toggle>
-        {/snippet}
-      </Hint>
-      <Hint label="Word-level highlights on changed lines">
-        {#snippet child({ props })}
-          <Toggle
-            {...props}
-            class="ml-1.5 h-auto shrink-0 rounded border border-border px-2 py-0 text-ui-micro leading-[1.5] font-normal text-muted-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary focus-visible:ring-0"
-            pressed={diffPrefs.wordHighlights}
-            onPressedChange={() => toggleWordHighlights()}
-            aria-label="Word highlights"
-          >Word hl</Toggle>
-        {/snippet}
-      </Hint>
-      <span class="stats ml-auto flex items-center gap-ui-4 text-ui-micro text-muted-foreground tabular-nums">
-        <span class="stat-files">{model.fileCount} {model.fileCount === 1 ? "file" : "files"}</span>
-        <span class="stat-adds text-[var(--app-added)]">+{model.totalAdditions}</span>
-        <span class="stat-dels text-[var(--app-deleted)]">−{model.totalDeletions}</span>
-      </span>
-    </div>
+    <!-- Plan §7.4: ONE toolbar for every diff surface — segmented
+         Split|Unified + icon toggles (Wrap, Ignore whitespace) + overflow
+         (copy diff, open in editor, hide-ws / word-highlight). -->
+    <DiffToolbar
+      mode={effMode}
+      wrap={effWrap}
+      fileCount={model.fileCount}
+      additions={model.totalAdditions}
+      deletions={model.totalDeletions}
+      onModeChange={setMode}
+      onWrapChange={setWrap}
+      onCopyDiff={copyWholeDiff}
+      {onOpenInEditor}
+    />
 
     {#if findOpen}
       <!-- Find bar (palette `diff.find` / Ctrl/Cmd+F): case-insensitive
@@ -1158,7 +1146,7 @@
           type="text"
           placeholder="Find (case-insensitive)"
           aria-label="Find in diff"
-          class="h-6 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-ui-tiny leading-[1.5] outline-none placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+          class="h-6 min-w-0 flex-1 rounded-sm border border-border bg-background px-2 font-mono text-ui-meta leading-[1.5] outline-none placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
           onkeydown={findKeydown}
         />
         <span class="find-count shrink-0 whitespace-nowrap text-ui-micro leading-[1.5] tabular-nums text-muted-foreground" role="status">
@@ -1171,7 +1159,7 @@
             <button
               {...props}
               type="button"
-              class="find-prev h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              class="find-prev h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-meta leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Previous match"
               disabled={matches.length === 0}
               onclick={() => findStep(-1)}
@@ -1183,7 +1171,7 @@
             <button
               {...props}
               type="button"
-              class="find-next h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              class="find-next h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-meta leading-[1.5] text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Next match"
               disabled={matches.length === 0}
               onclick={() => findStep(1)}
@@ -1195,7 +1183,7 @@
             <button
               {...props}
               type="button"
-              class="find-close h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-tiny leading-[1.5] text-muted-foreground hover:text-foreground"
+              class="find-close h-6 shrink-0 cursor-pointer rounded-sm border border-border bg-background px-2 text-ui-meta leading-[1.5] text-muted-foreground hover:text-foreground"
               aria-label="Close find"
               onclick={closeFind}
             >✕</button>
@@ -1225,10 +1213,10 @@
             {#each model.rows.slice(slice.firstRow, slice.firstRow + slice.count) as row, i (slice.firstRow + i)}
               <DiffRow
                 {row}
-                {wrap}
+                wrap={effWrap}
                 rowIndex={slice.firstRow + i}
-                heightPx={wrap ? heights[slice.firstRow + i] : undefined}
-                onMeasure={wrap ? wrapFeedback.measure : undefined}
+                heightPx={effWrap ? heights[slice.firstRow + i] : undefined}
+                onMeasure={effWrap ? wrapFeedback.measure : undefined}
                 onToggleCollapse={toggleCollapse}
                 {onLoadImage}
                 onStageHunk={repoId && hunkStaging ? stageHunk : undefined}

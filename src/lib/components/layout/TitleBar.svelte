@@ -7,10 +7,15 @@
    * tauri.conf.json / the popout builder) so the native traffic lights
    * float over this bar.
    *
+   * Since Workstream A (§5.2) this is the ONE top chrome row: the
+   * repository tab strip renders inside it (the `tabs` snippet, App.svelte)
+   * so title bar + repo tabs cost a single ~40px row instead of two.
+   *
    * Native window functionality is preserved through the Tauri window API:
    * - Dragging: the bar is `data-tauri-drag-region="deep"` — every click in
    *   the subtree starts the OS move loop (edge snapping / GNOME tiling
-   *   work as with a native bar); interactive elements (buttons) block it.
+   *   work as with a native bar); interactive elements (buttons, the tab
+   *   strip's labels) block it.
    * - Double-click maximize: Tauri's injected drag script toggles
    *   maximization on drag-region double-clicks itself (this component
    *   must NOT add its own dblclick handler — it would toggle twice).
@@ -34,6 +39,7 @@
    * plugin in the app) — it only decides whether the custom controls show.
    */
 
+  import type { Snippet } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import type { Window as TauriWindow } from "@tauri-apps/api/window";
   import { isTauri } from "$lib/entry/dragdrop";
@@ -71,6 +77,17 @@
   /** Maximized/fullscreen tracking for the glyph swap + zone visibility. */
   let maximized = $state(false);
   let fullscreen = $state(false);
+
+  /**
+   * Workstream A (§5.2): the repository tab strip renders INSIDE this bar —
+   * one 40px chrome row instead of a title bar + tab strip stack. The
+   * snippet carries the whole strip (home button, repo tabs, trailing
+   * status cluster + overflow); with it absent (popouts, home, launch) the
+   * bar shows the plain brand + window title and stays a pure title bar.
+   * Drag semantics are untouched: the `deep` drag region still covers the
+   * subtree, and interactive elements inside the snippet block dragging.
+   */
+  let { tabs = undefined }: { tabs?: Snippet } = $props();
 
   /** Native title of a popout window, fetched once on mount. */
   let popoutTitle = $state<string | null>(null);
@@ -206,21 +223,34 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- Right-click opens the native-style window menu (see `windowMenu`). -->
 <header
-  class="titlebar {isMac ? 'pl-[78px]' : ''} flex h-8 flex-none select-none items-stretch border-b border-border bg-card"
+  class="titlebar {isMac ? 'pl-[78px]' : ''} flex h-10 flex-none select-none items-stretch border-b border-border bg-card"
   data-tauri-drag-region={native ? "deep" : undefined}
   oncontextmenu={windowMenu}
 >
+  <!-- With repo tabs in the row the title text would duplicate the active
+       tab (both spell the repo name), so the brand shrinks to the mark and
+       the strip takes the remaining width. -->
   <div
-    class="brand flex min-w-0 flex-1 items-center gap-ui-4 px-ui-45"
+    class="brand flex min-w-0 items-center gap-ui-4 px-ui-45 {tabs
+      ? 'flex-none'
+      : 'flex-1'}"
     aria-hidden="true"
   >
     <span class="brand-mark flex-none text-primary">
       <Icon icon={iconBrand} size={14} />
     </span>
-    <span class="title truncate text-ui-meta font-medium text-muted-foreground">
-      {displayTitle}
-    </span>
+    {#if !tabs}
+      <span class="title truncate text-ui-meta font-medium text-muted-foreground">
+        {displayTitle}
+      </span>
+    {/if}
   </div>
+
+  {#if tabs}
+    <!-- The merged row's center: home button + repo tabs + trailing status
+         cluster / overflow (App.svelte's TabStrip, chrome-less). -->
+    {@render tabs()}
+  {/if}
 
   {#if native && !isMac}
     <div class="controls flex flex-none items-stretch">

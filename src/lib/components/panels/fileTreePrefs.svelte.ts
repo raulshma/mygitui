@@ -12,6 +12,7 @@
 
 const EXPANDED_KEY_PREFIX = "mygitui.files.expanded.";
 const SHOW_IGNORED_KEY = "mygitui.files.show-ignored";
+const SHOW_SIZES_KEY = "mygitui.files.show-sizes";
 const PERSIST_DEBOUNCE_MS = 150;
 
 /** Storage backend (localStorage in the app; injectable for tests). */
@@ -42,10 +43,14 @@ export class FileTreePrefs {
   /** Global toggle: bypass the backend gitignore filter. */
   showIgnored = $state(false);
 
+  /** Global toggle: per-row file sizes (hidden by default, plan §5.6). */
+  showSizes = $state(false);
+
   constructor(options: FileTreePrefsOptions = {}) {
     this.storage =
       options.storage !== undefined ? options.storage : defaultStorage();
     this.showIgnored = this.readShowIgnored();
+    this.showSizes = this.readShowSizes();
   }
 
   // -- expanded sets ----------------------------------------------------
@@ -131,6 +136,25 @@ export class FileTreePrefs {
   private readShowIgnored(): boolean {
     try {
       return this.storage?.getItem(SHOW_IGNORED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  // -- show-sizes toggle ----------------------------------------------------
+
+  setShowSizes(value: boolean): void {
+    this.showSizes = value;
+    try {
+      this.storage?.setItem(SHOW_SIZES_KEY, value ? "1" : "0");
+    } catch {
+      // Keep the in-memory preference.
+    }
+  }
+
+  private readShowSizes(): boolean {
+    try {
+      return this.storage?.getItem(SHOW_SIZES_KEY) === "1";
     } catch {
       return false;
     }

@@ -8,7 +8,7 @@
  * phase `window` keydown listener that maps events to command ids.
  *
  * Combo strings are platform-agnostic and canonical: lowercase modifiers in
- * `ctrl` < `alt` < `shift` order, then the key (`"ctrl+shift+p"`,
+ * `ctrl` < `alt` < `shift` order, then the key (`"ctrl+shift+k"`,
  * `"ctrl+alt+arrowright"`, `"f5"`). On macOS `Cmd` plays `Ctrl`'s role: the
  * matcher normalizes `metaKey` to `ctrl` there (and accepts physical Ctrl
  * too), so one stored binding works on every platform. User overrides
@@ -39,11 +39,17 @@ export type Platform = "mac" | "pc";
 
 /**
  * Default bindings, keyed by command id (the ids in `$lib/palette/commands`).
- * The quick switcher's cmd/ctrl+K is intentionally NOT here — the switcher
- * owns its shortcut in its own component (B4 lane).
+ *
+ * Ctrl+K is the command palette's key (plan §12 P2: "command palette
+ * (Ctrl+K) over existing commands") — it used to toggle the quick switcher,
+ * which predated the palette's keybind-engine ownership; the switcher moved
+ * onto the engine with Ctrl+Shift+K (§11: every shortcut documented in the
+ * `?` cheatsheet and rebindable in Settings — the switcher's old
+ * component-owned Ctrl+K was neither).
  */
 export const DEFAULT_BINDINGS: Record<string, string> = {
-  "app.palette": "ctrl+shift+p",
+  "app.palette": "ctrl+k",
+  "app.quick-switcher": "ctrl+shift+k",
   "app.settings": "ctrl+comma",
   "repo.refresh": "f5",
   "tab.next": "ctrl+alt+arrowright",
@@ -62,6 +68,8 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   "panel.focus-terminal": "ctrl+9",
   "panel.focus-history": "ctrl+0",
   "panel.focus-assistant": "ctrl+alt+a",
+  // The GitHub panel (E1): "G" for GitHub; every digit slot was taken.
+  "panel.focus-forge": "ctrl+shift+g",
   "files.quick-open": "ctrl+p",
   "files.save": "ctrl+s",
   "files.markdown-view": "ctrl+shift+v",
@@ -228,7 +236,7 @@ function displayKey(key: string): string {
 }
 
 /**
- * Display form for hints: `"ctrl+shift+p"` → `"Ctrl+Shift+P"`, or `"⇧⌘P"`
+ * Display form for hints: `"ctrl+shift+k"` → `"Ctrl+Shift+K"`, or `"⇧⌘K"`
  * on macOS where the matcher treats Cmd as `ctrl`. Modifier order follows
  * each platform's convention (macOS: ⌥⇧⌘, no separators).
  */
