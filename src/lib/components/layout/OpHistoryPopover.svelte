@@ -48,7 +48,7 @@
 
   const iconDone = $derived(appIcon("check-circle")!);
   const iconAlert = $derived(appIcon("triangle-alert")!);
-  const iconBan = $derived(appIcon("ban")!);
+  const iconBan = $derived(appIcon("block")!);
 
   const entries = $derived(opHistoryFor(repoId));
   /** The repo's in-flight ops, listed above the completed ring. */

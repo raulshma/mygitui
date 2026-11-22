@@ -1439,14 +1439,29 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
             url: None,
         };
     }
-    if combined.to_ascii_lowercase().contains("already exists") {
+    let lower = combined.to_ascii_lowercase();
+    // Device runs exec `gh` through the remote shell: a missing binary is a
+    // 127 with "<shell>: gh: command not found" on stderr — the SSH transport
+    // itself succeeded, so there is no spawn_error to classify from (an
+    // unclassified miss here would leave the chips in their empty states with
+    // no guidance instead of the install banner).
+    if lower.contains("command not found") && lower.contains("gh") {
+        return ForgeError {
+            kind: KIND_NO_GH.to_string(),
+            message: format!(
+                "gh CLI not found on the repository's machine ({}) — install it there and run `gh auth login`",
+                trim_message(combined)
+            ),
+            url: None,
+        };
+    }
+    if lower.contains("already exists") {
         return ForgeError {
             kind: KIND_ALREADY_EXISTS.to_string(),
             message: "a pull request for this branch already exists".to_string(),
             url: extract_pull_url(combined),
         };
     }
-    let lower = combined.to_ascii_lowercase();
     if RATE_LIMIT_MARKERS
         .iter()
         .any(|marker| lower.contains(marker))

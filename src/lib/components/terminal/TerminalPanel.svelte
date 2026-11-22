@@ -386,7 +386,7 @@
             aria-expanded={manageOpen}
             onclick={openManage}
           >
-            <Icon icon={appIcon("sliders-horizontal")!} size={11} />
+            <Icon icon={appIcon("tune")!} size={11} />
           </Button>
         {/snippet}
       </Hint>

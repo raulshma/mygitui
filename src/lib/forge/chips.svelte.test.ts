@@ -32,6 +32,7 @@ import {
   workflowList,
 } from "$lib/ipc/client";
 import type {
+  DeviceInfo,
   ForgeSnapshot,
   NetStats,
   RemoteInfo,
@@ -44,6 +45,7 @@ import { resetRepoEvictors } from "$lib/state/repoEvictors";
 import { PollScheduler } from "$lib/stores/pollScheduler.svelte";
 import { pollScheduler } from "$lib/stores/pollScheduler.svelte";
 import { forgeStore } from "$lib/stores/forge.svelte";
+import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
 import { tabStore, type Tab } from "$lib/stores/tabs.svelte";
 import { forgeChips, snapshotLaneKey } from "./chips.svelte";
 import { runDetailSignature } from "$lib/components/forge/forgeModel";
@@ -104,6 +106,23 @@ function snapshot(hash: number, patch: Partial<ForgeSnapshot> = {}): ForgeSnapsh
   };
 }
 
+/** A registry entry for one device (`status` drives the chips' probe guard). */
+function device(id: string, status: DeviceInfo["status"]): DeviceInfo {
+  return {
+    profile: {
+      id,
+      name: id,
+      host: "box.local",
+      port: 22,
+      username: "me",
+      auth: { kind: "key_file", key_path: "/keys/id_ed25519", has_passphrase: false },
+      poll_secs: 5,
+      auto_connect: false,
+    },
+    status,
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
@@ -116,6 +135,7 @@ beforeEach(() => {
   });
   tabStore.tabs = [];
   tabStore.activeId = null;
+  remoteDevices.devices = [];
   pollScheduler.stopAll();
   // The chips singleton keeps its own lane bookkeeping — reset it so every
   // test starts with a clean scheduler + store pair.
@@ -132,6 +152,7 @@ afterEach(() => {
   forgeChips.clear("r2");
   tabStore.tabs = [];
   tabStore.activeId = null;
+  remoteDevices.devices = [];
   forgeStore.dropSnapshot("r1");
   forgeStore.dropSnapshot("r2");
   resetRepoEvictors();
@@ -195,6 +216,32 @@ describe("snapshot lanes (syncLanes)", () => {
     tabStore.activeId = "r1";
     forgeChips.syncLanes();
     expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeDefined();
+  });
+
+  it("probes a connected device tab's gh status once (the device's own gh)", async () => {
+    remoteDevices.devices = [device("dev-probe-a", "connected")];
+    tabStore.tabs = [tab({ id: "r1", deviceId: "dev-probe-a" })];
+    tabStore.activeId = "r1";
+    forgeChips.syncLanes();
+    expect(mockForgeStatus).toHaveBeenCalledWith("r1");
+
+    // The probe lands under the device key: further syncs (tab switches,
+    // cadence changes) do not re-probe the same device.
+    await flushAsync();
+    mockForgeStatus.mockClear();
+    forgeChips.syncLanes();
+    await flushAsync();
+    expect(mockForgeStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not probe a disconnected device's gh status", async () => {
+    remoteDevices.devices = [device("dev-probe-b", "disconnected")];
+    tabStore.tabs = [tab({ id: "r1", deviceId: "dev-probe-b" })];
+    tabStore.activeId = "r1";
+    forgeChips.syncLanes();
+    mockForgeStatus.mockClear();
+    await flushAsync();
+    expect(mockForgeStatus).not.toHaveBeenCalled();
   });
 
   it("the lane work fetches the snapshot and a failure backs the lane off", async () => {

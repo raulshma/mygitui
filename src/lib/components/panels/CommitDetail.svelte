@@ -890,7 +890,11 @@
       </Hint>
     {/snippet}
     {#snippet filesPane()}
-    <div class="dfiles flex min-w-0 flex-1 flex-col">
+    <!-- min-h-0 keeps the flex chain confined: without it the body grows to
+         the diff's full content height (the viewport then matches it —
+         nothing to scroll, and the virtualizer mounts every row, which is
+         the whole-app lag when a large commit is opened). -->
+    <div class="dfiles flex min-h-0 min-w-0 flex-1 flex-col">
       {#if blameTarget}
         <div class="dtab flex flex-none items-center gap-2 border-b border-border bg-muted py-0.5 pr-2 pl-3 text-ui-meta text-foreground">
           <span class="min-w-0 flex-1 truncate font-mono">Blame: {blameTarget.path}</span>

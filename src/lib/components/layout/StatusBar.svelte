@@ -99,7 +99,7 @@
   const iconChanges = $derived(panelIconData("status"));
   const iconOutput = $derived(appIcon("terminal")!);
   const iconDone = $derived(appIcon("check-circle")!);
-  const iconBan = $derived(appIcon("ban")!);
+  const iconBan = $derived(appIcon("block")!);
 
   /** "1 commit" / "3 commits" for tooltips; counts capped like the header. */
   function commitCount(count: number): string {

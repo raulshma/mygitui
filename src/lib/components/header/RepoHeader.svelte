@@ -20,13 +20,19 @@
    * button with the shared OverflowMenu primitive (bits-ui dropdown-menu):
    * same accessible name, same `role="menu"` content — but nested. The
    * repo-specific commands (bisect, save layout, clean, reset, recents)
-   * arrive as the `headerOverflow` snippet from RepoView, which owns them.
+   * arrive as the `headerActions` data prop from RepoView, which owns them.
+   *
+   * Pinning (repoActionPins): every menu entry — the two submenus and each
+   * command — can be pinned to the header bar for one-click access. Pinned
+   * entries render as icon buttons before the ⋯ menu (submenus open their
+   * picker; commands run); a trailing pin toggle on each menu row and a
+   * "Pin to bar" item inside the submenus flip the state, right-click on a
+   * pinned button unpins it.
    *
    * State arrives via props; user intents are emitted through callback
    * props, and header-exclusive reads (layout presets, open-with apps)
    * live here.
    */
-  import type { Snippet } from "svelte";
   import type { EditorApp, RepoStatus } from "$lib/ipc/types";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
@@ -40,6 +46,9 @@
   import BranchSwitcher from "$lib/components/header/BranchSwitcher.svelte";
   import RepoQuickActions from "$lib/components/header/RepoQuickActions.svelte";
   import CustomAppsDialog from "$lib/components/openWith/CustomAppsDialog.svelte";
+  import { repoActionPins } from "$lib/stores/repoActionPins.svelte";
+  import { showMenuAt } from "$lib/components/menu/contextMenuStore.svelte";
+  import type { HeaderAction } from "./headerActions";
   import {
     currentEntry,
     customEntries,
@@ -61,7 +70,7 @@
     onMutated = undefined,
     onToggleHistory,
     onNewTerminal,
-    headerOverflow = undefined,
+    headerActions = undefined,
   }: {
     repoId: string;
     /** Repository display name (leftmost, truncated with a tooltip). */
@@ -84,10 +93,11 @@
     onNewTerminal: () => void;
     /**
      * Repo-specific overflow commands (bisect, save layout, clean, reset,
-     * recents) — rendered inside "More repository actions" after the
-     * header-owned "Layout preset" / "Open with" submenus.
+     * recents) as data — rendered inside "More repository actions" after
+     * the header-owned "Layout preset" / "Open with" submenus, and the
+     * source for the pinned header buttons (`repoActionPins`).
      */
-    headerOverflow?: Snippet;
+    headerActions?: HeaderAction[];
   } = $props();
 
   const iconInfo = $derived(appIcon("info")!);
@@ -97,6 +107,7 @@
   const iconCustom = $derived(appIcon("terminal")!);
   const iconManage = $derived(appIcon("edit")!);
   const iconPreset = $derived(appIcon("account-tree")!);
+  const iconPin = $derived(appIcon("push-pin")!);
 
   /** The preset's display name (the submenu trigger's summary). */
   const presetName = $derived(layouts.presetById(presetId)?.name ?? "Default");
@@ -197,7 +208,126 @@
     await openWithEntry(root, entry, openWithDeviceId);
     launching = false;
   }
+
+  // -- pinnable menu entries (repoActionPins) -----------------------------------
+
+  /**
+   * Every "More repository actions" entry can be pinned to the header bar
+   * (the railPins idiom): a pinned submenu opens its picker directly, a
+   * pinned command runs it. The two header-owned submenu ids share the
+   * pin list with RepoView's command ids — one list, one order.
+   */
+  const LAYOUT_PRESET_PIN_ID = "layout-preset";
+  const OPEN_WITH_PIN_ID = "open-with";
+
+  /** Right-click on a pinned bar button unpins it. */
+  function pinnedContext(event: MouseEvent, id: string): void {
+    showMenuAt(event, [
+      {
+        id: `unpin-${id}`,
+        label: "Unpin from bar",
+        icon: iconPin,
+        run: () => repoActionPins.unpin(id),
+      },
+    ]);
+  }
+
+  /** The menu row's trailing pin toggle (ContextMenu entry-action idiom). */
+  function togglePin(event: Event, id: string): void {
+    // Keep the click from activating the menu row under the button.
+    event.preventDefault();
+    event.stopPropagation();
+    repoActionPins.toggle(id);
+  }
 </script>
+
+<!-- Shared submenu bodies: each renders inside the overflow's submenu AND
+     the pinned bar button's picker (repoActionPins pins the whole submenu,
+     so both surfaces must offer the same entries). -->
+{#snippet presetsEntries()}
+  <DropdownMenu.RadioGroup
+    value={presetId}
+    onValueChange={(value) => layouts.applyPreset(root, value)}
+  >
+    {#each layouts.listPresets() as preset (preset.id)}
+      <DropdownMenu.RadioItem class="cursor-pointer" value={preset.id}>
+        {preset.name}
+      </DropdownMenu.RadioItem>
+    {/each}
+  </DropdownMenu.RadioGroup>
+{/snippet}
+
+{#snippet openWithEntries()}
+  {#if openWithCurrent}
+    <DropdownMenu.Item
+      class="cursor-pointer gap-ui-3"
+      disabled={launching}
+      onclick={() => void launch(openWithCurrent)}
+    >
+      <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+        <Icon icon={openWithCurrent.custom ? iconCustom : (appIcons[openWithCurrent.id] ?? iconOpenWith)} size={16} />
+      </span>
+      Open with {openWithCurrent.name}
+    </DropdownMenu.Item>
+    <DropdownMenu.Separator />
+  {/if}
+  {#each apps as app (app.id)}
+    <DropdownMenu.Item
+      class="cursor-pointer gap-ui-3"
+      disabled={launching || appNeedsLocal(app.id)}
+      title={appNeedsLocal(app.id)
+        ? `${app.name} cannot open repositories on the device — it has no SSH remote support (VS Code, VSCodium, Cursor, and Windsurf do)`
+        : undefined}
+      onclick={() => void launch({ id: app.id, name: app.name })}
+    >
+      <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+        <Icon icon={appIcons[app.id] ?? iconOpenWith} size={16} />
+      </span>
+      {app.name}
+    </DropdownMenu.Item>
+  {/each}
+  {#if openWithCustoms.length > 0}
+    <DropdownMenu.Separator />
+    {#each openWithCustoms as entry (entry.id)}
+      <DropdownMenu.Item
+        class="cursor-pointer gap-ui-3"
+        disabled={launching}
+        onclick={() => void launch(entry)}
+      >
+        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+          <Icon icon={iconCustom} size={16} />
+        </span>
+        {entry.name}
+      </DropdownMenu.Item>
+    {/each}
+  {/if}
+  <DropdownMenu.Separator />
+  <DropdownMenu.Item
+    class="cursor-pointer gap-ui-3"
+    onclick={() => (manageOpen = true)}
+  >
+    <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+      <Icon icon={iconManage} size={16} />
+    </span>
+    Manage custom apps…
+  </DropdownMenu.Item>
+{/snippet}
+
+<!-- The submenu pin rows share the submenu bodies' surface (one per
+     submenu, above its entries; flipping keeps the submenu open). -->
+{#snippet pinRow(id: string, pinnedLabel: string)}
+  <DropdownMenu.Item
+    class="cursor-pointer gap-ui-3"
+    closeOnSelect={false}
+    onclick={() => repoActionPins.toggle(id)}
+  >
+    <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+      <Icon icon={iconPin} size={16} />
+    </span>
+    {repoActionPins.has(id) ? `Unpin ${pinnedLabel} from bar` : `Pin ${pinnedLabel} to bar`}
+  </DropdownMenu.Item>
+  <DropdownMenu.Separator />
+{/snippet}
 
 <header
   class="repo-header flex h-9 min-h-9 flex-none items-center gap-x-2 border-b border-border bg-popover px-2.5 text-ui-base"
@@ -265,6 +395,73 @@
         </Button>
       {/snippet}
     </Hint>
+    <!-- Pinned menu entries (repoActionPins): pin-order icon buttons —
+         submenu pins open their picker, command pins run. Right-click
+         unpins (railPins idiom). -->
+    {#each repoActionPins.pins as pinId (pinId)}
+      {#if pinId === LAYOUT_PRESET_PIN_ID}
+        <DropdownMenu.Root>
+          <Hint label="Layout preset">
+            {#snippet child({ props })}
+              <DropdownMenu.Trigger
+                {...props}
+                class="inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                type="button"
+                aria-label="Layout preset"
+                aria-haspopup="menu"
+                oncontextmenu={(event) => pinnedContext(event, pinId)}
+              >
+                <Icon icon={iconPreset} size={16} />
+              </DropdownMenu.Trigger>
+            {/snippet}
+          </Hint>
+          <DropdownMenu.Content align="end" class="min-w-40">
+            {@render presetsEntries()}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {:else if pinId === OPEN_WITH_PIN_ID}
+        <DropdownMenu.Root onOpenChange={(open) => open && probeApps()}>
+          <Hint label="Open with">
+            {#snippet child({ props })}
+              <DropdownMenu.Trigger
+                {...props}
+                class="inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                type="button"
+                aria-label="Open with"
+                aria-haspopup="menu"
+                oncontextmenu={(event) => pinnedContext(event, pinId)}
+              >
+                <Icon icon={iconOpenWith} size={16} />
+              </DropdownMenu.Trigger>
+            {/snippet}
+          </Hint>
+          <DropdownMenu.Content align="end" class="max-h-72 min-w-40 overflow-y-auto">
+            {@render openWithEntries()}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {:else}
+        {@const action = (headerActions ?? []).find((a) => a.id === pinId)}
+        {#if action}
+          <Hint label={action.label}>
+            {#snippet child({ props })}
+              <Button
+                {...props}
+                class="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                disabled={action.disabled}
+                aria-label={action.label}
+                onclick={action.run}
+                oncontextmenu={(event) => pinnedContext(event, pinId)}
+              >
+                <Icon icon={action.icon} size={16} />
+              </Button>
+            {/snippet}
+          </Hint>
+        {/if}
+      {/if}
+    {/each}
     <OverflowMenu label="More repository actions" onOpenChange={(open) => open && probeApps()}>
       {#snippet content()}
         <DropdownMenu.Sub>
@@ -275,16 +472,8 @@
             Layout preset
           </DropdownMenu.SubTrigger>
           <DropdownMenu.SubContent>
-            <DropdownMenu.RadioGroup
-              value={presetId}
-              onValueChange={(value) => layouts.applyPreset(root, value)}
-            >
-              {#each layouts.listPresets() as preset (preset.id)}
-                <DropdownMenu.RadioItem class="cursor-pointer" value={preset.id}>
-                  {preset.name}
-                </DropdownMenu.RadioItem>
-              {/each}
-            </DropdownMenu.RadioGroup>
+            {@render pinRow(LAYOUT_PRESET_PIN_ID, "Layout preset")}
+            {@render presetsEntries()}
           </DropdownMenu.SubContent>
         </DropdownMenu.Sub>
         <DropdownMenu.Sub>
@@ -298,65 +487,44 @@
             Open with
           </DropdownMenu.SubTrigger>
           <DropdownMenu.SubContent class="max-h-72 overflow-y-auto">
-            {#if openWithCurrent}
-              <DropdownMenu.Item
-                class="cursor-pointer gap-ui-3"
-                disabled={launching}
-                onclick={() => void launch(openWithCurrent)}
-              >
-                <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-                  <Icon icon={openWithCurrent.custom ? iconCustom : (appIcons[openWithCurrent.id] ?? iconOpenWith)} size={16} />
-                </span>
-                Open with {openWithCurrent.name}
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator />
-            {/if}
-            {#each apps as app (app.id)}
-              <DropdownMenu.Item
-                class="cursor-pointer gap-ui-3"
-                disabled={launching || appNeedsLocal(app.id)}
-                title={appNeedsLocal(app.id)
-                  ? `${app.name} cannot open repositories on the device — it has no SSH remote support (VS Code, VSCodium, Cursor, and Windsurf do)`
-                  : undefined}
-                onclick={() => void launch({ id: app.id, name: app.name })}
-              >
-                <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-                  <Icon icon={appIcons[app.id] ?? iconOpenWith} size={16} />
-                </span>
-                {app.name}
-              </DropdownMenu.Item>
-            {/each}
-            {#if openWithCustoms.length > 0}
-              <DropdownMenu.Separator />
-              {#each openWithCustoms as entry (entry.id)}
-                <DropdownMenu.Item
-                  class="cursor-pointer gap-ui-3"
-                  disabled={launching}
-                  onclick={() => void launch(entry)}
-                >
-                  <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-                    <Icon icon={iconCustom} size={16} />
-                  </span>
-                  {entry.name}
-                </DropdownMenu.Item>
-              {/each}
-            {/if}
-            <DropdownMenu.Separator />
-            <DropdownMenu.Item
-              class="cursor-pointer gap-ui-3"
-              onclick={() => (manageOpen = true)}
-            >
-              <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-                <Icon icon={iconManage} size={16} />
-              </span>
-              Manage custom apps…
-            </DropdownMenu.Item>
+            {@render pinRow(OPEN_WITH_PIN_ID, "Open with")}
+            {@render openWithEntries()}
           </DropdownMenu.SubContent>
         </DropdownMenu.Sub>
-        {#if headerOverflow}
-          <DropdownMenu.Separator />
-          {@render headerOverflow()}
-        {/if}
+        {#each headerActions ?? [] as action (action.id)}
+          {#if action.gapBefore}
+            <DropdownMenu.Separator />
+          {/if}
+          <DropdownMenu.Item
+            class="cursor-pointer gap-ui-3"
+            disabled={action.disabled}
+            onclick={action.run}
+          >
+            <span class="pointer-events-none inline-flex flex-none items-center justify-center">
+              <Icon icon={action.icon} size={16} />
+            </span>
+            {action.label}
+            <Hint label={repoActionPins.has(action.id) ? "Unpin from bar" : "Pin to bar"} side="left">
+              {#snippet child({ props })}
+                <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
+                <button
+                  {...props}
+                  type="button"
+                  class="entry-action -mr-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-xs text-inherit [font:inherit] opacity-65 hover:bg-accent hover:opacity-100 focus-visible:bg-accent focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring group-data-[disabled]/dropdown-menu-item:pointer-events-none group-data-[disabled]/dropdown-menu-item:opacity-30"
+                  aria-label={repoActionPins.has(action.id)
+                    ? `Unpin ${action.label} from the bar`
+                    : `Pin ${action.label} to the bar`}
+                  onclick={(event) => togglePin(event, action.id)}
+                  onkeydown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") togglePin(event, action.id);
+                  }}
+                >
+                  <Icon icon={iconPin} size={14} />
+                </button>
+              {/snippet}
+            </Hint>
+          </DropdownMenu.Item>
+        {/each}
       {/snippet}
     </OverflowMenu>
   </span>

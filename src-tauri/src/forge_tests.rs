@@ -969,6 +969,21 @@ fn forge_failure_kinds_classify() {
     assert_eq!(err.kind, KIND_NO_GH);
     assert!(err.message.contains("install it"), "got: {}", err.message);
 
+    // Device runs: gh missing on the remote shell is a 127 with "<shell>:
+    // gh: command not found" on stderr — the SSH transport succeeded, so
+    // there is no spawn_error; it must still classify as NoGh (an Other here
+    // would leave the chips in their empty states with no guidance).
+    let err = forge_failure(None, "bash: gh: command not found");
+    assert_eq!(err.kind, KIND_NO_GH);
+    assert!(
+        err.message.contains("repository's machine"),
+        "got: {}",
+        err.message
+    );
+    // …while a non-gh "command not found" (cd/git failures) stays Other.
+    let err = forge_failure(None, "git: command not found");
+    assert_eq!(err.kind, KIND_OTHER);
+
     // Already exists keeps the existing URL when parseable.
     let err = forge_failure(
         None,

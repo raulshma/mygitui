@@ -29,6 +29,7 @@ import {
 import { registerRepoEvictor } from "$lib/state/repoEvictors";
 import { pollScheduler, type PollLaneState } from "$lib/stores/pollScheduler.svelte";
 import { forgeStore } from "$lib/stores/forge.svelte";
+import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
 import { tabStore, type Tab } from "$lib/stores/tabs.svelte";
 import { toast } from "$lib/toast";
 import { loadForgeRemote } from "./remotePrefs";
@@ -69,6 +70,8 @@ export class ForgeChipsStore {
   #registered = new Map<string, { intervalMs: number }>();
   /** Repos currently failure-toasted (reset when nothing fails anymore). */
   #failureToasted = new Set<string>();
+  /** Device ids with a gh status probe in flight (per-device dedupe). */
+  #probingDevices = new Set<string>();
   #evictorUnregister: (() => void) | null = null;
   #statusStarted = false;
 
@@ -134,6 +137,35 @@ export class ForgeChipsStore {
         pollScheduler.unregister(snapshotLaneKey(repoId));
         this.#registered.delete(repoId);
       }
+    }
+    // Device repos also need their machine's gh status probed once — the
+    // chips' degraded states and the authed-host cache (GHE remotes) read
+    // it, and the panel probe only runs when the Forge section mounts.
+    untrack(() => this.#probeDeviceStatuses());
+  }
+
+  /**
+   * One `forge_status` probe per device with an open repo and no landed
+   * status yet (`refreshStatus` keys by device, so same-device repos share
+   * the entry). Connected devices only: probing an offline device would
+   * read as "no gh" instead of "offline" — the snapshot's failure kinds
+   * carry the offline case until the device responds.
+   */
+  #probeDeviceStatuses(): void {
+    for (const tab of tabStore.tabs) {
+      const deviceId = tab.deviceId;
+      if (deviceId === null || this.#probingDevices.has(deviceId)) continue;
+      if (remoteDevices.statusOf(deviceId) !== "connected") continue;
+      if (
+        forgeStore.statusFor(tab.id) !== null ||
+        forgeStore.statusLoadingFor(tab.id)
+      ) {
+        continue;
+      }
+      this.#probingDevices.add(deviceId);
+      void forgeStore.refreshStatus(tab.id).finally(() => {
+        this.#probingDevices.delete(deviceId);
+      });
     }
   }
 

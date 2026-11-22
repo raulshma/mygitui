@@ -713,9 +713,30 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         });
       }
       if (cmd === "repo_diff_stream") {
-        const page = cmd in commandMocks ? commandMocks[cmd] : [];
-        deliverChannel((args as { on_page?: unknown })?.on_page, page);
-        return Promise.resolve(null);
+        const mock = cmd in commandMocks ? commandMocks[cmd] : [];
+        // `{ pages: [...] }` delivers the diff as several file pages (one
+        // per macrotask) like the real backend's multi-page streams —
+        // CommitDetail/PopoutDiff accumulate them onto one files array.
+        // A plain array mock keeps the single-page shape.
+        const pages = Array.isArray((mock as { pages?: unknown })?.pages)
+          ? ((mock as { pages: unknown[] }).pages as unknown[])
+          : [mock];
+        const gap =
+          typeof (mock as { pageGapMs?: unknown })?.pageGapMs === "number"
+            ? Math.max(0, (mock as { pageGapMs: number }).pageGapMs)
+            : 0;
+        const channel = (args as { on_page?: unknown })?.on_page;
+        return new Promise((resolve) => {
+          const step = (i: number): void => {
+            deliverChannel(channel, pages[i]);
+            if (i === pages.length - 1) {
+              setTimeout(() => resolve(null), 0);
+              return;
+            }
+            setTimeout(() => step(i + 1), gap);
+          };
+          setTimeout(() => step(0), gap);
+        });
       }
 
       if (cmd === "stage") applyStage(args);

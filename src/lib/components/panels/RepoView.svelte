@@ -211,9 +211,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import { autofetch } from "$lib/stores/autofetch.svelte";
   import { appSettings } from "$lib/state/appSettings.svelte";
   import { toast } from "$lib/toast";
-  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import type { HeaderAction } from "$lib/components/header/headerActions";
 
   let {
     repoId,
@@ -1528,6 +1528,55 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     }
   }
 
+  /**
+   * The header overflow's repo-specific commands as data (Workstream A):
+   * RepoHeader renders this list as the menu's rows AND as the pinned
+   * header buttons (`mygitui.repoActionPins`), so a pinned command keeps
+   * working whichever surface launched it. `gapBefore` groups the list
+   * like the old separators (bisect/forge | layout ops | recents).
+   */
+  const headerActions = $derived<HeaderAction[]>([
+    {
+      id: "bisect",
+      label: "Start bisect…",
+      icon: iconBisect,
+      run: () => emitUiEvent("bisect-open-start"),
+    },
+    {
+      id: "forge-remote",
+      label: "GitHub remote…",
+      icon: iconForgeRemote,
+      run: () => void openForgeRemoteDialog(),
+    },
+    {
+      id: "save-layout",
+      label: "Save layout as…",
+      icon: iconSaveLayout,
+      run: onSaveLayout,
+      gapBefore: true,
+    },
+    {
+      id: "clean",
+      label: "Clean untracked files…",
+      icon: iconClean,
+      run: () => (cleanOpen = true),
+    },
+    {
+      id: "reset-layout",
+      label: "Reset layout to preset",
+      icon: iconResetLayout,
+      disabled: !resolved.hasOverlay,
+      run: onResetLayout,
+    },
+    {
+      id: "recents",
+      label: "Recent repositories",
+      icon: iconHome,
+      run: showRecentRepos,
+      gapBefore: true,
+    },
+  ]);
+
   /** The repo's resolved GitHub slug / off-reason (one status line). */
   const forgeRemoteStatus = $derived.by(() => {
     const context = forgeStore.contextFor(repoId);
@@ -1763,8 +1812,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     status ? new Set(status.entries.map((entry) => entry.path)).size : 0,
   );
 
-  // Remote repositories (device_id set): the forge panel is unavailable
-  // (it shells out to a local `gh`) and the connection state lives in the
+  // Remote repositories (device_id set): the forge flow runs on the device
+  // (see the forgePanel snippet), and the connection state lives in the
   // status bar (Workstream A moved the header chip there; remote tabs carry
   // a cloud glyph).
   const isRemote = $derived(deviceId !== null);
@@ -2762,22 +2811,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   {/await}
 {/snippet}
 {#snippet forgePanel()}
-  {#if isRemote}
-    <Hint label="Not available for remote projects">
-      {#snippet child({ props })}
-        <aside
-          class="missing-panel flex flex-1 items-center justify-center text-ui-base text-muted-foreground"
-          {...props}
-        >
-          Not available for remote projects
-        </aside>
-      {/snippet}
-    </Hint>
-  {:else}
-    {#await forgePanelImport() then ForgePanelModule}
-      <ForgePanelModule.default {repoId} requestedTab={forgeTabRequest} />
-    {/await}
-  {/if}
+  <!-- Device repos run the gh flow ON THE DEVICE (forge.rs routes every
+       command through the device session), so the panel mounts for them
+       like for local repos — its banners speak for the repo's machine. -->
+  {#await forgePanelImport() then ForgePanelModule}
+    <ForgePanelModule.default {repoId} requestedTab={forgeTabRequest} />
+  {/await}
 {/snippet}
 {#snippet actionsPanel()}
   {#await actionsPanelImport() then ActionsPanelModule}
@@ -2827,71 +2866,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     onMutated={refresh}
     onToggleHistory={toggleHistory}
     onNewTerminal={onNewTerminal}
-  >
-    {#snippet headerOverflow()}
-      <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        onclick={() => emitUiEvent("bisect-open-start")}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconBisect} size={16} />
-        </span>
-        Start bisect…
-      </DropdownMenu.Item>
-      <!-- E1 (§9.1): the GitHub flow's remote override — which remote the
-           owner/repo resolution (and the footer chips) use. -->
-      <!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        onclick={() => void openForgeRemoteDialog()}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconForgeRemote} size={16} />
-        </span>
-        GitHub remote…
-      </DropdownMenu.Item>
-      <DropdownMenu.Separator />
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        onclick={onSaveLayout}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconSaveLayout} size={16} />
-        </span>
-        Save layout as…
-      </DropdownMenu.Item>
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        onclick={() => (cleanOpen = true)}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconClean} size={16} />
-        </span>
-        Clean untracked files…
-      </DropdownMenu.Item>
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        disabled={!resolved.hasOverlay}
-        onclick={onResetLayout}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconResetLayout} size={16} />
-        </span>
-        Reset layout to preset
-      </DropdownMenu.Item>
-      <DropdownMenu.Separator />
-      <DropdownMenu.Item
-        class="cursor-pointer gap-ui-3"
-        onclick={showRecentRepos}
-      >
-        <span class="pointer-events-none inline-flex flex-none items-center justify-center">
-          <Icon icon={iconHome} size={16} />
-        </span>
-        Recent repositories
-      </DropdownMenu.Item>
-    {/snippet}
-  </RepoHeader>
+    {headerActions}
+  />
 
   {#if opSource && (conflictCount > 0 || (opSource === "rebase" && rebaseMonitor.paused))}
     <div

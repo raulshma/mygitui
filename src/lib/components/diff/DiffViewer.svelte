@@ -1052,8 +1052,21 @@
   // converts through the layout at apply time (untracked: the layout's
   // later measure corrections must not re-run this effect — it would fall
   // into the reset branch and throw the restore away).
+  //
+  // Streamed pages do NOT reset: CommitDetail/PopoutDiff accumulate pages
+  // onto the same file objects (`files = [...files, ...page]`), and each
+  // landing used to yank the reader back to the top mid-read. The first
+  // file's identity is the append fingerprint — page landings preserve
+  // earlier entries by reference, every new stream re-creates them.
+  let scrollAnchorFile: FileDiff | undefined = undefined;
   $effect(() => {
-    void files;
+    const current = files;
+    const appended =
+      scrollAnchorFile !== undefined &&
+      current.length > 0 &&
+      current[0] === scrollAnchorFile;
+    scrollAnchorFile = current[0];
+    if (appended) return; // a streamed page landed — keep the position
     selectionCtl.clearLines();
     const restoreRow = pendingRestoreRow;
     const restore = pendingRestore;
