@@ -10,11 +10,14 @@ import {
   emptyRow,
   groupStatusEntries,
   kindLetter,
+  lastOpenedAgo,
   markMissing,
   matchesFilter,
   OVERVIEW_FILTERS,
   OVERVIEW_SORTS,
   refreshedAgo,
+  remoteSyncStatus,
+  repoProvider,
   rowDirty,
   rowKind,
   shortSha,
@@ -45,6 +48,8 @@ function row(patch: Partial<OverviewRowData> = {}): OverviewRowData {
       open: false,
     }),
     loaded: true,
+    hasRemote: true,
+    remoteUrl: "https://github.com/example/alpha",
     ...patch,
   };
 }
@@ -63,6 +68,8 @@ function summary(patch: Partial<RepoSummary> = {}): RepoSummary {
     untracked: 0,
     entries: [],
     last_commit: null,
+    remote_url: null,
+    has_remote: false,
     ...patch,
   };
 }
@@ -196,22 +203,52 @@ describe("countsFromEntries / groupStatusEntries", () => {
 });
 
 describe("row updates", () => {
-  it("applySummary folds a repo_summary into the row", () => {
-    const base = emptyRow({
+  it("emptyRow initializes new remote and device fields", () => {
+    const local = emptyRow({
       root: "/repos/alpha",
       name: "alpha",
       pinned: false,
       favorite: false,
-      lastOpened: 0,
+      lastOpened: 12345,
       open: false,
     });
+    expect(local.lastOpened).toBe(12345);
+    expect(local.hasRemote).toBe(false);
+    expect(local.remoteUrl).toBeNull();
+    expect(local.isRemoteDevice).toBe(false);
+
+    const ssh = emptyRow({
+      root: "ssh://dev-box/repos/beta",
+      name: "beta",
+      pinned: false,
+      favorite: false,
+      lastOpened: 0,
+      open: true,
+    });
+    expect(ssh.isRemoteDevice).toBe(true);
+  });
+
+  it("applySummary folds a repo_summary into the row and carries over remote/device info", () => {
+    const base = {
+      ...emptyRow({
+        root: "ssh://box/repos/alpha",
+        name: "alpha",
+        pinned: false,
+        favorite: false,
+        lastOpened: 42,
+        open: false,
+      }),
+      isRemoteDevice: true,
+    };
     const next = applySummary(
       base,
       summary({
         entries: [entry("a.ts", "unmodified", "modified")],
         ahead: 2,
         last_commit: { sha: "a".repeat(40), summary: "init", timestamp: 100 },
-      }),
+        has_remote: true,
+        remote_url: "https://github.com/org/alpha.git",
+      } as any),
       5000,
     );
     expect(next.loaded).toBe(true);
@@ -219,10 +256,25 @@ describe("row updates", () => {
     expect(next.counts.unstaged).toBe(1);
     expect(next.lastCommit?.summary).toBe("init");
     expect(next.refreshedAt).toBe(5000);
+    expect(next.lastOpened).toBe(42);
+    expect(next.isRemoteDevice).toBe(true);
+    expect(next.hasRemote).toBe(true);
+    expect(next.remoteUrl).toBe("https://github.com/org/alpha.git");
   });
 
-  it("applyLiveStatus keeps prior gh columns and stamps freshness", () => {
-    const base = { ...row({ prs: [pr(1)], failingChecks: 0, lastCommit: null, refreshedAt: 1 }) };
+  it("applyLiveStatus keeps prior gh columns, carries over fields, and stamps freshness", () => {
+    const base = {
+      ...row({
+        prs: [pr(1)],
+        failingChecks: 0,
+        lastCommit: null,
+        refreshedAt: 1,
+        lastOpened: 999,
+        isRemoteDevice: true,
+        hasRemote: true,
+        remoteUrl: "https://gitlab.com/group/proj",
+      }),
+    };
     const next = applyLiveStatus(
       base,
       {
@@ -243,6 +295,10 @@ describe("row updates", () => {
     expect(next.failingChecks).toBe(0);
     expect(next.counts.staged).toBe(1);
     expect(next.refreshedAt).toBe(9000);
+    expect(next.lastOpened).toBe(999);
+    expect(next.isRemoteDevice).toBe(true);
+    expect(next.hasRemote).toBe(true);
+    expect(next.remoteUrl).toBe("https://gitlab.com/group/proj");
   });
 
   it("markMissing flags the row without wiping provenance", () => {
@@ -254,15 +310,109 @@ describe("row updates", () => {
   });
 });
 
+describe("remoteSyncStatus", () => {
+  it("reports local-only when hasRemote is false", () => {
+    const res = remoteSyncStatus(row({ hasRemote: false, ahead: 1, behind: 2 }));
+    expect(res).toEqual({
+      status: "local-only",
+      label: "Local only",
+      outgoing: 1,
+      incoming: 2,
+    });
+  });
+
+  it("reports diverged when ahead > 0 and behind > 0", () => {
+    const res = remoteSyncStatus(row({ hasRemote: true, ahead: 3, behind: 2 }));
+    expect(res).toEqual({
+      status: "diverged",
+      label: "↑3 ↓2",
+      outgoing: 3,
+      incoming: 2,
+    });
+  });
+
+  it("reports needs-push when ahead > 0", () => {
+    const res = remoteSyncStatus(row({ hasRemote: true, ahead: 4, behind: 0 }));
+    expect(res).toEqual({
+      status: "needs-push",
+      label: "↑4 to push",
+      outgoing: 4,
+      incoming: 0,
+    });
+  });
+
+  it("reports needs-pull when behind > 0", () => {
+    const res = remoteSyncStatus(row({ hasRemote: true, ahead: 0, behind: 5 }));
+    expect(res).toEqual({
+      status: "needs-pull",
+      label: "↓5 to pull",
+      outgoing: 0,
+      incoming: 5,
+    });
+  });
+
+  it("reports in-sync when ahead === 0 and behind === 0", () => {
+    const res = remoteSyncStatus(row({ hasRemote: true, ahead: 0, behind: 0 }));
+    expect(res).toEqual({
+      status: "in-sync",
+      label: "In sync",
+      outgoing: 0,
+      incoming: 0,
+    });
+  });
+});
+
+describe("repoProvider", () => {
+  it("identifies remote-device first", () => {
+    expect(repoProvider(row({ isRemoteDevice: true, remoteUrl: "https://github.com/foo/bar" }))).toBe("remote-device");
+  });
+
+  it("identifies local when not hasRemote", () => {
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: false, remoteUrl: "https://github.com/foo/bar" }))).toBe("local");
+  });
+
+  it("identifies github from url", () => {
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: "https://github.com/foo/bar.git" }))).toBe("github");
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: "git@github.com:foo/bar.git" }))).toBe("github");
+  });
+
+  it("identifies gitlab from url", () => {
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: "https://gitlab.com/foo/bar.git" }))).toBe("gitlab");
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: "git@gitlab.corp.local:foo/bar.git" }))).toBe("gitlab");
+  });
+
+  it("identifies generic remote otherwise", () => {
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: "https://bitbucket.org/foo/bar.git" }))).toBe("remote");
+    expect(repoProvider(row({ isRemoteDevice: false, hasRemote: true, remoteUrl: null }))).toBe("remote");
+  });
+});
+
+describe("lastOpenedAgo", () => {
+  const now = 1_000_000_000_000;
+
+  it("returns null for unknown / non-positive timestamps", () => {
+    expect(lastOpenedAgo(0, now)).toBeNull();
+    expect(lastOpenedAgo(-1, now)).toBeNull();
+    expect(lastOpenedAgo(NaN, now)).toBeNull();
+  });
+
+  it("formats seconds, minutes, hours, days ago", () => {
+    expect(lastOpenedAgo(now - 10_000, now)).toBe("Accessed 10s ago");
+    expect(lastOpenedAgo(now - 15 * 60_000, now)).toBe("Accessed 15m ago");
+    expect(lastOpenedAgo(now - 2 * 3_600_000, now)).toBe("Accessed 2h ago");
+    expect(lastOpenedAgo(now - 3 * 86_400_000, now)).toBe("Accessed 3d ago");
+  });
+});
+
 describe("filters", () => {
   const rows: OverviewRowData[] = [
-    row({ root: "/a", name: "a", ahead: 2 }),
-    row({ root: "/b", name: "b", behind: 3 }),
-    row({ root: "/c", name: "c", counts: { staged: 1, unstaged: 0, untracked: 0, conflicts: 0 } }),
-    row({ root: "/d", name: "d", prs: [pr(7)] }),
-    row({ root: "/e", name: "e", failingChecks: 2 }),
-    row({ root: "/f", name: "f", missing: true }),
-    row({ root: "/g", name: "g" }),
+    row({ root: "/a", name: "a", ahead: 2, hasRemote: true }),
+    row({ root: "/b", name: "b", behind: 3, hasRemote: true }),
+    row({ root: "/c", name: "c", counts: { staged: 1, unstaged: 0, untracked: 0, conflicts: 0 }, hasRemote: true }),
+    row({ root: "/d", name: "d", prs: [pr(7)], hasRemote: true }),
+    row({ root: "/e", name: "e", failingChecks: 2, hasRemote: true }),
+    row({ root: "/f", name: "f", missing: true, hasRemote: true }),
+    row({ root: "/g", name: "g", hasRemote: false }),
   ];
 
   it("every preset selects exactly its rows", () => {
@@ -272,6 +422,7 @@ describe("filters", () => {
     expect(rows.filter((r) => matchesFilter(r, "has-prs")).map((r) => r.name)).toEqual(["d"]);
     expect(rows.filter((r) => matchesFilter(r, "failing-checks")).map((r) => r.name)).toEqual(["e"]);
     expect(rows.filter((r) => matchesFilter(r, "missing")).map((r) => r.name)).toEqual(["f"]);
+    expect(rows.filter((r) => matchesFilter(r, "local-only")).map((r) => r.name)).toEqual(["g"]);
     expect(rows.filter((r) => matchesFilter(r, null))).toHaveLength(7);
   });
 
@@ -283,6 +434,7 @@ describe("filters", () => {
       "has-prs",
       "failing-checks",
       "missing",
+      "local-only",
     ]);
   });
 });
@@ -364,7 +516,16 @@ describe("totals + stamps", () => {
       row({ ahead: 2, behind: 1, counts: { staged: 1, unstaged: 0, untracked: 0, conflicts: 0 } }),
       row({ prs: [pr(1), pr(2)] }),
     ];
-    expect(totalsOf(rows)).toEqual({ repos: 2, dirty: 1, ahead: 2, behind: 1, prs: 2 });
+    expect(totalsOf(rows)).toEqual({
+      repos: 2,
+      dirty: 1,
+      ahead: 2,
+      behind: 1,
+      prs: 2,
+      attentionNeeded: 1,
+      outOfSync: 1,
+      inSync: 1,
+    });
   });
 
   it("refreshedAgo buckets seconds/minutes/hours/days", () => {

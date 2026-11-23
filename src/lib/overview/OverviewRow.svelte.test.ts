@@ -129,6 +129,10 @@ function row(patch: Partial<OverviewRowData> = {}): OverviewRowData {
     entries: [],
     lastCommit: null,
     refreshedAt: null,
+    lastOpened: 0,
+    hasRemote: true,
+    remoteUrl: "https://github.com/acme/alpha.git",
+    isRemoteDevice: false,
     ...patch,
   };
 }
@@ -268,6 +272,7 @@ describe("OverviewRow files + PRs (always visible)", () => {
 
     rerender({
       row: row({ prs: [] }),
+      expanded: true,
       now: NOW,
       onToggle: () => {},
       onOpen: () => {},
@@ -288,7 +293,7 @@ describe("OverviewRow files + PRs (always visible)", () => {
     expect(
       screen.getByRole("button", { name: "Open pull request #8: Fix the thing 8" }),
     ).toBeTruthy();
-    expect(screen.getByTitle("Approved")).toBeTruthy();
+    expect(screen.getAllByTitle("Approved").length).toBeGreaterThan(0);
   });
 
   it("renders a clean state when the working copy is clean", () => {
@@ -301,8 +306,8 @@ describe("OverviewRow files + PRs (always visible)", () => {
         onRemove: () => {},
       },
     });
-    expect(screen.getByText("Working copy clean")).toBeTruthy();
-    expect(screen.getByText("No open PRs")).toBeTruthy();
+    expect(screen.getByText("Clean")).toBeTruthy();
+    expect(screen.getByText("In sync with remote")).toBeTruthy();
   });
 });
 
@@ -430,6 +435,8 @@ describe("OverviewRow summary tier", () => {
       untracked: 0,
       entries: [entry("s.ts", "modified", "unmodified")],
       last_commit: null,
+      remote_url: null,
+      has_remote: false,
     };
     void repoSummary;
     render(OverviewRow, {
@@ -463,3 +470,74 @@ describe("OverviewRow summary tier", () => {
     expect(document.querySelectorAll("[data-slot='skeleton']").length).toBeGreaterThan(0);
   });
 });
+
+describe("OverviewRow modern card presentation", () => {
+  it("renders repo type badge and icons for GitHub, GitLab, SSH Device and Local only", () => {
+    const { rerender } = render(OverviewRow, {
+      props: {
+        row: row({ hasRemote: true, remoteUrl: "https://github.com/acme/alpha.git" }),
+        now: NOW,
+        onToggle: () => {},
+        onOpen: () => {},
+        onRemove: () => {},
+      },
+    });
+    expect(screen.getByText("GitHub")).toBeTruthy();
+
+    rerender({
+      row: row({ hasRemote: true, remoteUrl: "https://gitlab.com/acme/alpha.git" }),
+      now: NOW,
+      onToggle: () => {},
+      onOpen: () => {},
+      onRemove: () => {},
+    });
+    expect(screen.getByText("GitLab")).toBeTruthy();
+
+    rerender({
+      row: row({ isRemoteDevice: true, root: "ssh://server/repos/alpha" }),
+      now: NOW,
+      onToggle: () => {},
+      onOpen: () => {},
+      onRemove: () => {},
+    });
+    expect(screen.getByText("SSH Device")).toBeTruthy();
+
+    rerender({
+      row: row({ hasRemote: false, remoteUrl: null }),
+      now: NOW,
+      onToggle: () => {},
+      onOpen: () => {},
+      onRemove: () => {},
+    });
+    expect(screen.getAllByText("Local only").length).toBeGreaterThan(0);
+  });
+
+  it("renders last accessed timestamp when available", () => {
+    const testNow = 10_000_000;
+    render(OverviewRow, {
+      props: {
+        row: row({ lastOpened: testNow - 7200_000 }),
+        now: testNow,
+        onToggle: () => {},
+        onOpen: () => {},
+        onRemove: () => {},
+      },
+    });
+    expect(screen.getByText("Accessed 2h ago")).toBeTruthy();
+  });
+
+  it("renders favorite star and pinned badge", () => {
+    render(OverviewRow, {
+      props: {
+        row: row({ favorite: true, pinned: true }),
+        now: NOW,
+        onToggle: () => {},
+        onOpen: () => {},
+        onRemove: () => {},
+      },
+    });
+    expect(screen.getByTitle("Favorite")).toBeTruthy();
+    expect(screen.getByText("pinned")).toBeTruthy();
+  });
+});
+

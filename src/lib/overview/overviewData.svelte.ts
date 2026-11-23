@@ -299,11 +299,53 @@ export class OverviewData {
       row.pinned = entry.pinned;
       row.favorite = entry.favorite;
       row.open = entry.open;
+      row.lastOpened = entry.lastOpened;
+
+      const tab = tabStore.tabs.find((t) => t.root === entry.root);
+      row.isRemoteDevice = Boolean(tab?.deviceId || entry.root.startsWith("ssh://"));
+
+      if (old) {
+        row.hasRemote = old.hasRemote;
+        row.remoteUrl = old.remoteUrl;
+      }
+
+      if (tab) {
+        const tabAny = tab as unknown as {
+          hasRemote?: boolean;
+          remoteUrl?: string | null;
+          remote_url?: string | null;
+          has_remote?: boolean;
+        };
+        const statusAny = tab.status as unknown as {
+          hasRemote?: boolean;
+          remoteUrl?: string | null;
+          remote_url?: string | null;
+          has_remote?: boolean;
+        } | null;
+
+        const remoteUrl =
+          tabAny.remoteUrl ??
+          tabAny.remote_url ??
+          statusAny?.remoteUrl ??
+          statusAny?.remote_url;
+        if (remoteUrl !== undefined) {
+          row.remoteUrl = remoteUrl;
+        }
+        const hasRemote =
+          tabAny.hasRemote ??
+          tabAny.has_remote ??
+          statusAny?.hasRemote ??
+          statusAny?.has_remote ??
+          (remoteUrl !== undefined ? remoteUrl !== null : undefined);
+        if (hasRemote !== undefined) {
+          row.hasRemote = hasRemote;
+        }
+      }
+
       // repoId follows the live tiers: a closed tab must not leave its dead
       // id behind (diff streams / PR reads against it would fail), so the
       // assignment is unconditional — tab id while open, warmed session
       // otherwise, null for pure summary-tier rows.
-      const tab = tabStore.tabs.find((t) => t.root === entry.root);
       row.repoId = row.open
         ? (tab?.id ?? null)
         : (this.#warmer.idFor(entry.root) ?? null);
@@ -360,6 +402,39 @@ export class OverviewData {
       const tab = tabStore.tabs.find((t) => t.root === row.root);
       if (!tab) continue;
       row.repoId = tab.id;
+      row.isRemoteDevice = Boolean(tab.deviceId || tab.root.startsWith("ssh://"));
+
+      const tabAny = tab as unknown as {
+        hasRemote?: boolean;
+        remoteUrl?: string | null;
+        remote_url?: string | null;
+        has_remote?: boolean;
+      };
+      const statusAny = tab.status as unknown as {
+        hasRemote?: boolean;
+        remoteUrl?: string | null;
+        remote_url?: string | null;
+        has_remote?: boolean;
+      } | null;
+
+      const remoteUrl =
+        tabAny.remoteUrl ??
+        tabAny.remote_url ??
+        statusAny?.remoteUrl ??
+        statusAny?.remote_url;
+      if (remoteUrl !== undefined) {
+        row.remoteUrl = remoteUrl;
+      }
+      const hasRemote =
+        tabAny.hasRemote ??
+        tabAny.has_remote ??
+        statusAny?.hasRemote ??
+        statusAny?.has_remote ??
+        (remoteUrl !== undefined ? remoteUrl !== null : undefined);
+      if (hasRemote !== undefined) {
+        row.hasRemote = hasRemote;
+      }
+
       if (tab.status !== null) {
         const next = applyLiveStatus(row, tab.status, this.#now());
         // Keep a scan's last-commit (tab status has none) and PR data.

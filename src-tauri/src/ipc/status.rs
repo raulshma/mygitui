@@ -166,6 +166,21 @@ fn summarize(path: &Path) -> Result<RepoSummary, String> {
             })
         });
 
+    let remote_opt = repo.find_remote("origin").ok().or_else(|| {
+        repo.remotes().ok().and_then(|names| {
+            for name in names.iter().flatten().flatten() {
+                if let Ok(r) = repo.find_remote(name) {
+                    return Some(r);
+                }
+            }
+            None
+        })
+    });
+    let remote_url = remote_opt
+        .as_ref()
+        .and_then(|r| r.url().ok().map(str::to_owned));
+    let has_remote = remote_url.is_some();
+
     Ok(RepoSummary {
         root: root.to_string_lossy().into_owned(),
         name,
@@ -179,6 +194,8 @@ fn summarize(path: &Path) -> Result<RepoSummary, String> {
         untracked,
         entries: status.entries,
         last_commit,
+        remote_url,
+        has_remote,
     })
 }
 
@@ -402,6 +419,21 @@ mod summary_tests {
         assert_eq!(summary.entries.len(), 1);
         assert_eq!(summary.entries[0].index, ChangeKind::Conflicted);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repo_with_remote_reports_remote_url_and_has_remote() {
+        let dir = temp_dir("with-remote");
+        let repo = git2::Repository::init(&dir).unwrap();
+        repo.remote("origin", "https://github.com/example/repo.git")
+            .unwrap();
+        let summary = summarize(&dir).expect("summary");
+        assert!(summary.has_remote);
+        assert_eq!(
+            summary.remote_url.as_deref(),
+            Some("https://github.com/example/repo.git")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

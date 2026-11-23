@@ -38,4 +38,4 @@ unstaged: number, untracked: number, entries: Array<StatusEntry>,
 /**
  * HEAD's last commit; `None` on an unborn repository.
  */
-last_commit: RepoSummaryCommit | null, };
+last_commit: RepoSummaryCommit | null, remote_url: string | null, has_remote: boolean, };

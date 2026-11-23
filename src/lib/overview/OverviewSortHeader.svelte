@@ -34,26 +34,31 @@
 </script>
 
 <div
-  class="sort-head flex h-6 flex-none items-center gap-3 px-3 text-ui-micro text-muted-foreground select-none"
+  class="sort-head flex min-h-7 flex-none items-center gap-1.5 px-3 py-1 text-ui-micro select-none border-b border-border/40 bg-muted/20"
   role="row"
   aria-label="Sort repositories"
 >
-  {#each columns as column (column.id)}
-    <button
-      class="sort-col flex cursor-pointer items-center gap-0.5 rounded-sm border-0 bg-transparent px-1 py-0 text-ui-micro {sort === column.id
-        ? 'font-semibold text-foreground'
-        : 'hover:bg-[color:var(--app-hover)] hover:text-foreground'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
-      type="button"
-      aria-label={`Sort by ${column.label}`}
-      aria-pressed={sort === column.id}
-      onclick={() => onSort(column.id)}
-    >
-      {column.label}
-      {#if sort === column.id}
-        <span class="inline-flex" aria-hidden="true">
-          <Icon icon={sortDir === "asc" ? iconUp : iconDown} size={10} />
-        </span>
-      {/if}
-    </button>
-  {/each}
+  <span class="mr-1 text-ui-micro font-medium uppercase tracking-wider text-muted-foreground/70">
+    Sort:
+  </span>
+  <div class="flex flex-wrap items-center gap-1">
+    {#each columns as column (column.id)}
+      <button
+        class="sort-col inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-0.5 text-ui-micro transition-colors {sort === column.id
+          ? 'bg-primary/10 font-semibold text-primary-ink border border-primary/25'
+          : 'text-muted-foreground hover:bg-[color:var(--app-hover)] hover:text-foreground'} focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+        type="button"
+        aria-label={`Sort by ${column.label}`}
+        aria-pressed={sort === column.id}
+        onclick={() => onSort(column.id)}
+      >
+        <span>{column.label}</span>
+        {#if sort === column.id}
+          <span class="inline-flex text-primary-ink" aria-hidden="true">
+            <Icon icon={sortDir === "asc" ? iconUp : iconDown} size={11} />
+          </span>
+        {/if}
+      </button>
+    {/each}
+  </div>
 </div>

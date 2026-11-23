@@ -240,9 +240,9 @@
   <div class="flex min-h-0 min-w-0 flex-1">
     <div class="overview-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
       {#if tabsOpen}
-        <div class="flex flex-none items-center px-2 pt-1.5">
+        <div class="flex flex-none items-center px-4 pt-2">
           <button
-            class="back-btn inline-flex cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent px-2 py-0.5 text-ui-meta text-muted-foreground hover:bg-[color:var(--app-hover)] hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+            class="back-btn inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1 text-ui-meta font-medium text-muted-foreground hover:bg-[color:var(--app-hover)] hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary transition-colors"
             type="button"
             onclick={exitOverview}
           >
@@ -284,7 +284,7 @@
           onSort={(id) => overviewStore.setSort(id)}
         />
         <ul
-          class="overview-list m-0 flex list-none flex-col gap-1.5 p-0 px-2 pb-2"
+          class="overview-list m-0 flex list-none flex-col gap-2 p-0 px-4 py-3"
           aria-label="Repositories"
         >
           {#each visible as row (row.root)}

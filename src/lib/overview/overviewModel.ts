@@ -238,6 +238,14 @@ export interface OverviewRowData {
   name: string;
   pinned: boolean;
   favorite: boolean;
+  /** Recency in ms epoch from LibraryEntry (0 if none / unknown). */
+  lastOpened: number;
+  /** Whether this repo has a remote configured. */
+  hasRemote: boolean;
+  /** Primary remote URL (e.g. from origin), null if none. */
+  remoteUrl: string | null;
+  /** True if root starts with "ssh://" or the open tab has a deviceId. */
+  isRemoteDevice: boolean;
   /** The root has an open tab (live tab-style data). */
   open: boolean;
   /** Repo id backing live reads (tab id, or the warmed session's id). */
@@ -271,6 +279,10 @@ export function emptyRow(entry: LibraryEntry): OverviewRowData {
     pinned: entry.pinned,
     favorite: entry.favorite,
     open: entry.open,
+    lastOpened: entry.lastOpened ?? 0,
+    hasRemote: false,
+    remoteUrl: null,
+    isRemoteDevice: entry.root.startsWith("ssh://"),
     repoId: null,
     missing: false,
     refreshing: false,
@@ -294,11 +306,32 @@ export function applySummary(
   summary: RepoSummary,
   refreshedAt: number,
 ): OverviewRowData {
+  const summaryAny = summary as unknown as {
+    has_remote?: boolean;
+    hasRemote?: boolean;
+    remote_url?: string | null;
+    remoteUrl?: string | null;
+  };
+  const hasRemote =
+    summaryAny.has_remote ??
+    summaryAny.hasRemote ??
+    row.hasRemote;
+  const remoteUrl =
+    summaryAny.remote_url !== undefined
+      ? summaryAny.remote_url
+      : summaryAny.remoteUrl !== undefined
+        ? summaryAny.remoteUrl
+        : row.remoteUrl;
+
   return {
     ...row,
     loaded: true,
     missing: false,
     refreshing: false,
+    lastOpened: row.lastOpened,
+    hasRemote: hasRemote ?? false,
+    remoteUrl: remoteUrl ?? null,
+    isRemoteDevice: row.isRemoteDevice,
     branch: summary.branch,
     detached: summary.detached,
     ahead: summary.ahead,
@@ -316,11 +349,32 @@ export function applyLiveStatus(
   status: RepoStatus,
   refreshedAt: number,
 ): OverviewRowData {
+  const statusAny = status as unknown as {
+    has_remote?: boolean;
+    hasRemote?: boolean;
+    remote_url?: string | null;
+    remoteUrl?: string | null;
+  };
+  const hasRemote =
+    statusAny.has_remote ??
+    statusAny.hasRemote ??
+    row.hasRemote;
+  const remoteUrl =
+    statusAny.remote_url !== undefined
+      ? statusAny.remote_url
+      : statusAny.remoteUrl !== undefined
+        ? statusAny.remoteUrl
+        : row.remoteUrl;
+
   return {
     ...row,
     loaded: true,
     missing: false,
     refreshing: false,
+    lastOpened: row.lastOpened,
+    hasRemote: hasRemote ?? false,
+    remoteUrl: remoteUrl ?? null,
+    isRemoteDevice: row.isRemoteDevice,
     branch: status.branch,
     detached: status.detached,
     ahead: status.ahead,
@@ -358,6 +412,111 @@ export function rowFailingChecks(row: OverviewRowData): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Remote sync + provider + recency helpers
+// ---------------------------------------------------------------------------
+
+export type RemoteSyncState =
+  | "in-sync"
+  | "needs-push"
+  | "needs-pull"
+  | "diverged"
+  | "local-only";
+
+export interface RemoteSyncStatus {
+  status: RemoteSyncState;
+  label: string;
+  outgoing: number;
+  incoming: number;
+}
+
+/**
+ * Computes the remote sync status and label for a row:
+ * - When !row.hasRemote: 'local-only' ("Local only")
+ * - When row.ahead > 0 && row.behind > 0: 'diverged' ("↑" + row.ahead + " ↓" + row.behind)
+ * - When row.ahead > 0: 'needs-push' ("↑" + row.ahead + " to push")
+ * - When row.behind > 0: 'needs-pull' ("↓" + row.behind + " to pull")
+ * - When row.ahead === 0 && row.behind === 0: 'in-sync' ("In sync")
+ */
+export function remoteSyncStatus(row: OverviewRowData): RemoteSyncStatus {
+  const outgoing = row.ahead;
+  const incoming = row.behind;
+  if (!row.hasRemote) {
+    return {
+      status: "local-only",
+      label: "Local only",
+      outgoing,
+      incoming,
+    };
+  }
+  if (row.ahead > 0 && row.behind > 0) {
+    return {
+      status: "diverged",
+      label: `↑${row.ahead} ↓${row.behind}`,
+      outgoing,
+      incoming,
+    };
+  }
+  if (row.ahead > 0) {
+    return {
+      status: "needs-push",
+      label: `↑${row.ahead} to push`,
+      outgoing,
+      incoming,
+    };
+  }
+  if (row.behind > 0) {
+    return {
+      status: "needs-pull",
+      label: `↓${row.behind} to pull`,
+      outgoing,
+      incoming,
+    };
+  }
+  return {
+    status: "in-sync",
+    label: "In sync",
+    outgoing: 0,
+    incoming: 0,
+  };
+}
+
+export type RepoProvider =
+  | "github"
+  | "gitlab"
+  | "remote-device"
+  | "remote"
+  | "local";
+
+/**
+ * Identifies the repository provider/type:
+ * - 'remote-device' if row.isRemoteDevice
+ * - 'local' if !row.hasRemote
+ * - 'github' if remoteUrl includes github
+ * - 'gitlab' if remoteUrl includes gitlab
+ * - 'remote' otherwise
+ */
+export function repoProvider(row: OverviewRowData): RepoProvider {
+  if (row.isRemoteDevice) return "remote-device";
+  if (!row.hasRemote) return "local";
+  const url = (row.remoteUrl ?? "").toLowerCase();
+  if (url.includes("github.com") || url.includes("github")) return "github";
+  if (url.includes("gitlab.com") || url.includes("gitlab")) return "gitlab";
+  return "remote";
+}
+
+/** "Accessed 2h ago" for a wall-clock ms epoch; null if lastOpened <= 0. */
+export function lastOpenedAgo(lastOpened: number, now: number): string | null {
+  if (lastOpened <= 0 || !Number.isFinite(lastOpened)) return null;
+  const seconds = Math.max(0, Math.floor((now - lastOpened) / 1000));
+  if (seconds < 60) return `Accessed ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `Accessed ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Accessed ${hours}h ago`;
+  return `Accessed ${Math.floor(hours / 24)}d ago`;
+}
+
+// ---------------------------------------------------------------------------
 // Filter presets + sort
 // ---------------------------------------------------------------------------
 
@@ -367,7 +526,8 @@ export type OverviewFilterId =
   | "dirty"
   | "has-prs"
   | "failing-checks"
-  | "missing";
+  | "missing"
+  | "local-only";
 
 /** The strip's filter presets, in display order. */
 export const OVERVIEW_FILTERS: Array<{ id: OverviewFilterId; label: string }> = [
@@ -377,6 +537,7 @@ export const OVERVIEW_FILTERS: Array<{ id: OverviewFilterId; label: string }> = 
   { id: "has-prs", label: "Has PRs" },
   { id: "failing-checks", label: "Failing checks" },
   { id: "missing", label: "Missing" },
+  { id: "local-only", label: "Local only" },
 ];
 
 /** Applies one preset; `null` = no filter (all rows). */
@@ -397,6 +558,8 @@ export function matchesFilter(
       return rowFailingChecks(row);
     case "missing":
       return row.missing;
+    case "local-only":
+      return !row.hasRemote;
     default:
       return true;
   }
@@ -491,6 +654,12 @@ export interface OverviewTotals {
   ahead: number;
   behind: number;
   prs: number;
+  /** Number of repos needing attention (conflicts, sync debt, dirty, failing checks). */
+  attentionNeeded: number;
+  /** Number of repos with sync debt (ahead > 0 or behind > 0). */
+  outOfSync: number;
+  /** Number of repos in sync with remote and clean. */
+  inSync: number;
 }
 
 export function totalsOf(rows: OverviewRowData[]): OverviewTotals {
@@ -500,12 +669,30 @@ export function totalsOf(rows: OverviewRowData[]): OverviewTotals {
     ahead: 0,
     behind: 0,
     prs: 0,
+    attentionNeeded: 0,
+    outOfSync: 0,
+    inSync: 0,
   };
   for (const row of rows) {
-    if (rowDirty(row)) totals.dirty += 1;
+    const isDirty = rowDirty(row);
+    const hasSyncDebt = rowSyncDebt(row);
+    const hasFailing = rowFailingChecks(row);
+    const hasConflicts = row.counts.conflicts > 0;
+
+    if (isDirty) totals.dirty += 1;
     totals.ahead += row.ahead;
     totals.behind += row.behind;
     totals.prs += row.prs?.length ?? 0;
+
+    if (hasConflicts || hasSyncDebt || isDirty || hasFailing) {
+      totals.attentionNeeded += 1;
+    } else {
+      totals.inSync += 1;
+    }
+
+    if (hasSyncDebt) {
+      totals.outOfSync += 1;
+    }
   }
   return totals;
 }

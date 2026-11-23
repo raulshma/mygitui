@@ -42,6 +42,8 @@ function summary(root: string, patch: Partial<RepoSummary> = {}): RepoSummary {
     untracked: 0,
     entries: [],
     last_commit: null,
+    remote_url: null,
+    has_remote: false,
     ...patch,
   };
 }
@@ -483,5 +485,48 @@ describe("OverviewData", () => {
     expect(row.missing).toBe(false);
     expect(data.scanning).toBe(false);
     expect(data.lastRefreshAt).toBeNull();
+  });
+
+  it("sync populates lastOpened, isRemoteDevice, and carries over remote info", async () => {
+    const data = makeData();
+    recentRepos.add("/repos/local");
+    const recents = recentRepos.list();
+    const entry = recents.find((r) => r.path === "/repos/local");
+    expect(entry).toBeDefined();
+
+    // Add ssh remote tab
+    pushTab("ssh-1", "ssh://remote-device/srv/git/project");
+    tabStore.tabs[0]!.deviceId = "remote-device";
+    (tabStore.tabs[0]! as any).hasRemote = true;
+    (tabStore.tabs[0]! as any).remoteUrl = "https://github.com/org/repo.git";
+
+    data.sync();
+
+    const localRow = data.rowFor("/repos/local")!;
+    expect(localRow.lastOpened).toBe(entry!.lastOpened);
+    expect(localRow.isRemoteDevice).toBe(false);
+    expect(localRow.hasRemote).toBe(false);
+
+    const sshRow = data.rowFor("ssh://remote-device/srv/git/project")!;
+    expect(sshRow.isRemoteDevice).toBe(true);
+    expect(sshRow.hasRemote).toBe(true);
+    expect(sshRow.remoteUrl).toBe("https://github.com/org/repo.git");
+  });
+
+  it("applyTabData carries over remote info from tab into the row", async () => {
+    const data = makeData();
+    pushTab("tab-remote", "/repos/open-repo");
+    (tabStore.tabs[0]! as any).hasRemote = true;
+    (tabStore.tabs[0]! as any).remoteUrl = "https://gitlab.com/team/repo.git";
+    tabStore.tabs[0]!.status = status({ ahead: 1, behind: 2 });
+
+    await data.activate();
+
+    const row = data.rowFor("/repos/open-repo")!;
+    expect(row.open).toBe(true);
+    expect(row.hasRemote).toBe(true);
+    expect(row.remoteUrl).toBe("https://gitlab.com/team/repo.git");
+    expect(row.ahead).toBe(1);
+    expect(row.behind).toBe(2);
   });
 });

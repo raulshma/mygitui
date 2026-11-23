@@ -201,6 +201,8 @@ pub struct RepoSummary {
     pub entries: Vec<StatusEntry>,
     /// HEAD's last commit; `None` on an unborn repository.
     pub last_commit: Option<RepoSummaryCommit>,
+    pub remote_url: Option<String>,
+    pub has_remote: bool,
 }
 
 /// One side of a diff comparison.
