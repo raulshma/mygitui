@@ -260,8 +260,8 @@
           <span
             class="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 font-mono text-ui-micro font-medium text-amber-600 dark:text-amber-400"
           >
-            <span title={`${row.ahead} ahead`} aria-label={`${row.ahead} ahead`}>↑ {row.ahead}</span>
-            <span title={`${row.behind} behind`} aria-label={`${row.behind} behind`}>↓ {row.behind}</span>
+            <span title={`${row.ahead} ahead`} aria-label={`${row.ahead} ahead`}>↑{row.ahead}</span>
+            <span title={`${row.behind} behind`} aria-label={`${row.behind} behind`}>↓{row.behind}</span>
           </span>
         {:else if row.ahead > 0 || syncInfo.status === "needs-push"}
           <span
@@ -269,7 +269,7 @@
             title={`${row.ahead} ahead`}
             aria-label={`${row.ahead} ahead`}
           >
-            ↑ {row.ahead} to push
+            ↑{row.ahead} to push
           </span>
         {:else if row.behind > 0 || syncInfo.status === "needs-pull"}
           <span
@@ -277,7 +277,7 @@
             title={`${row.behind} behind`}
             aria-label={`${row.behind} behind`}
           >
-            ↓ {row.behind} to pull
+            ↓{row.behind} to pull
           </span>
         {:else if syncInfo.status === "in-sync" || row.hasRemote}
           <span
