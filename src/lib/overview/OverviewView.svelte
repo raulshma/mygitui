@@ -96,15 +96,6 @@
    *  + filtered, so the rail never targets a row the user can't see. */
   const chatTarget = $derived(visible.find((row) => isExpanded(row)) ?? null);
 
-  // Auto-warm visible expanded rows that are not yet open or warmed
-  $effect(() => {
-    for (const row of visible) {
-      if (!row.open && !overviewData.warmer.isWarmed(row.root) && isExpanded(row)) {
-        void overviewData.warmRow(row.root);
-      }
-    }
-  });
-
   function onToggleRow(root: string): void {
     const row = overviewData.rowFor(root);
     if (!row) return;
