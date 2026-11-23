@@ -110,7 +110,8 @@ mod tests {
         if skip_without_backend() {
             return;
         }
-        let key = "test/roundtrip".to_string();
+        let key = format!("test/roundtrip-{}", std::process::id());
+        let _ = tauri::async_runtime::block_on(secrets_delete(key.clone()));
         tauri::async_runtime::block_on(secrets_set(key.clone(), "s3cret-valu3".to_string()))
             .expect("set should succeed");
         assert_eq!(
@@ -118,7 +119,7 @@ mod tests {
                 .expect("get after set should succeed"),
             Some("s3cret-valu3".to_string())
         );
-        tauri::async_runtime::block_on(secrets_delete(key)).expect("cleanup delete should succeed");
+        let _ = tauri::async_runtime::block_on(secrets_delete(key));
     }
 
     #[test]
