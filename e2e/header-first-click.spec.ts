@@ -131,7 +131,7 @@ async function boot(page: Page): Promise<void> {
   });
   await installTrace(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
   await expect(
     page.getByRole("button", { name: "More sync actions" }),
   ).toBeVisible({ timeout: 20_000 });

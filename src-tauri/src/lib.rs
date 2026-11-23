@@ -179,6 +179,7 @@ pub fn run() {
             ipc::misc::export_text,
             ipc::status::repo_close,
             ipc::status::repo_status,
+            ipc::status::repo_summary,
             ipc::log::repo_commit_message,
             ipc::status::repo_refs,
             ipc::diff::repo_blame,

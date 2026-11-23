@@ -1,21 +1,22 @@
 <script lang="ts">
   /**
-   * Header toggle for Agent mode: the super-minimal git-focused view.
-   * Mirrors ThemeToggle's pattern (ghost icon button + Hint) and persists
-   * through the `agentMode` store (`mygitui.agent`).
+   * Header toggle for the Overview: the standalone multi-repo dashboard
+   * that replaced Agent mode (and the old recents home). Mirrors
+   * ThemeToggle's pattern (ghost icon button + Hint) and persists through
+   * the `overviewStore` (`mygitui.overview`).
    */
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
-  import { agentMode } from "./agentMode.svelte";
+  import { overviewStore } from "./overviewStore.svelte";
 
-  const icon = $derived(appIcon("agent") ?? appIcon("bolt")!);
+  const icon = $derived(appIcon("home-rounded")!);
 
   const label = $derived(
-    agentMode.enabled
-      ? "Exit Agent mode — back to the full workspace"
-      : "Agent mode — minimal git focus",
+    overviewStore.enabled
+      ? "Exit the Overview — back to the workspace"
+      : "Overview — all repositories at a glance",
   );
 </script>
 
@@ -25,12 +26,12 @@
       {#snippet child({ props })}
         <Button
           {...props}
-          class="agent-mode-toggle{agentMode.enabled ? ' text-primary-ink' : ''}"
+          class="overview-toggle{overviewStore.enabled ? ' text-primary-ink' : ''}"
           variant="ghost"
           size="icon-sm"
           type="button"
-          aria-pressed={agentMode.enabled}
-          onclick={() => agentMode.toggle()}
+          aria-pressed={overviewStore.enabled}
+          onclick={() => overviewStore.toggle()}
         >
           <Icon {icon} size={16} />
         </Button>

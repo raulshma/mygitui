@@ -648,7 +648,7 @@ impl Default for RepoManager {
 }
 
 /// Trim one trailing separator (keeping drive roots like `C:\` intact).
-fn normalize_root(path: PathBuf) -> PathBuf {
+pub(crate) fn normalize_root(path: PathBuf) -> PathBuf {
     let s = path.as_os_str().to_string_lossy();
     if s.len() > 3 && (s.ends_with('/') || s.ends_with('\\')) {
         PathBuf::from(&s[..s.len() - 1])

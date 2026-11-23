@@ -56,7 +56,7 @@ async function boot(
 
 async function openRepo(page: Page): Promise<void> {
   await page.goto("/");
-  const repoCard = page.getByRole("button", { name: /repo\s*\/tmp\/repo/ });
+  const repoCard = page.getByRole("button", { name: "Open repo" });
   await expect(repoCard).toBeVisible();
   await repoCard.click();
   await expect(

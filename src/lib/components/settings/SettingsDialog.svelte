@@ -1481,7 +1481,7 @@
         },
       ],
       outro:
-        "Shell actions are configured per repository in the Actions panel and the command palette. Recent repositories, pins and session restore are managed on the home screen.",
+        "Shell actions are configured per repository in the Actions panel and the command palette. The Overview, pins and session restore live on the Overview screen.",
     },
   ];
 

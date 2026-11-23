@@ -1570,7 +1570,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     },
     {
       id: "recents",
-      label: "Recent repositories",
+      label: "Overview",
       icon: iconHome,
       run: showRecentRepos,
       gapBefore: true,

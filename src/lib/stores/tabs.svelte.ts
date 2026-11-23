@@ -23,7 +23,7 @@ import { RecentRepoStore } from "$lib/entry/recentRepos";
 import { terminals } from "$lib/terminal/terminalStore.svelte";
 import { opStore } from "$lib/stores/ops.svelte";
 import { workspaceSession } from "$lib/stores/workspaceSession.svelte";
-import { agentSession } from "$lib/agent/agentSession.svelte";
+import { overviewStore } from "$lib/overview/overviewStore.svelte";
 import { evictFileIndex } from "$lib/components/files/QuickOpen.svelte";
 import { favoriteRepos, FAVORITES_LAUNCH_CAP } from "$lib/stores/favoriteRepos.svelte";
 import { appSettings } from "$lib/state/appSettings.svelte";
@@ -341,7 +341,7 @@ export class TabStore {
     if (byPath) {
       if (activate) {
         this.activeId = byPath.id;
-        this.recentsOpen = false;
+        this.#leaveOverview();
       }
       this.#recents.add(path);
       this.#persistSession();
@@ -354,7 +354,7 @@ export class TabStore {
     if (byRoot) {
       if (activate) {
         this.activeId = byRoot.id;
-        this.recentsOpen = false;
+        this.#leaveOverview();
       }
       this.#recents.add(path);
       this.#persistSession();
@@ -375,7 +375,7 @@ export class TabStore {
     this.tabs.splice(at, 0, tab);
     if (activate) {
       this.activeId = tab.id;
-      this.recentsOpen = false;
+      this.#leaveOverview();
     }
     this.#recents.add(path);
     this.#persistSession();
@@ -409,7 +409,7 @@ export class TabStore {
     if (byUri && byUri.openError === null) {
       if (activate) {
         this.activeId = byUri.id;
-        this.recentsOpen = false;
+        this.#leaveOverview();
       }
       this.#recents.add(uri);
       this.#persistSession();
@@ -438,7 +438,7 @@ export class TabStore {
       if (existing && existing.openError === null) {
         if (activate) {
           this.activeId = existing.id;
-          this.recentsOpen = false;
+          this.#leaveOverview();
         }
         this.#recents.add(uri);
         this.#persistSession();
@@ -453,7 +453,7 @@ export class TabStore {
       }
       if (activate) {
         this.activeId = tab.id;
-        this.recentsOpen = false;
+        this.#leaveOverview();
       }
       this.#recents.add(uri);
       this.#persistSession();
@@ -479,7 +479,7 @@ export class TabStore {
       if (existing && existing.openError === null) {
         if (activate) {
           this.activeId = existing.id;
-          this.recentsOpen = false;
+          this.#leaveOverview();
         }
         this.#recents.add(uri);
         this.#persistSession();
@@ -493,7 +493,7 @@ export class TabStore {
       }
       if (activate) {
         this.activeId = tab.id;
-        this.recentsOpen = false;
+        this.#leaveOverview();
       }
       this.#recents.add(uri);
       this.#persistSession();
@@ -531,8 +531,8 @@ export class TabStore {
    * registered a per-repo eviction (conflicts banner, stats heatmap,
    * detected projects, …), followed here by the op-store hook log and
    * completed-op history, QuickOpen's file index, and the root-keyed
-   * persisted sessions (workspace + agent — only the closing tab knows the
-   * repoId → root mapping, so they stay direct calls). Cached state must
+   * persisted workspace session (only the closing tab knows the
+   * repoId → root mapping, so it stays a direct call). Cached state must
    * not outlive its repo and leak into the next open of the same path.
    */
   async closeTab(id: RepoId): Promise<void> {
@@ -548,7 +548,6 @@ export class TabStore {
     opStore.clearUndo(id);
     evictFileIndex(id);
     workspaceSession.forget(closing.root);
-    agentSession.forget(closing.root);
     try {
       await closeRepo(id);
     } catch (err) {
@@ -577,7 +576,7 @@ export class TabStore {
   setActive(id: RepoId): void {
     if (this.tabs.some((tab) => tab.id === id)) {
       this.activeId = id;
-      this.recentsOpen = false;
+      this.#leaveOverview();
       this.#persistSession();
       if (!opStore.busy(id)) void this.refreshStatus(id);
     }
@@ -608,14 +607,29 @@ export class TabStore {
     this.#persistSession();
   }
 
-  /** Shows the recents home above the open tabs (nothing is closed). */
+  /**
+   * Shows the Overview above the open tabs (nothing is closed) — the old
+   * recents home; the persisted overview store carries the same flag.
+   */
   showRecentRepos(): void {
     this.recentsOpen = true;
+    overviewStore.enable();
   }
 
-  /** Returns from the recents home to the active tab. */
+  /** Returns from the Overview to the active tab. */
   hideRecentRepos(): void {
+    this.#leaveOverview();
+  }
+
+  /**
+   * Leaves the Overview overlay: both runtime flags clear (the persisted
+   * overview `enabled` mirrors `recentsOpen`, so any tab activation /
+   * open exits the Overview too). No-op when nothing is showing.
+   */
+  #leaveOverview(): void {
+    if (!this.recentsOpen && !overviewStore.enabled) return;
     this.recentsOpen = false;
+    overviewStore.disable();
   }
 
   /**
@@ -837,4 +851,5 @@ export function resetTabStore(): void {
   tabStore.restoring = false;
   tabStore.restoreRoot = null;
   tabStore.recentsOpen = false;
+  overviewStore.disable();
 }

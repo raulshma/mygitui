@@ -105,20 +105,20 @@ test("pins persist across reloads and the menu reflects pin state", async ({
   const tracked = trackErrors(page);
   await bootRepo(page);
 
-  await pinCommand(page, "Recent repositories");
+  await pinCommand(page, "Overview");
 
   // Reload: the pin list restores from storage and the button returns.
   await page.reload();
   await expect(page.locator(".history .row").first()).toBeVisible();
   const barButton = page
     .locator(".repo-header")
-    .getByRole("button", { name: "Recent repositories" });
+    .getByRole("button", { name: "Overview" });
   await expect(barButton).toBeVisible();
 
   // The menu row's toggle reflects the pinned state.
   await openMoreMenu(page);
   await expect(
-    page.getByRole("button", { name: "Unpin Recent repositories from the bar" }),
+    page.getByRole("button", { name: "Unpin Overview from the bar" }),
   ).toBeVisible();
 
   expect(tracked.errors).toEqual([]);

@@ -1,7 +1,13 @@
 /**
- * Playwright: recent-repositories home screen —
- *   1. removing a repo (row ✕) drops it from the list and localStorage,
- *   2. "Add existing repo…" opens the folder-picker dialog.
+ * Playwright: the Overview library —
+ *   1. "Remove from library" (row context menu) drops the repo from the
+ *      list and localStorage (an open tab stays),
+ *   2. the launch restore still opens the last repo without flashing the
+ *      Overview,
+ *   3. the tab-strip home button shows the Overview over open tabs and a
+ *      tab click returns,
+ *   4. a delayed tab close preserves a newer repository selection,
+ *   5. "Add folder…" opens the folder-picker dialog.
  *
  * Same SPA mock harness as smoke.spec.ts.
  */
@@ -25,7 +31,7 @@ async function boot(
   return installTauriMock(page);
 }
 
-test("remove drops the repo from the recent list and storage", async ({
+test("remove from library drops the repo from the list and storage", async ({
   page,
 }, testInfo) => {
   const tracked = trackErrors(page);
@@ -38,22 +44,20 @@ test("remove drops the repo from the recent list and storage", async ({
 
   await page.goto("/");
 
-  // Both seeded cards are listed; the card's accessible name starts with
-  // the repo name ("alpha /tmp/alpha") — the remove button's label starts
-  // with "Remove", so this regex only matches the card.
-  const alphaCard = page.getByRole("button", { name: /^alpha\s/ });
-  await expect(alphaCard).toBeVisible();
-  await expect(page.getByRole("button", { name: /^beta\s/ })).toBeVisible();
+  // Both seeded rows are listed; the row header carries the repo name.
+  const alphaRow = page.getByRole("article", { name: "Repository alpha" });
+  await expect(alphaRow).toBeVisible();
+  await expect(page.getByRole("article", { name: "Repository beta" })).toBeVisible();
 
-  await page
-    .getByRole("button", { name: "Remove alpha from the recent list" })
-    .click();
+  await alphaRow
+    .getByRole("button", { name: "Toggle diffs for alpha" })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove from library" }).click();
 
   // The row disappears, a toast confirms, and only beta persists.
-  await expect(page.getByText("Removed alpha from recent repositories"))
-    .toBeVisible();
-  await expect(alphaCard).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^beta\s/ })).toBeVisible();
+  await expect(page.getByText("Removed alpha from the library")).toBeVisible();
+  await expect(alphaRow).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Repository beta" })).toBeVisible();
 
   const stored = await page.evaluate((key) =>
     window.localStorage.getItem(key), RECENT_REPOS_KEY);
@@ -65,7 +69,7 @@ test("remove drops the repo from the recent list and storage", async ({
   await tracked.attach(testInfo);
 });
 
-test("launch restore opens the last repo without flashing recents", async ({
+test("launch restore opens the last repo without flashing the Overview", async ({
   page,
 }, testInfo) => {
   const tracked = trackErrors(page);
@@ -79,21 +83,19 @@ test("launch restore opens the last repo without flashing recents", async ({
 
   await page.goto("/");
 
-  // Straight into the restored workspace: the recents home never renders.
+  // Straight into the restored workspace: the Overview never renders.
   await expect(page.getByRole("tab", { name: "repo — /tmp/repo" }))
     .toBeVisible();
   await expect(
     page.getByRole("treeitem", { name: "src/app.ts" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: /Repositories/i }),
-  ).toHaveCount(0);
+  await expect(page.locator(".overview")).toHaveCount(0);
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);
 });
 
-test("top-bar home opens recents above open tabs; back returns", async ({
+test("the tab-strip home shows the Overview above open tabs; a tab click returns", async ({
   page,
 }, testInfo) => {
   const tracked = trackErrors(page);
@@ -111,12 +113,10 @@ test("top-bar home opens recents above open tabs; back returns", async ({
   const tab = page.getByRole("tab", { name: "repo — /tmp/repo" });
   await expect(tab).toBeVisible();
 
-  await page.getByRole("button", { name: "Recent repositories" }).click();
+  await page.locator(".tab-home").click();
 
-  // The overlay lists recents while the tab strip stays put.
-  await expect(
-    page.getByRole("heading", { name: /Repositories/i }),
-  ).toBeVisible();
+  // The Overview lists the library while the tab strip stays put.
+  await expect(page.getByRole("article", { name: "Repository repo" })).toBeVisible();
   await expect(tab).toBeVisible();
   await expect(
     page.getByRole("treeitem", { name: "src/app.ts" }),
@@ -124,9 +124,7 @@ test("top-bar home opens recents above open tabs; back returns", async ({
 
   // Clicking the open tab returns to its workspace without reopening it.
   await tab.click();
-  await expect(
-    page.getByRole("heading", { name: /Repositories/i }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("article", { name: "Repository repo" })).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "src/app.ts" }),
   ).toBeVisible();
@@ -146,7 +144,7 @@ test("a delayed tab close preserves a newer repository selection", async ({ page
     }))),
   });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Repositories/i })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Repository alpha" })).toBeVisible();
   await page.evaluate(() => {
     const runtime = (window as unknown as {
       __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -167,8 +165,10 @@ test("a delayed tab close preserves a newer repository selection", async ({ page
   });
 
   for (const name of ["alpha", "beta", "gamma"]) {
-    if (name !== "alpha") await page.getByRole("button", { name: "Recent repositories", exact: true }).click();
-    await page.getByRole("button", { name: new RegExp(`^${name}\\s`) }).click();
+    if (name !== "alpha") {
+      await page.locator(".tab-home").click();
+    }
+    await page.getByRole("button", { name: `Open ${name}` }).click();
     // Not exact: the tab's accessible name carries the change-count badge
     // ("alpha — /tmp/alpha, 2 changed") once the status lands.
     await expect(page.getByRole("tab", { name: `${name} — /tmp/${name}` })).toBeVisible();
@@ -182,18 +182,16 @@ test("a delayed tab close preserves a newer repository selection", async ({ page
   expect(tracked.errors).toEqual([]);
 });
 
-test("add-existing repo opens the folder picker", async ({
+test("Add folder… opens the folder picker", async ({
   page,
 }, testInfo) => {
   const tracked = trackErrors(page);
   const mock = await boot(page);
 
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: /Repositories/i }),
-  ).toBeVisible();
+  await expect(page.locator(".overview-top")).toBeVisible();
 
-  await page.getByRole("button", { name: /Open repository|Add existing repo/ }).click();
+  await page.locator(".overview-top").getByRole("button", { name: /Add folder/ }).click();
 
   // plugin:dialog|open is the @tauri-apps/plugin-dialog folder picker.
   await expect
@@ -202,49 +200,6 @@ test("add-existing repo opens the folder picker", async ({
   expect(await mock.callsOf("plugin:dialog|open")).toMatchObject([
     { options: { directory: true, multiple: false } },
   ]);
-
-  expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
-  await tracked.attach(testInfo);
-});
-
-test("home keeps the header and footer pinned while the list scrolls", async ({
-  page,
-}, testInfo) => {
-  const tracked = trackErrors(page);
-  const repos = Array.from({ length: 40 }, (_, index) => ({
-    path: `/tmp/repo-${index}`,
-    pinned: false,
-    lastOpened: index + 1,
-  }));
-  await boot(page, { [RECENT_REPOS_KEY]: JSON.stringify(repos) });
-
-  await page.goto("/");
-
-  const footer = page.locator("footer.home-foot");
-  const header = page.locator("header.home-top");
-  await expect(header).toBeVisible();
-  await expect(footer).toBeVisible();
-
-  // The footer sits at the bottom edge of the viewport (pinned, not
-  // pushed below the fold by the list).
-  const viewport = page.viewportSize();
-  const footerBefore = await footer.boundingBox();
-  expect(footerBefore).not.toBeNull();
-  expect(viewport).not.toBeNull();
-  expect(footerBefore!.y + footerBefore!.height).toBeGreaterThan(
-    viewport!.height - 4,
-  );
-
-  // Scrolling happens inside the middle region only: it actually scrolls,
-  // and the header + footer stay exactly where they were.
-  const scroller = page.locator(".home-scroll");
-  await scroller.evaluate((el) => el.scrollTo(0, el.scrollHeight));
-  await expect
-    .poll(async () => scroller.evaluate((el) => el.scrollTop))
-    .toBeGreaterThan(0);
-  const footerAfter = await footer.boundingBox();
-  expect(footerAfter!.y).toBeCloseTo(footerBefore!.y, 0);
-  await expect(header).toBeVisible();
 
   expect(tracked.errors, tracked.errors.join("\n")).toEqual([]);
   await tracked.attach(testInfo);

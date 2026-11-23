@@ -104,7 +104,7 @@ async function bootRepoWithDiff(
 
 async function openCommitDiff(page: Page, firstLine: string) {
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
   await page.locator("#commit-row-0").click();
   await expect(page.locator(".diff-viewer .viewport")).toBeVisible();
   // Pin split mode (session override — sticks at any container width):

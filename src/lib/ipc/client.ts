@@ -105,6 +105,7 @@ import type {
   RepoId,
   RepoInfo,
   RepoStatus,
+  RepoSummary,
   RepoWatchStateEvent,
   ResetKind,
   SigningInfo,
@@ -393,6 +394,16 @@ export function repoStatus(repoId: RepoId, paths?: string[]): Promise<RepoStatus
   const args: Record<string, unknown> = { repo_id: repoId };
   if (paths !== undefined) args.paths = paths;
   return call<RepoStatus>("repo_status", args);
+}
+
+/**
+ * Read-only Overview summary of the repository at/above `path`: the backend
+ * opens the repository transiently (no session, no watcher), computes one
+ * status + the HEAD commit, and drops the handle again. Rejects for
+ * non-git/bare/missing paths.
+ */
+export function repoSummary(path: string): Promise<RepoSummary> {
+  return call<RepoSummary>("repo_summary", { path });
 }
 
 /** All refs as `[name, sha]` pairs. */

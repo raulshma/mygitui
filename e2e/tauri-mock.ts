@@ -237,13 +237,16 @@ export function historyCommands(opts: {
 /** Boots the home screen and opens the recent repo at `path`. */
 export async function openRecentRepo(page: Page, path = "/tmp/repo"): Promise<void> {
   await page.goto("/");
-  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
-  // The card's accessible name is "<folder name> <path>".
-  const card = page.getByRole("button", {
-    name: new RegExp(`${escape(base)}\\s*${escape(path)}`),
-  });
-  await card.click();
+  // The Overview row's explicit "Open <name>" action opens the tab (row
+  // clicks expand the inline diffs). Wait for the scan to land first.
+  const open = page.getByRole("button", { name: `Open ${base}` });
+  await open.waitFor({ state: "visible" });
+  await open.click();
+  await page
+    .locator(".overview")
+    .waitFor({ state: "detached" })
+    .catch(() => {});
 }
 
 /**
@@ -301,6 +304,16 @@ function BOOTSTRAP(options: TauriMockOptions): void {
         { path: "notes.md", old_path: null, index: "unmodified", worktree: "untracked" },
       ],
     },
+    // The Overview's per-repo scan (repo_summary): synthesized per path so
+    // seeded recents render as rows. Path conventions the specs rely on:
+    //   *missing* → the scan fails (dimmed row + Remove action)
+    //   *ahead*   → ahead: 2, behind: 0 (Needs push filter)
+    //   *behind*  → behind: 3 (Needs pull filter)
+    //   *dirty*   → staged + unstaged + untracked files
+    //   *clean*   → empty working copy
+    // repo_summary is overridden per test via the invoke patch pattern
+    // (see recent_repos.spec.ts / overview.spec.ts).
+    repo_summary: null,
     repo_refs: [],
     cli_args_initial: [],
     stage: null,
@@ -364,6 +377,56 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   ]);
 
   const EMPTY_LOG_PAGE = { commits: [], rows: [], next_cursor: null, generation: 0 };
+
+  /**
+   * Synthesizes one `repo_summary` reply for `path` (the Overview's scan
+   * tier). The path segments steer the shape (see the repo_summary note in
+   * the command map above) so specs can seed recents that need push, are
+   * dirty, or have vanished.
+   */
+  function fakeRepoSummary(path: string): CommandMock {
+    const lower = path.toLowerCase();
+    if (lower.includes("missing")) {
+      return { __error__: "repository not found" };
+    }
+    const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
+    const dirty = !lower.includes("clean");
+    const entries: Array<Record<string, unknown>> = [];
+    if (lower.includes("dirty")) {
+      entries.push(
+        { path: "src/staged.ts", old_path: null, index: "modified", worktree: "unmodified" },
+        { path: "dirty.ts", old_path: null, index: "unmodified", worktree: "modified" },
+        { path: "notes/new.md", old_path: null, index: "unmodified", worktree: "untracked" },
+      );
+    } else if (dirty) {
+      entries.push(
+        { path: "src/app.ts", old_path: null, index: "unmodified", worktree: "modified" },
+        { path: "notes.md", old_path: null, index: "unmodified", worktree: "untracked" },
+      );
+    }
+    const ahead = lower.includes("ahead") ? 2 : 0;
+    const behind = lower.includes("behind") ? 3 : 0;
+    return {
+      root: path,
+      name,
+      branch: lower.includes("detached") ? null : "main",
+      detached: lower.includes("detached"),
+      ahead,
+      behind,
+      conflicts: 0,
+      staged: entries.filter((e) => e.index !== "unmodified").length,
+      unstaged: entries.filter(
+        (e) => e.worktree !== "unmodified" && e.worktree !== "untracked",
+      ).length,
+      untracked: entries.filter((e) => e.worktree === "untracked").length,
+      entries,
+      last_commit: {
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        summary: `last commit of ${name}`,
+        timestamp: 1_700_000_000,
+      },
+    };
+  }
 
   /**
    * Keeps `repo_status` in sync with `stage` / `stage_all` so the UI's
@@ -741,6 +804,22 @@ function BOOTSTRAP(options: TauriMockOptions): void {
 
       if (cmd === "stage") applyStage(args);
       if (cmd === "stage_all") applyStageAll(args);
+
+      // Overview scan: synthesized per path (see fakeRepoSummary).
+      if (cmd === "repo_summary") {
+        const path = String((args as { path?: unknown })?.path ?? "");
+        const value = fakeRepoSummary(path);
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          "__error__" in (value as Record<string, unknown>)
+        ) {
+          return Promise.reject(
+            new Error(String((value as { __error__: unknown }).__error__)),
+          );
+        }
+        return Promise.resolve(value);
+      }
 
       // Workspace file-browser commands: a small mutable fake workdir so
       // list/stat/read/write flows behave like the real backend.

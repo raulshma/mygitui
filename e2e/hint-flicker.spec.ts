@@ -296,7 +296,7 @@ test("B: pill enter animation never restarts on a visible pill", async ({
   const tracked = trackErrors(page);
   await boot(page);
 
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
   const row10 = page.getByRole("treeitem", { name: rowPath(10) });
   await expect(row10).toBeVisible({ timeout: 20_000 });
 

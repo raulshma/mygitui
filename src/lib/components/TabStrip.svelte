@@ -312,7 +312,7 @@
 </script>
 
 <div class="tabbar flex min-w-0 flex-1 items-stretch">
-  <Hint label="Recent repositories" side="bottom">
+  <Hint label="Show the Overview (all repositories)" side="bottom">
     {#snippet child({ props })}
       <Button
         class="tab-home ml-1 size-7 flex-none self-center rounded-lg aria-[pressed=true]:bg-secondary aria-[pressed=true]:text-secondary-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:ring-0"
@@ -395,7 +395,7 @@
         {/each}
         <DropdownMenu.Separator />
         <DropdownMenu.Item class="cursor-pointer" onclick={showRecentRepos}>
-          Recent repositories…
+          Overview…
         </DropdownMenu.Item>
         {#if activeTab !== null}
           <DropdownMenu.Item

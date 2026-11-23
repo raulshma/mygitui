@@ -33,7 +33,7 @@ async function boot(
   return installTauriMock(page);
 }
 
-test("app boots to the home/recent screen without console errors", async ({
+test("app boots to the Overview without console errors", async ({
   page,
 }, testInfo) => {
   const mock = await boot(page);
@@ -41,10 +41,8 @@ test("app boots to the home/recent screen without console errors", async ({
 
   await page.goto("/");
 
-  // Stable landmark: the home screen's recent-repositories heading.
-  await expect(
-    page.getByRole("heading", { name: /Repositories/i }),
-  ).toBeVisible();
+  // Stable landmark: the Overview strip (the zero-tabs landing).
+  await expect(page.locator(".overview-top")).toBeVisible();
 
   // The Tauri mock was consulted for first-launch argv (empty here).
   await expect
@@ -55,7 +53,7 @@ test("app boots to the home/recent screen without console errors", async ({
   await tracked.attach(testInfo);
 });
 
-test("open-repo flow: recent card → status entries → stage → commit", async ({
+test("open-repo flow: Overview row → status entries → stage → commit", async ({
   page,
 }, testInfo) => {
   const tracked = trackErrors(page);
@@ -67,10 +65,10 @@ test("open-repo flow: recent card → status entries → stage → commit", asyn
 
   await page.goto("/");
 
-  // 1. The seeded recent-repo card is listed on the home screen; click it.
-  const repoCard = page.getByRole("button", { name: /repo\s*\/tmp\/repo/ });
-  await expect(repoCard).toBeVisible();
-  await repoCard.click();
+  // 1. The seeded Overview row is listed; its Open action opens the tab.
+  const open = page.getByRole("button", { name: "Open repo" });
+  await expect(open).toBeVisible();
+  await open.click();
 
   // 2. The tab opened: repo name + status entries render (rows are
   //    treeitems labelled with the full path; dir/base are split nodes).
@@ -117,7 +115,7 @@ test("gitignore menu escapes the status list clipping", async ({ page }, testInf
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
 
   const row = page.getByRole("treeitem", { name: "notes.md" });
   await expect(row).toBeVisible();
@@ -143,7 +141,7 @@ test("files panel: browse tree, open a file in the workspace", async ({
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
 
   // 1. Switch the primary sidebar to the Files panel (activity bar).
   await page.getByRole("button", { name: "Files", exact: true }).click();
@@ -208,7 +206,7 @@ test("quick open (Ctrl+P): fuzzy pick opens the file", async ({
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
 
   // Press the keybind only once the repo is fully open: under load a fixed
   // wait could fire while the workspace is still initializing, and the
@@ -252,7 +250,7 @@ test("markdown preview: split default, typing flows through, mode persists", asy
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /repo\s*\/tmp\/repo/ }).click();
+  await page.getByRole("button", { name: "Open repo" }).click();
 
   // Open the seeded markdown file from the Files panel.
   await page.getByRole("button", { name: "Files", exact: true }).click();

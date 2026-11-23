@@ -161,6 +161,48 @@ pub struct RepoStatus {
     pub entries: Vec<StatusEntry>,
 }
 
+/// HEAD's last commit for `repo_summary` (Overview rows): sha, first
+/// message line, commit time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepoSummaryCommit {
+    pub sha: String,
+    /// First line of the commit message.
+    pub summary: String,
+    /// Commit time, Unix seconds (committer time, like `git log`).
+    pub timestamp: i64,
+}
+
+/// One repository's Overview summary (`repo_summary`): a read-only,
+/// transient scan for repos that have no open tab — no session, no
+/// watcher. Entries reuse the full [`StatusEntry`] shape so the FE's
+/// row model runs one code path for open (live) and closed (summary)
+/// repositories alike.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepoSummary {
+    /// Absolute workdir root the summary was computed for.
+    pub root: String,
+    /// Directory name (row title).
+    pub name: String,
+    /// Current branch name; `None` when detached.
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Entries whose index side is conflicted.
+    pub conflicts: u32,
+    /// Entries with a staged (index vs HEAD) change.
+    pub staged: u32,
+    /// Entries with an unstaged tracked change (worktree vs index,
+    /// excluding untracked + conflicted-only rows).
+    pub unstaged: u32,
+    pub untracked: u32,
+    pub entries: Vec<StatusEntry>,
+    /// HEAD's last commit; `None` on an unborn repository.
+    pub last_commit: Option<RepoSummaryCommit>,
+}
+
 /// One side of a diff comparison.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]

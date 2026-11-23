@@ -19,6 +19,15 @@
  */
 
 // ---------------------------------------------------------------------------
+// Overview (Rust: src-tauri/src/ipc/status.rs, `repo_summary`)
+// ---------------------------------------------------------------------------
+
+/** One repo's Overview summary (transient scan for repos with no open tab). */
+export type { RepoSummary } from "./gen/RepoSummary";
+/** HEAD's last commit inside a `RepoSummary`. */
+export type { RepoSummaryCommit } from "./gen/RepoSummaryCommit";
+
+// ---------------------------------------------------------------------------
 // M1: core reads + graph/history
 // ---------------------------------------------------------------------------
 

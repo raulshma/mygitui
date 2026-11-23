@@ -16,7 +16,7 @@ test("pinned dark theme applies dark status tokens on a light OS", async ({
   await seedStorage(page, { "mygitui.theme": "dark" });
   await installTauriMock(page);
   await page.goto("/");
-  await expect(page.locator(".home-top")).toBeVisible();
+  await expect(page.locator(".overview-top")).toBeVisible();
 
   await expect
     .poll(() =>
@@ -56,7 +56,7 @@ test("pinned light theme keeps light status tokens on a dark OS", async ({
   await seedStorage(page, { "mygitui.theme": "light" });
   await installTauriMock(page);
   await page.goto("/");
-  await expect(page.locator(".home-top")).toBeVisible();
+  await expect(page.locator(".overview-top")).toBeVisible();
 
   await expect
     .poll(() =>
