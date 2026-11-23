@@ -85,13 +85,11 @@ mod tests {
     /// runs tests inside a D-Bus session with gnome-keyring, but local
     /// environments vary).
     fn backend_available() -> bool {
-        if cfg!(any(target_os = "windows", target_os = "macos")) {
-            return true;
-        }
         let Ok(probe) = Entry::new(SERVICE, PROBE_KEY) else {
             return false;
         };
-        let ok = probe.set_password("probe").is_ok();
+        let ok = probe.set_password("probe").is_ok()
+            && matches!(probe.get_password().as_deref(), Ok("probe"));
         let _ = probe.delete_credential();
         ok
     }
