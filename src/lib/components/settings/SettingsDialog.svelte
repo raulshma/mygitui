@@ -119,7 +119,7 @@
   import iconChevronDown from "@ktibow/iconset-material-symbols/expand-more";
 
   /** Fallback when no Tauri runtime answers (browser/e2e); = package.json. */
-  const FALLBACK_VERSION = "0.1.43";
+  const FALLBACK_VERSION = "0.1.44";
 
   /** localStorage prefix the Advanced inspector / reset scope themselves to. */
   const APP_KEY_PREFIX = "mygitui.";
