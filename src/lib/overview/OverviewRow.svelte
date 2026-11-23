@@ -343,9 +343,15 @@
       {#if openPrs.length > 0}
         <span class="prs flex flex-none items-center gap-1" aria-label={`${openPrs.length} open pull requests`}>
           {#each openPrs.slice(0, 3) as pr (pr.number)}
-            <span
-              class="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 font-mono text-ui-micro font-medium text-purple-600 dark:text-purple-400"
+            <button
+              type="button"
+              class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 font-mono text-ui-micro font-medium text-purple-600 hover:bg-purple-500/20 dark:text-purple-400 transition-colors"
               title={`#${pr.number} ${pr.title}`}
+              aria-label={`Pull request #${pr.number}: ${pr.title}`}
+              onclick={(e) => {
+                e.stopPropagation();
+                void openPr(pr);
+              }}
             >
               #{pr.number}
               {#if pr.is_draft}
@@ -355,7 +361,7 @@
               {:else if pr.review_decision === "CHANGES_REQUESTED"}
                 <span class="text-destructive" title="Changes requested"><Icon icon={iconChanges} size={10} /></span>
               {/if}
-            </span>
+            </button>
           {/each}
           {#if openPrs.length > 3}
             <span class="font-mono text-ui-micro text-muted-foreground">+{openPrs.length - 3}</span>

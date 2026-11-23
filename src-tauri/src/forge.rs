@@ -1517,12 +1517,16 @@ fn trim_message(text: &str) -> String {
 /// still print host context). Callers degrade to the unavailable default on
 /// a failed probe first (local: not on PATH; device: transport failure).
 fn status_from_probes(probe: ProcOutcome, auth: ProcOutcome) -> ForgeStatus {
-    let authed = !auth.timed_out && auth.code == Some(0);
-    let hosts = gh_auth_hosts(&format!("{}\n{}", auth.stdout, auth.stderr));
-    cache_authed_hosts(hosts);
+    let version = version_from_output(&probe.stdout);
+    let available = probe.code == Some(0) && !version.is_empty();
+    let authed = available && !auth.timed_out && auth.code == Some(0);
+    if available {
+        let hosts = gh_auth_hosts(&format!("{}\n{}", auth.stdout, auth.stderr));
+        cache_authed_hosts(hosts);
+    }
     ForgeStatus {
-        available: true,
-        version: version_from_output(&probe.stdout),
+        available,
+        version,
         authed,
     }
 }
@@ -1560,6 +1564,9 @@ pub fn status_sync_remote(session: &Arc<DeviceSession>, root: &str) -> ForgeStat
         // Transport failure (device unreachable / channel dead): not "gh
         // missing", but no usable verdict either — the unavailable default
         // keeps the panel in its install banner until the device responds.
+        return ForgeStatus::default();
+    }
+    if probe.code != Some(0) || probe.timed_out {
         return ForgeStatus::default();
     }
     let auth = run_remote_gh(

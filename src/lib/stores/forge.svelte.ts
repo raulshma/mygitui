@@ -356,15 +356,31 @@ export class ForgeStore {
    * lives on a device probes that device, so the panel and chips speak for
    * the machine the repo actually runs on.
    */
+  #deviceByRepo = new Map<RepoId, string>();
+
+  /** Associate a repo with its remote device ID (or remove when deviceId is null). */
+  registerRepoDevice(repoId: RepoId, deviceId: string | null): void {
+    if (deviceId) {
+      this.#deviceByRepo.set(repoId, deviceId);
+    } else {
+      this.#deviceByRepo.delete(repoId);
+    }
+  }
+
+  /** Resolves the device ID for a repo (checks open tabs, then registered map). */
+  deviceIdFor(repoId?: RepoId): string | null {
+    if (!repoId) return null;
+    const tab = tabStore.tabs.find((tab) => tab.id === repoId);
+    if (tab?.deviceId) return tab.deviceId;
+    return this.#deviceByRepo.get(repoId) ?? null;
+  }
+
   async refreshStatus(repoId?: RepoId): Promise<ForgeStatus | null> {
-    const tab =
-      repoId !== undefined
-        ? (tabStore.tabs.find((tab) => tab.id === repoId) ?? null)
-        : null;
-    const key = tab?.deviceId ? deviceStatusKey(tab.deviceId) : STATUS_KEY;
+    const deviceId = this.deviceIdFor(repoId);
+    const key = deviceId ? deviceStatusKey(deviceId) : STATUS_KEY;
     return this.#status.run(key, async () => {
       try {
-        return await forgeStatus(tab?.deviceId ? repoId : undefined);
+        return await forgeStatus(deviceId ? repoId : undefined);
       } catch (err) {
         console.warn("[forge] status probe failed:", err);
         return GH_UNAVAILABLE;
@@ -375,8 +391,8 @@ export class ForgeStore {
   /** The status entry key for one repo (its device, or the local machine). */
   #statusKeyFor(repoId?: RepoId): string {
     if (repoId === undefined) return STATUS_KEY;
-    const tab = tabStore.tabs.find((tab) => tab.id === repoId) ?? null;
-    return tab?.deviceId ? deviceStatusKey(tab.deviceId) : STATUS_KEY;
+    const deviceId = this.deviceIdFor(repoId);
+    return deviceId ? deviceStatusKey(deviceId) : STATUS_KEY;
   }
 
   /**
@@ -921,6 +937,14 @@ export class ForgeStore {
   /** PR list, or the list a failed refresh left visible. */
   prsFor(repoId: RepoId): PrInfo[] {
     return this.#staleData(this.#prs, repoId) ?? [];
+  }
+
+  /**
+   * The PR list, or the list a failed refresh left visible.
+   * Resolves null if PRs have not been fetched yet (unlike prsFor which falls back to []).
+   */
+  prsStaleFor(repoId: RepoId): PrInfo[] | null {
+    return this.#staleData(this.#prs, repoId);
   }
 
   prsLoadingFor(repoId: RepoId): boolean {

@@ -6,11 +6,13 @@ import { recentRepos, resetTabStore, tabStore } from "$lib/stores/tabs.svelte";
 import {
   OverviewData,
   OverviewWarmer,
+  prsForRepo,
   SCAN_CONCURRENCY,
   scanRepoSummaries,
   type OverviewDataOptions,
   type WarmerIpc,
 } from "./overviewData.svelte";
+import { forgeStore } from "$lib/stores/forge.svelte";
 
 function status(patch: Partial<RepoStatus> = {}): RepoStatus {
   return {
@@ -528,5 +530,75 @@ describe("OverviewData", () => {
     expect(row.remoteUrl).toBe("https://gitlab.com/team/repo.git");
     expect(row.ahead).toBe(1);
     expect(row.behind).toBe(2);
+  });
+
+  it("prsForRepo resolves open PRs and falls back to snapshot", () => {
+    expect(prsForRepo(null)).toBeNull();
+
+    // Mocking forgeStore methods
+    const origPrsStale = forgeStore.prsStaleFor;
+    const origSnapshotStale = forgeStore.snapshotStaleFor;
+
+    try {
+      (forgeStore as any).prsStaleFor = () => null;
+      (forgeStore as any).snapshotStaleFor = () => null;
+      expect(prsForRepo("r1")).toBeNull();
+
+      // Snapshot with open PR fallback
+      (forgeStore as any).snapshotStaleFor = () => ({
+        branch: "feature",
+        remote: "origin",
+        pr: { number: 42, title: "Test PR", state: "OPEN", head_ref_name: "feature", head_ref_oid: "abc", is_draft: false, url: "https://github.com/org/repo/pull/42", review_decision: null, author: "dev" },
+        pr_checks: [],
+        head_checks: [],
+      });
+      expect(prsForRepo("r1")).toEqual([
+        expect.objectContaining({ number: 42, state: "OPEN" }),
+      ]);
+
+      // PRs list filters only OPEN
+      (forgeStore as any).prsStaleFor = () => [
+        { number: 1, title: "Open PR", state: "OPEN", head_ref_name: "feat1", head_ref_oid: "1", is_draft: false, url: "", review_decision: null, author: "dev" },
+        { number: 2, title: "Closed PR", state: "CLOSED", head_ref_name: "feat2", head_ref_oid: "2", is_draft: false, url: "", review_decision: null, author: "dev" },
+        { number: 3, title: "Merged PR", state: "MERGED", head_ref_name: "feat3", head_ref_oid: "3", is_draft: false, url: "", review_decision: null, author: "dev" },
+      ];
+      expect(prsForRepo("r1")).toEqual([
+        expect.objectContaining({ number: 1, state: "OPEN" }),
+      ]);
+    } finally {
+      (forgeStore as any).prsStaleFor = origPrsStale;
+      (forgeStore as any).snapshotStaleFor = origSnapshotStale;
+    }
+  });
+
+  it("warms remote device repositories directly without calling repoSummary", async () => {
+    const fetched: string[] = [];
+    const warmed: string[] = [];
+    const data = new OverviewData({
+      summarize: async (root) => {
+        fetched.push(root);
+        return summary(root);
+      },
+      status: async () => status(),
+      onChange: async () => () => {},
+      warmer: new OverviewWarmer({
+        open: async (path) => {
+          warmed.push(path);
+          return { repo_id: `warm-${path}`, root: path };
+        },
+        close: async () => {},
+      }),
+      now: () => 1_000,
+    });
+
+    recentRepos.add("ssh://vps-server/srv/repo");
+    await data.activate();
+
+    // Should NOT call repoSummary on ssh:// roots (which would fail in git2 discover)
+    expect(fetched).not.toContain("ssh://vps-server/srv/repo");
+    // Should warm it directly
+    expect(warmed).toContain("ssh://vps-server/srv/repo");
+    const row = data.rowFor("ssh://vps-server/srv/repo")!;
+    expect(row.missing).toBe(false);
   });
 });

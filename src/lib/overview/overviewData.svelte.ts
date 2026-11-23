@@ -22,13 +22,14 @@ import {
   closeRepo,
   onRepoChanged,
   openRepo,
+  remoteRepoOpen,
   repoStatus,
   repoSummary,
 } from "$lib/ipc/client";
 import type { PrInfo, RepoId, RepoStatus, RepoSummary } from "$lib/ipc/types";
 import { forgeStore } from "$lib/stores/forge.svelte";
 import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
-import { recentRepos, tabStore } from "$lib/stores/tabs.svelte";
+import { parseSshUri, recentRepos, tabStore } from "$lib/stores/tabs.svelte";
 import {
   applyLiveStatus,
   applySummary,
@@ -56,7 +57,18 @@ export interface WarmerIpc {
   close(repoId: RepoId): Promise<void>;
 }
 
-const realWarmerIpc: WarmerIpc = { open: openRepo, close: closeRepo };
+const realWarmerIpc: WarmerIpc = {
+  open: async (path: string) => {
+    const remote = parseSshUri(path);
+    if (remote) {
+      const info = await remoteRepoOpen(remote.deviceId, remote.path);
+      forgeStore.registerRepoDevice(info.repo_id, remote.deviceId);
+      return { repo_id: info.repo_id, root: path };
+    }
+    return openRepo(path);
+  },
+  close: closeRepo,
+};
 
 /**
  * Warms non-open repos for the Overview session: `repo_open` gives the row
@@ -106,6 +118,7 @@ export class OverviewWarmer {
           void this.#ipc.close(info.repo_id).catch((err: unknown) => {
             console.warn(`[overview] closing late warm ${info.repo_id} failed:`, err);
           });
+          forgeStore.registerRepoDevice(info.repo_id, null);
           return null;
         }
         this.#warmed.set(root, info.repo_id);
@@ -138,16 +151,20 @@ export class OverviewWarmer {
     await Promise.all(
       entries
         .filter(([root]) => !keep.has(root.toLowerCase()))
-        .map(([, repoId]) =>
-          this.#ipc.close(repoId).catch((err: unknown) => {
+        .map(([, repoId]) => {
+          forgeStore.registerRepoDevice(repoId, null);
+          return this.#ipc.close(repoId).catch((err: unknown) => {
             console.warn(`[overview] closing warmed ${repoId} failed:`, err);
-          }),
-        ),
+          });
+        }),
     );
   }
 
   /** Forgets the map without closing (test reset). */
   clear(): void {
+    for (const repoId of this.#warmed.values()) {
+      forgeStore.registerRepoDevice(repoId, null);
+    }
     this.#epoch += 1;
     this.#warmed.clear();
   }
@@ -202,8 +219,15 @@ export async function scanRepoSummaries(
 /** The open PRs the forge store currently holds for `repoId` (or null). */
 export function prsForRepo(repoId: string | null): PrInfo[] | null {
   if (repoId === null) return null;
-  const prs = forgeStore.prsFor(repoId);
-  return prs.filter((pr) => pr.state === "OPEN");
+  const prs = forgeStore.prsStaleFor(repoId);
+  if (prs !== null) {
+    return prs.filter((pr) => pr.state === "OPEN");
+  }
+  const snapshot = forgeStore.snapshotStaleFor(repoId);
+  if (snapshot?.pr && snapshot.pr.state === "OPEN") {
+    return [snapshot.pr];
+  }
+  return null;
 }
 
 /**
@@ -478,13 +502,13 @@ export class OverviewData {
       row.repoId = repoId;
       row.refreshing = true;
       await this.refreshWarmedRow(root);
-      await this.#refreshForgeRow(root, repoId);
+      await this.refreshForgeRow(root, repoId);
     }
     return repoId;
   }
 
   /** PRs + head checks for a warmed/open repo (silent, cached lanes). */
-  async #refreshForgeRow(root: string, repoId: RepoId): Promise<void> {
+  async refreshForgeRow(root: string, repoId: RepoId): Promise<void> {
     try {
       // Snapshot + PR list only when the machine's gh is authed; the strip
       // shows the banner once when it is not (the rows stay em-dash).
@@ -498,6 +522,13 @@ export class OverviewData {
       ]);
       const row = this.rowFor(root);
       if (row) {
+        if (!row.remoteUrl) {
+          const ctx = await forgeStore.refreshContext(repoId).catch(() => null);
+          if (ctx?.remote_url) {
+            row.remoteUrl = ctx.remote_url;
+            row.hasRemote = true;
+          }
+        }
         row.prs = prsForRepo(repoId);
         row.failingChecks = failingChecksFor(repoId);
       }
@@ -517,6 +548,12 @@ export class OverviewData {
     this.sync();
     this.#applyTabData();
 
+    for (const row of this.rows) {
+      if (row.open && row.repoId) {
+        void this.refreshForgeRow(row.root, row.repoId);
+      }
+    }
+
     const pending: string[] = [];
     for (const row of this.rows) {
       if (row.open) continue;
@@ -524,8 +561,13 @@ export class OverviewData {
         row.refreshing = true;
         void this.refreshWarmedRow(row.root).then(() => {
           const id = this.#warmer.idFor(row.root);
-          if (id !== null) void this.#refreshForgeRow(row.root, id);
+          if (id !== null) void this.refreshForgeRow(row.root, id);
         });
+        continue;
+      }
+      if (row.isRemoteDevice || row.root.startsWith("ssh://")) {
+        row.refreshing = true;
+        void this.warmRow(row.root);
         continue;
       }
       pending.push(row.root);
@@ -548,10 +590,11 @@ export class OverviewData {
           const row = this.rowFor(root);
           if (!row) return;
           Object.assign(row, applySummary(row, summary, this.#now()));
-          // gh data v1: cached forge snapshot only (never fetched for
-          // non-open non-warm repos).
           row.prs = prsForRepo(row.repoId);
           row.failingChecks = failingChecksFor(row.repoId);
+          if (row.hasRemote && (row.remoteUrl?.toLowerCase().includes("github") || row.isRemoteDevice)) {
+            void this.warmRow(root);
+          }
         },
         onError: (root) => {
           if (gen !== this.#scanGen) return;

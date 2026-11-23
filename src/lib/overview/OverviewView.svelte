@@ -96,15 +96,28 @@
    *  + filtered, so the rail never targets a row the user can't see. */
   const chatTarget = $derived(visible.find((row) => isExpanded(row)) ?? null);
 
+  // Auto-warm visible expanded rows that are not yet open or warmed
+  $effect(() => {
+    for (const row of visible) {
+      if (!row.open && !overviewData.warmer.isWarmed(row.root) && isExpanded(row)) {
+        void overviewData.warmRow(row.root);
+      }
+    }
+  });
+
   function onToggleRow(root: string): void {
     const row = overviewData.rowFor(root);
     if (!row) return;
     const next = !isExpanded(row);
     overrides = { ...overrides, [root]: next };
-    if (next && !row.open && !overviewData.warmer.isWarmed(root)) {
-      // Expanding a non-open repo warms a real session (watcher + gh lane)
-      // for the Overview's lifetime.
-      void overviewData.warmRow(root);
+    if (next) {
+      if (!row.open && !overviewData.warmer.isWarmed(root)) {
+        // Expanding a non-open repo warms a real session (watcher + gh lane)
+        // for the Overview's lifetime.
+        void overviewData.warmRow(root);
+      } else if (row.repoId) {
+        void overviewData.refreshForgeRow(root, row.repoId);
+      }
     }
   }
 
