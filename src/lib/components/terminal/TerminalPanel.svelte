@@ -242,7 +242,7 @@
         {#snippet child({ props })}
           <Button
             {...props}
-            class="term-btn hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+            class="term-btn hover:bg-accent hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
             variant="outline"
             size="icon-xs"
             type="button"
@@ -254,7 +254,7 @@
         {/snippet}
       </Hint>
       <Button
-        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
         variant="outline"
         size="xs"
         type="button"
@@ -286,7 +286,7 @@
       {#each terminalIds as id (id)}
         <span
           class="term-tab flex items-center gap-0.5 rounded-md border px-1.5 py-0.5 text-ui-micro {id === activeTerminalId
-            ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+            ? 'border-primary/40 bg-primary/10 font-medium text-primary-ink'
             : 'border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'}"
           role="tab"
           aria-selected={id === activeTerminalId}
@@ -403,7 +403,7 @@
           : "The terminal session ended."}
       </p>
       <Button
-        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+        class="term-btn whitespace-nowrap hover:bg-accent hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
         variant="outline"
         size="xs"
         type="button"

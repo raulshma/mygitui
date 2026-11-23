@@ -72,6 +72,15 @@
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
+  /* Derived variants (lib/theme/contrast.ts): `--primary-ink` is the
+   * readable-as-text version of the primary (chips, links, ref badges) and
+   * `--primary-hover` the press-in hover fill — one step away from the
+   * foreground so hover never drops the pair below 4.5:1. Static defaults
+   * match the composer's output for the neutral default config; the
+   * appearance engine re-computes both per scheme whenever a (non-default)
+   * theme color is applied. */
+  --primary-ink: var(--primary);
+  --primary-hover: oklch(0.165 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -113,6 +122,8 @@
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
+  --primary-ink: var(--primary);
+  --primary-hover: oklch(0.962 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -273,6 +284,8 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -416,13 +429,15 @@
   @apply px-[0.85rem] py-[0.35rem] gap-[0.3rem] disabled:cursor-not-allowed disabled:opacity-50;
 }
 @utility pill-btn-primary {
-  @apply border-transparent bg-primary text-primary-foreground hover:brightness-110;
+  /* Hover fill via `--primary-hover` (contrast.ts): brightness-110 pushed a
+   * light fill (yellow) AWAY from its dark text and under 4.5:1. */
+  @apply border-transparent bg-primary text-primary-foreground hover:bg-(--primary-hover);
 }
 @utility pill-btn-secondary {
-  @apply border-border bg-muted text-foreground hover:border-input hover:bg-accent;
+  @apply border-border bg-muted text-foreground hover:border-input hover:bg-accent hover:text-accent-foreground;
 }
 @utility pill-btn-ghost {
-  @apply border-border bg-transparent text-foreground hover:border-input hover:bg-accent;
+  @apply border-border bg-transparent text-foreground hover:border-input hover:bg-accent hover:text-accent-foreground;
 }
 @utility pill-btn-danger {
   @apply border-border bg-transparent text-destructive hover:border-destructive hover:bg-destructive/10;

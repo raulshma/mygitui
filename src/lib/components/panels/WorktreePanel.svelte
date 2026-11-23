@@ -517,7 +517,7 @@
            repository's own root comes from the `root` prop. -->
       <li class="card main flex flex-col gap-1 rounded-lg border border-dashed border-border bg-card px-2 py-1.5">
         <div class="row flex min-w-0 flex-wrap items-center gap-1.5">
-          <span class="name font-semibold text-primary">{baseName(root)}</span>
+          <span class="name font-semibold text-primary-ink">{baseName(root)}</span>
           <span class="badge main-badge inline-flex h-auto shrink-0 items-center rounded-full border border-transparent bg-secondary px-1.5 py-0 text-ui-micro font-medium text-secondary-foreground">main</span>
           <span class="ref ml-auto truncate text-ui-meta text-muted-foreground">this repository</span>
         </div>
@@ -547,7 +547,7 @@
       {#each linked as info (info.path)}
         <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5" aria-busy={removingPath === info.path}>
           <div class="row flex min-w-0 flex-wrap items-center gap-1.5">
-            <span class="name font-semibold text-primary">{info.name}</span>
+            <span class="name font-semibold text-primary-ink">{info.name}</span>
             {#if info.is_main}
               <!-- M12: marks the repository's true main worktree (this tab is
                    itself a linked one). -->

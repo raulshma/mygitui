@@ -445,7 +445,7 @@
       {#each list as info (info.index)}
         <li class="card flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-1.5">
           <div class="row flex min-w-0 items-baseline gap-2">
-            <span class="ref shrink-0 font-mono text-ui-micro font-semibold text-primary">{stashRef(info)}</span>
+            <span class="ref shrink-0 font-mono text-ui-micro font-semibold text-primary-ink">{stashRef(info)}</span>
             <Hint label={info.message}>
               {#snippet child({ props })}
                 <span class="msg min-w-0 flex-1 truncate" {...props}>{info.message}</span>

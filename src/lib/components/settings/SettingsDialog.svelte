@@ -1879,7 +1879,7 @@
                   </span>
                   <span class="flex flex-none items-center gap-1.5">
                     {#if isOverride(entry.command.id)}
-                      <span class="rounded-full bg-primary/10 px-1.5 py-px text-ui-micro text-primary">custom</span>
+                      <span class="rounded-full bg-primary/10 px-1.5 py-px text-ui-micro text-primary-ink">custom</span>
                     {/if}
                     <!-- The capture control: shows the binding when idle,
                          "Press keys…" while armed; captures on keydown. -->
@@ -2066,7 +2066,7 @@
                 <span class="absolute -left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary" aria-hidden="true"></span>
               {/if}
               {#if sectionIcon}
-                <span class="flex-none {isActive ? 'text-primary' : 'text-muted-foreground/80'}">
+                <span class="flex-none {isActive ? 'text-primary-ink' : 'text-muted-foreground/80'}">
                   <Icon icon={sectionIcon} size={15} />
                 </span>
               {/if}
@@ -2114,7 +2114,7 @@
               <section aria-labelledby="settings-section-heading" class="flex animate-in flex-col gap-2 fade-in-0 slide-in-from-bottom-1 duration-150">
                 <div id="settings-section-heading" class="flex items-center gap-2.5 pb-2">
                   {#if activeSectionIcon}
-                    <span class="flex size-7 flex-none items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <span class="flex size-7 flex-none items-center justify-center rounded-lg bg-primary/10 text-primary-ink">
                       <Icon icon={activeSectionIcon} size={15} />
                     </span>
                   {/if}

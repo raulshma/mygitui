@@ -598,14 +598,14 @@
         {#each rows as row, i (rowKey(row))}
           {#if row.kind === "local" && rows[i - 1]?.kind !== "local"}
             <li
-              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink"
               role="presentation"
             >
               Local branches
             </li>
           {:else if row.kind === "remote" && rows[i - 1]?.kind !== "remote"}
             <li
-              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+              class="section select-none px-3 pb-ui-2 pt-2 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink"
               role="presentation"
             >
               Remote branches
@@ -614,7 +614,7 @@
           {#if row.kind === "create"}
             <li
               id={`branch-opt-${i}`}
-              class="row create-row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-ui-375 rounded-sm px-ui-4 py-1 text-primary hover:bg-accent [&.active]:bg-accent"
+              class="row create-row mx-1 flex min-w-0 cursor-pointer flex-wrap items-center gap-ui-375 rounded-sm px-ui-4 py-1 text-primary-ink hover:bg-accent [&.active]:bg-accent"
               class:active={i === activeIndex}
               role="option"
               aria-selected={i === activeIndex}
@@ -627,12 +627,12 @@
               }}
               onmouseenter={() => (activeIndex = i)}
             >
-              <span class="marker w-3.5 flex-none text-center text-primary"></span>
+              <span class="marker w-3.5 flex-none text-center text-primary-ink"></span>
               <span class="create-icon inline-flex flex-none items-center">
                 <Icon icon={iconAdd} size={14} />
               </span>
               <span
-                class="bname min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-medium text-primary"
+                class="bname min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs font-medium text-primary-ink"
                 >Create branch "{row.name}"</span
               >
             </li>
@@ -657,7 +657,7 @@
               <Hint label={row.branch.is_head ? "Current branch" : ""}>
                 {#snippet child({ props })}
                   <span
-                    class="marker w-3.5 flex-none text-center text-primary"
+                    class="marker w-3.5 flex-none text-center text-primary-ink"
                     {...props}
                   >
                     {row.branch.is_head ? "●" : ""}
@@ -686,7 +686,7 @@
                     >
                       {row.branch.upstream}
                       {#if row.branch.ahead > 0 || row.branch.behind > 0}
-                        <span class="ab pl-1.5 text-primary"
+                        <span class="ab pl-1.5 text-primary-ink"
                           >↑{row.branch.ahead} ↓{row.branch.behind}</span
                         >
                       {/if}
@@ -739,7 +739,7 @@
               onmouseenter={() => (activeIndex = i)}
               oncontextmenu={(event) => remoteMenu(event, row.rb)}
             >
-              <span class="marker w-3.5 flex-none text-center text-primary" aria-hidden="true"></span>
+              <span class="marker w-3.5 flex-none text-center text-primary-ink" aria-hidden="true"></span>
               <Hint label={`${row.rb.remote}/${row.rb.name}`}>
                 {#snippet child({ props })}
                   <span
@@ -822,7 +822,7 @@
       </Button>
       <span class="foot-spacer flex-1"></span>
       <Button
-        class="foot-btn manage h-auto gap-ui-3 rounded-full px-[0.55rem] py-1 text-ui-meta text-primary hover:text-primary focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
+        class="foot-btn manage h-auto gap-ui-3 rounded-full px-[0.55rem] py-1 text-ui-meta text-primary-ink hover:text-primary-ink focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0"
         variant="ghost"
         size="sm"
         type="button"

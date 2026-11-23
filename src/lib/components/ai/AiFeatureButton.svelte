@@ -232,7 +232,7 @@
           <Button
             variant="outline"
             size="icon"
-            class="sparkle size-7 rounded-full text-primary"
+            class="sparkle size-7 rounded-full text-primary-ink"
             type="button"
             {...props}
             {disabled}
@@ -255,7 +255,7 @@
                 <path d="M19 15l1.18 3.32L23.5 19.5l-3.32 1.18L19 24l-1.18-3.32L14.5 19.5l3.32-1.18L19 15z" />
               </svg>
               {#if busy}
-                <Spinner class="icon-spinner absolute inset-0 m-auto size-3 text-primary" aria-hidden="true" />
+                <Spinner class="icon-spinner absolute inset-0 m-auto size-3 text-primary-ink" aria-hidden="true" />
               {/if}
             </span>
           </Button>
@@ -277,7 +277,7 @@
             onclick={openAction}
           >
             {#if busy}
-              <Spinner class="size-3 text-primary" aria-hidden="true" />
+              <Spinner class="size-3 text-primary-ink" aria-hidden="true" />
             {/if}
             {label}
           </Button>

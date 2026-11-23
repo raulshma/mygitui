@@ -650,7 +650,7 @@
       </Button>
       <Button
         variant="default"
-        class="sync-act filled min-h-7 gap-1.5 rounded-full px-2.5 text-xs hover:bg-primary/90"
+        class="sync-act filled min-h-7 gap-1.5 rounded-full px-2.5 text-xs hover:bg-(--primary-hover)"
         type="button"
         disabled={netBusy || !currentBranch}
         title={currentBranch
@@ -658,7 +658,7 @@
           : "Push is unavailable without a current branch"}
         onclick={onBarPush}
       >
-        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-ui-micro font-semibold leading-tight tabular-nums text-primary">↑ {ahead}</Badge>{/if}
+        {#if ahead > 0}<Badge variant="secondary" class="sync-count ahead rounded-full bg-primary-foreground px-1.5 h-auto py-0 text-ui-micro font-semibold leading-tight tabular-nums text-primary-ink">↑ {ahead}</Badge>{/if}
         Push
       </Button>
       <Button
@@ -771,7 +771,7 @@
             <div class="card-head flex min-w-0 flex-wrap items-center gap-2">
               <Hint label={remote.name}>
                 {#snippet child({ props })}
-                  <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary" {...props}>{remote.name}</span>
+                  <span class="rname shrink-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-primary-ink" {...props}>{remote.name}</span>
                 {/snippet}
               </Hint>
               <Hint label={remote.url}>

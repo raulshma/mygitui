@@ -59,7 +59,7 @@
     OpHistoryOutcome,
     { icon: "done" | "alert" | "ban"; chip: string }
   > = {
-    succeeded: { icon: "done", chip: "bg-primary/15 text-primary" },
+    succeeded: { icon: "done", chip: "bg-primary/15 text-primary-ink" },
     failed: { icon: "alert", chip: "bg-destructive/10 text-destructive" },
     cancelled: { icon: "ban", chip: "bg-muted text-muted-foreground" },
   };
@@ -189,7 +189,7 @@
             <span
               class="inline-flex size-3.5 flex-none items-center justify-center {entry.outcome ===
               "succeeded"
-                ? "text-primary"
+                ? "text-primary-ink"
                 : entry.outcome === "failed"
                   ? "text-destructive"
                   : "text-muted-foreground"}"

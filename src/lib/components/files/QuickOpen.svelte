@@ -241,7 +241,7 @@
               />
             </span>
             <span class="path min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs">
-              {#each pathTokens(hit.path, query) as token, ti (ti)}{#if token.separator}<span class="sep text-muted-foreground">{token.text}</span>{:else if token.marked}<mark class="bg-transparent font-semibold text-primary">{token.text}</mark>{:else}{token.text}{/if}{/each}
+              {#each pathTokens(hit.path, query) as token, ti (ti)}{#if token.separator}<span class="sep text-muted-foreground">{token.text}</span>{:else if token.marked}<mark class="bg-transparent font-semibold text-primary-ink">{token.text}</mark>{:else}{token.text}{/if}{/each}
             </span>
           </li>
         {/each}

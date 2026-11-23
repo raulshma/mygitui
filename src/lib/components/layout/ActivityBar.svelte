@@ -101,7 +101,7 @@
   /** Rail chrome (flyout + active indicator) lives in `@utility activity-btn`.
    *  Active = filled pill (tinted rounded fill, not just a color swap). */
   const railBtn =
-    "activity-btn relative flex-none rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-primary/15 [&.active]:text-primary [&.active]:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_25%,transparent)]";
+    "activity-btn relative flex-none rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 focus-visible:ring-0 [&.active]:bg-primary/15 [&.active]:text-primary-ink [&.active]:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_25%,transparent)]";
 
   /** Default rail buttons (registry order first: the core panels). */
   const defaultRail = $derived(

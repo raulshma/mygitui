@@ -137,7 +137,7 @@
     class="agent-top flex h-9 flex-none items-center gap-2 border-b border-border px-2"
   >
     <span
-      class="grid size-5 flex-none place-items-center rounded bg-primary/10 text-primary"
+      class="grid size-5 flex-none place-items-center rounded bg-primary/10 text-primary-ink"
       aria-hidden="true"
     >
       <Icon icon={iconAgent} size={13} />

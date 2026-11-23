@@ -45,9 +45,12 @@ export interface OpenEntry {
 /**
  * One detection pass. Called on mount and again on every menu open (the
  * probes are a handful of `stat`s); a failure toasts once per session
- * and resolves as "no apps".
+ * and resolves as "no apps". Also re-syncs the last-used mirror from
+ * storage — another window (a popout) may have persisted a launch since
+ * this one last did.
  */
 export function refreshApps(): Promise<EditorApp[]> {
+  lastId = readLast();
   return detectEditors()
     .then((found) => (Array.isArray(found) ? found : []))
     .catch((err: unknown) => {
@@ -70,7 +73,16 @@ function readLast(): string {
   }
 }
 
+/**
+ * The persisted last-used id, mirrored as reactive state: a launch (here or
+ * from the picker) must flip the pinned split button's main segment live —
+ * a plain localStorage read inside `currentEntry` would only refresh on the
+ * next apps probe, leaving the button stale until a menu re-open.
+ */
+let lastId = $state(readLast());
+
 function persistLast(id: string): void {
+  lastId = id;
   try {
     localStorage.setItem(LAST_KEY, id);
   } catch {
@@ -89,7 +101,6 @@ export function customEntries(): OpenEntry[] {
 
 /** Last-used custom app, when the persisted id points at one that exists. */
 export function lastCustomEntry(): OpenEntry | undefined {
-  const lastId = readLast();
   if (!isCustomId(lastId)) return undefined;
   const app = customApps.byId(fromMenuId(lastId));
   return app ? { id: lastId, name: app.name, custom: app } : undefined;
@@ -99,13 +110,13 @@ export function lastCustomEntry(): OpenEntry | undefined {
  * The app the primary/"open again" action targets: the last-used entry,
  * falling back to the file manager (always present), then the first
  * detected app. `undefined` only when detection found nothing at all.
+ * Reads the reactive mirror, so callers' `$derived`s track launches.
  */
 export function currentEntry(apps: EditorApp[]): OpenEntry | undefined {
   const entries: OpenEntry[] = [
     ...apps.map((a) => ({ id: a.id, name: a.name })),
     ...customEntries(),
   ];
-  const lastId = readLast();
   const lastCustom = lastCustomEntry();
   return (
     lastCustom ??

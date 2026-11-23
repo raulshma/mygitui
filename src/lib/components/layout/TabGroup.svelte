@@ -275,7 +275,7 @@ import {
           {#snippet child({ props })}
             <button
               data-tab-index={cell.index}
-              class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary"
+              class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary-ink"
               type="button"
               {...props}
               {...cell.triggerProps}
@@ -308,7 +308,7 @@ import {
           <Hint label="Add panel">
             {#snippet child({ props })}
               <Button
-                class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary focus-visible:bg-accent focus-visible:text-primary"
+                class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
                 variant="ghost"
                 size="sm"
                 type="button"

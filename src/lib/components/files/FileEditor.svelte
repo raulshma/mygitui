@@ -172,7 +172,7 @@
         fontSize: "0.8125rem",
       },
       ".cm-content": {
-        caretColor: "var(--primary)",
+        caretColor: "var(--primary-ink)",
         fontFamily: "var(--app-font-mono, ui-monospace, Consolas, monospace)",
       },
       ".cm-scroller": {
@@ -233,8 +233,8 @@
     });
     const highlight = c.syntaxHighlighting(
       c.HighlightStyle.define([
-        { tag: tags.keyword, color: "var(--primary)" },
-        { tag: [tags.controlKeyword, tags.moduleKeyword], color: "var(--primary)" },
+        { tag: tags.keyword, color: "var(--primary-ink)" },
+        { tag: [tags.controlKeyword, tags.moduleKeyword], color: "var(--primary-ink)" },
         { tag: tags.string, color: "var(--muted)" },
         { tag: tags.number, color: "var(--muted)" },
         {
@@ -245,7 +245,7 @@
         { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--secondary)" },
       { tag: [tags.typeName, tags.className], color: "var(--secondary)" },
       { tag: [tags.variableName, tags.propertyName], color: "var(--foreground)" },
-      { tag: tags.heading, color: "var(--primary)", fontWeight: "bold" },
+      { tag: tags.heading, color: "var(--primary-ink)", fontWeight: "bold" },
       { tag: tags.link, color: "var(--muted)", textDecoration: "underline" },
       { tag: tags.invalid, color: "var(--destructive)" },
       // Markdown source + general coverage polish.
@@ -253,7 +253,7 @@
       { tag: tags.emphasis, fontStyle: "italic" },
       { tag: tags.strikethrough, textDecoration: "line-through" },
       { tag: tags.quote, color: "var(--muted-foreground)", fontStyle: "italic" },
-      { tag: tags.contentSeparator, color: "var(--primary)" },
+      { tag: tags.contentSeparator, color: "var(--primary-ink)" },
       { tag: tags.monospace, fontFamily: "var(--app-font-mono, ui-monospace, Consolas, monospace)" },
       { tag: [tags.escape, tags.regexp], color: "var(--muted)" },
       { tag: [tags.atom, tags.bool, tags.null], color: "var(--muted)" },

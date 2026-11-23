@@ -172,7 +172,7 @@
       {/if}
     {:else}
       <p class="loading m-0 flex items-center gap-2 text-muted-foreground" role="status">
-        <Spinner class="size-3 text-primary" aria-hidden="true" />
+        <Spinner class="size-3 text-primary-ink" aria-hidden="true" />
         {busy ? "Thinking…" : "Asking the AI…"}
       </p>
     {/if}

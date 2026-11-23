@@ -1797,7 +1797,7 @@
           {...props}
           class="relative flex-none after:absolute after:-inset-1 after:content-[''] hover:bg-accent hover:text-accent-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground {filtersOpen ||
           advancedFilterCount > 0
-            ? 'text-primary'
+            ? 'text-primary-ink'
             : 'text-muted-foreground'} [&_svg:not([class*='size-'])]:size-4"
           variant="ghost"
           size="icon-xs"
@@ -1830,14 +1830,14 @@
         {#snippet child({ props })}
           <span
             {...props}
-            class="scope-chip inline-flex flex-none items-center gap-ui-15 rounded-full bg-primary/10 py-0 pr-ui-3 pl-2 text-ui-micro text-primary"
+            class="scope-chip inline-flex flex-none items-center gap-ui-15 rounded-full bg-primary/10 py-0 pr-ui-3 pl-2 text-ui-micro text-primary-ink"
           >
             <span class="max-w-36 truncate">scoped to {scopeLabel}</span>
             <Hint label="Back to all branches">
               {#snippet child({ props })}
                 <button
                   {...props}
-                  class="inline-flex items-center rounded-full p-0.5 text-primary/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring [&_svg:not([class*='size-'])]:size-2.5"
+                  class="inline-flex items-center rounded-full p-0.5 text-primary-ink/80 hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring [&_svg:not([class*='size-'])]:size-2.5"
                   type="button"
                   aria-label="Clear branch scope"
                   onclick={() => store.setFilter({ scopeRef: "" })}
@@ -2313,7 +2313,7 @@
     {#if selectedInfo}
       <Button
         variant="ghost"
-        class="detail-open flex-none h-auto w-full justify-start truncate rounded-none border-t border-border bg-popover px-3 py-1 text-left text-ui-meta font-normal text-primary hover:bg-accent hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:hover:bg-accent"
+        class="detail-open flex-none h-auto w-full justify-start truncate rounded-none border-t border-border bg-popover px-3 py-1 text-left text-ui-meta font-normal text-primary-ink hover:bg-accent hover:text-primary-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring dark:hover:bg-accent"
         onclick={() => (detailOpen = true)}
         aria-expanded="false"
       >

@@ -55,7 +55,7 @@
     openWithEntry,
     refreshApps,
     type OpenEntry,
-  } from "./openWithApps";
+  } from "./openWithApps.svelte";
   import { appIcons } from "./appIcons";
   import { tabStore } from "$lib/stores/tabs.svelte";
 
@@ -108,6 +108,7 @@
   const iconManage = $derived(appIcon("edit")!);
   const iconPreset = $derived(appIcon("account-tree")!);
   const iconPin = $derived(appIcon("push-pin")!);
+  const iconChevronDown = $derived(appIcon("chevron-down")!);
 
   /** The preset's display name (the submenu trigger's summary). */
   const presetName = $derived(layouts.presetById(presetId)?.name ?? "Default");
@@ -202,11 +203,44 @@
   const appNeedsLocal = (id: string): boolean =>
     openWithDeviceId !== null && !SSH_REMOTE_APPS.includes(id);
 
+  /**
+   * The pinned split button's primary segment: the last-used app (the
+   * overflow menu's first entry, same resolution). It needs the app's icon,
+   * a tooltip, and — on device tabs — a disabled why for local-only apps.
+   */
+  const openWithMainIcon = $derived(
+    openWithCurrent
+      ? (openWithCurrent.custom ? iconCustom : (appIcons[openWithCurrent.id] ?? iconOpenWith))
+      : iconOpenWith,
+  );
+  const openWithMainDisabled = $derived(
+    openWithCurrent === undefined ||
+      launching ||
+      (openWithCurrent !== undefined && appNeedsLocal(openWithCurrent.id)),
+  );
+  const openWithMainTitle = $derived.by(() => {
+    if (openWithCurrent === undefined) return "Detecting apps…";
+    if (appNeedsLocal(openWithCurrent.id)) {
+      return `${openWithCurrent.name} cannot open repositories on the device — it has no SSH remote support (VS Code, VSCodium, Cursor, and Windsurf do)`;
+    }
+    return `Open with ${openWithCurrent.name} (last used)`;
+  });
+
+  /** The pinned bar button's primary segment: launch the last-used app. */
+  function launchCurrent(): void {
+    if (openWithCurrent) void launch(openWithCurrent);
+  }
+
   async function launch(entry: OpenEntry): Promise<void> {
     if (launching) return;
     launching = true;
-    await openWithEntry(root, entry, openWithDeviceId);
-    launching = false;
+    // finally: a synchronous ipc failure must not wedge `launching` true —
+    // every later open-with click would silently no-op.
+    try {
+      await openWithEntry(root, entry, openWithDeviceId);
+    } finally {
+      launching = false;
+    }
   }
 
   // -- pinnable menu entries (repoActionPins) -----------------------------------
@@ -401,7 +435,7 @@
     {#each repoActionPins.pins as pinId (pinId)}
       {#if pinId === LAYOUT_PRESET_PIN_ID}
         <DropdownMenu.Root>
-          <Hint label="Layout preset">
+          <Hint label="Layout preset" eager>
             {#snippet child({ props })}
               <DropdownMenu.Trigger
                 {...props}
@@ -415,34 +449,66 @@
               </DropdownMenu.Trigger>
             {/snippet}
           </Hint>
-          <DropdownMenu.Content align="end" class="min-w-40">
+          <DropdownMenu.Content align="end" class="w-auto min-w-44 max-w-80">
             {@render presetsEntries()}
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       {:else if pinId === OPEN_WITH_PIN_ID}
-        <DropdownMenu.Root onOpenChange={(open) => open && probeApps()}>
-          <Hint label="Open with">
+        <!-- Split button (Sync idiom): the primary segment opens with the
+             last-used app in one click; the chevron opens the app picker.
+             Both Hints run eager — the lazy swap would detach the element
+             bits-ui's menu anchored to and the picker would never show. -->
+        <div
+          class="open-with-pin inline-flex flex-none items-stretch overflow-hidden rounded-sm border border-border"
+          role="group"
+          aria-label="Open repository with an app"
+        >
+          <Hint label={openWithMainTitle} eager>
             {#snippet child({ props })}
-              <DropdownMenu.Trigger
+              <Button
                 {...props}
-                class="inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                class="flex-none border-0 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                variant="ghost"
+                size="icon-sm"
                 type="button"
-                aria-label="Open with"
-                aria-haspopup="menu"
+                disabled={openWithMainDisabled}
+                aria-label={openWithCurrent
+                  ? `Open with ${openWithCurrent.name} (last used)`
+                  : "Open with"}
+                onclick={launchCurrent}
                 oncontextmenu={(event) => pinnedContext(event, pinId)}
               >
-                <Icon icon={iconOpenWith} size={16} />
-              </DropdownMenu.Trigger>
+                <Icon icon={openWithMainIcon} size={16} />
+              </Button>
             {/snippet}
           </Hint>
-          <DropdownMenu.Content align="end" class="max-h-72 min-w-40 overflow-y-auto">
-            {@render openWithEntries()}
-          </DropdownMenu.Content>
-        </DropdownMenu.Root>
+          <DropdownMenu.Root onOpenChange={(open) => open && probeApps()}>
+            <Hint label="Choose an app to open with" eager>
+              {#snippet child({ props })}
+                <DropdownMenu.Trigger
+                  {...props}
+                  class="inline-flex flex-none cursor-pointer items-center justify-center border-0 border-l border-border bg-transparent px-ui-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                  type="button"
+                  aria-label="Choose an app to open the repository with"
+                  aria-haspopup="menu"
+                  oncontextmenu={(event) => pinnedContext(event, pinId)}
+                >
+                  <Icon icon={iconChevronDown} size={14} />
+                </DropdownMenu.Trigger>
+              {/snippet}
+            </Hint>
+            <DropdownMenu.Content align="end" class="max-h-72 w-auto min-w-44 max-w-80 overflow-y-auto">
+              {@render openWithEntries()}
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        </div>
       {:else}
         {@const action = (headerActions ?? []).find((a) => a.id === pinId)}
         {#if action}
-          <Hint label={action.label}>
+          <!-- eager: the un-arm swap-back can race a click that returns to
+               the button and delete it (hint-active) — pinned commands must
+               never eat a press. -->
+          <Hint label={action.label} eager>
             {#snippet child({ props })}
               <Button
                 {...props}

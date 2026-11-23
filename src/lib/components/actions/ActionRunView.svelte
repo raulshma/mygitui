@@ -293,12 +293,12 @@
       <div class="title-row flex min-w-0 flex-wrap items-center gap-ui-45">
         <Badge
           variant="outline"
-          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
+          class={`status-chip chip-${run.status} h-auto flex-none items-center whitespace-nowrap rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary-ink" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
         >
           {runStatusLabel(run.status, run.exit_code)}
         </Badge>
         {#if live}
-          <span class="live-badge flex-none inline-flex items-center gap-ui-3 text-ui-micro font-semibold text-primary">
+          <span class="live-badge flex-none inline-flex items-center gap-ui-3 text-ui-micro font-semibold text-primary-ink">
             <span class="live-dot size-[0.42rem] rounded-full bg-current animate-pulse" aria-hidden="true"></span>
             Running
           </span>
@@ -351,7 +351,7 @@
             <Toggle
               variant="outline"
               size="sm"
-              class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary @max-[38rem]:px-2 @max-[38rem]:text-ui-micro"
+              class="tb flex-none whitespace-nowrap rounded-full border-border px-2.5 text-ui-micro leading-[1.4] text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-primary/15 aria-pressed:text-primary-ink @max-[38rem]:px-2 @max-[38rem]:text-ui-micro"
               {...props}
               bind:pressed={follow}
             >
@@ -433,7 +433,7 @@
             </div>
           {/each}
           {#if live}
-            <div class="log-line log-live w-max min-h-[1.1em] min-w-full whitespace-pre animate-[blink_1s_step-end_infinite] text-primary" aria-hidden="true">▊</div>
+            <div class="log-line log-live w-max min-h-[1.1em] min-w-full whitespace-pre animate-[blink_1s_step-end_infinite] text-primary-ink" aria-hidden="true">▊</div>
           {/if}
         {/if}
       </div>

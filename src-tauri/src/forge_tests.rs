@@ -1457,11 +1457,13 @@ fn remote_gh_command_quotes_root_and_args() {
             "it's".to_string(),
         ],
     );
-    // The device shell parses one string: every argv element stays inside
-    // its own single-quoted region (injection-inert, same as remote/quoting).
+    // The device shell parses one string: gh is the fixed program literal
+    // (resolved via the device's PATH, like the local runner) and every argv
+    // element stays inside its own single-quoted region (injection-inert,
+    // same as remote/quoting).
     assert_eq!(
         cmd,
-        "cd '/home/u/my repo' && 'pr' 'list' '--state' 'it'\\''s'"
+        "cd '/home/u/my repo' && gh 'pr' 'list' '--state' 'it'\\''s'"
     );
 }
 

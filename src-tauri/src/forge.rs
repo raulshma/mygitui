@@ -543,7 +543,7 @@ fn recv_lossy(rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> String {
 /// shell-quoted because russh `exec` sends one string the remote shell
 /// parses — see `remote::quoting`).
 pub fn remote_gh_command(root: &str, args: &[String]) -> String {
-    format!("cd {} && {}", shell_quote(root), shell_quote_all(args))
+    format!("cd {} && gh {}", shell_quote(root), shell_quote_all(args))
 }
 
 /// Map one remote exec onto the local [`ProcOutcome`] shape so every gh

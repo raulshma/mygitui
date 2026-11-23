@@ -153,7 +153,7 @@ import { checkoutRefusal } from "$lib/forge/checkoutGuard";
     switch (state.kind) {
       case "ok":
       case "running":
-        return "text-primary";
+        return "text-primary-ink";
       case "failing":
         return "text-destructive";
       case "warning":
@@ -419,7 +419,7 @@ import { checkoutRefusal } from "$lib/forge/checkoutGuard";
             {/if}
             {#if docsUrl !== null}
               <button
-                class="mt-2 inline-flex cursor-pointer items-center gap-1 text-ui-micro text-primary underline decoration-dotted underline-offset-2 hover:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
+                class="mt-2 inline-flex cursor-pointer items-center gap-1 text-ui-micro text-primary-ink underline decoration-dotted underline-offset-2 hover:opacity-80 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary"
                 type="button"
                 onclick={() => void openDocs(docsUrl)}
               >
@@ -613,7 +613,7 @@ import { checkoutRefusal } from "$lib/forge/checkoutGuard";
               <li class="flex items-center gap-2 text-ui-meta">
                 <span
                   class="inline-flex w-3 flex-none justify-center {check.state === 'pass'
-                    ? 'text-primary'
+                    ? 'text-primary-ink'
                     : check.state === 'fail'
                       ? 'text-destructive'
                       : 'text-muted-foreground'}"
@@ -693,7 +693,7 @@ import { checkoutRefusal } from "$lib/forge/checkoutGuard";
                   <span
                     class="inline-flex w-3 flex-none justify-center {job.conclusion ===
                     'success'
-                      ? 'text-primary'
+                      ? 'text-primary-ink'
                       : ['failure', 'timed_out', 'action_required', 'startup_failure'].includes(
                           job.conclusion,
                         )

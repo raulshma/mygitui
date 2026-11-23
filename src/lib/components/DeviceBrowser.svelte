@@ -250,7 +250,7 @@
         <ul class="rows m-0 flex list-none flex-col gap-1 p-0" aria-hidden="true">
           <li class="row-wrapper flex items-center gap-1.5 rounded-xl border border-transparent bg-card opacity-60">
             <span class="row static flex w-full min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5">
-              <span class="row-icon inline-flex flex-none text-primary" aria-hidden="true">
+              <span class="row-icon inline-flex flex-none text-primary-ink" aria-hidden="true">
                 <Icon icon={iconRepo} size={18} />
               </span>
               <span class="row-name text-muted-foreground truncate min-w-0 text-sm">
@@ -264,7 +264,7 @@
           {#each candidates as candidate (candidate.path)}
             <li class="row-wrapper hover:border-border flex items-center gap-1.5 rounded-xl border border-transparent bg-card">
               <span class="row static flex w-full min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5">
-                <span class="row-icon repo inline-flex flex-none text-primary" aria-hidden="true">
+                <span class="row-icon repo inline-flex flex-none text-primary-ink" aria-hidden="true">
                   <Icon icon={iconRepo} size={18} />
                 </span>
                 <span class="row-main flex min-w-0 flex-1 flex-col">
@@ -312,7 +312,7 @@
             </span>
           {:else}
             <button
-              class="crumb focus-visible:outline-primary hover:bg-muted text-primary max-w-64 cursor-pointer truncate rounded-md border-0 bg-transparent px-1 py-0.5 text-ui-base outline-none focus-visible:outline-2"
+              class="crumb focus-visible:outline-primary hover:bg-muted text-primary-ink max-w-64 cursor-pointer truncate rounded-md border-0 bg-transparent px-1 py-0.5 text-ui-base outline-none focus-visible:outline-2"
               type="button"
               onclick={() => void browse(crumb.target)}
             >
@@ -361,7 +361,7 @@
                   type="button"
                   onclick={() => void browse(entry.path)}
                 >
-                  <span class="row-icon inline-flex flex-none text-primary" aria-hidden="true">
+                  <span class="row-icon inline-flex flex-none text-primary-ink" aria-hidden="true">
                     <Icon icon={iconDir} size={18} />
                   </span>
                   <span class="row-name truncate min-w-0 text-sm">{entry.name}</span>

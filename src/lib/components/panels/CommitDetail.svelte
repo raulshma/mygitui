@@ -572,7 +572,7 @@
           <button
             {...props}
             type="button"
-            class="dsha flex-none cursor-pointer rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-ui-micro text-primary hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+            class="dsha flex-none cursor-pointer rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-ui-micro text-primary-ink hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
             onclick={copySha}
             aria-label={`Copy sha ${info.sha}`}
           >{info.sha.slice(0, 7)}</button>
@@ -599,7 +599,7 @@
           {#snippet child({ props })}
             <Button
               class="h-auto flex-none rounded-sm px-1.5 py-[0.05rem] [&_svg:not([class*='size-'])]:size-3 {bookmarked
-                ? 'border-primary bg-transparent text-primary'
+                ? 'border-primary bg-transparent text-primary-ink'
                 : 'border-border bg-transparent text-muted-foreground'}"
               variant="outline"
               {...props}
@@ -633,7 +633,7 @@
         </Hint>
       {/if}
     {:else}
-      <span class="dsha font-mono text-primary">diff</span>
+      <span class="dsha font-mono text-primary-ink">diff</span>
       <span class="dsummary min-w-0 flex-1 truncate font-medium text-foreground">{compare?.base} → {compare?.target}</span>
     {/if}
     {#if onClose}
@@ -738,12 +738,12 @@
                 {#each info.refs as ref (ref)}
                   {@const kind = classifyRef(ref)}
                   <span class="ref ref-{kind} inline-flex max-w-36 items-center overflow-hidden whitespace-nowrap rounded-sm border px-1 text-ui-micro leading-[1.4] text-ellipsis {kind === "local"
-                    ? "border-transparent bg-primary/10 text-primary"
+                    ? "border-transparent bg-primary/10 text-primary-ink"
                     : kind === "remote"
                       ? "border-border text-muted-foreground"
                       : kind === "tag"
                         ? "border-transparent bg-accent text-accent-foreground"
-                        : "border-primary bg-primary/10 text-primary"}">{shortRefName(ref)}</span>
+                        : "border-primary bg-primary/10 text-primary-ink"}">{shortRefName(ref)}</span>
                 {/each}
               </dd>
             {/if}

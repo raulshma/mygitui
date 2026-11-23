@@ -91,7 +91,7 @@
           aria-label={filterOn ? "Hide filter" : "Show filter"}
           class={cn(
             "inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-            filterOn ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground",
+            filterOn ? "bg-primary/10 text-primary-ink" : "text-muted-foreground hover:text-foreground",
           )}
           onclick={() => onFilterToggle?.(!filterOn)}
         >

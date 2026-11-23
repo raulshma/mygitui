@@ -761,7 +761,7 @@
         aria-busy="true"
       >
         <span
-          class="launch-mark mb-ui-35 grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-primary/10 text-primary shadow-sm"
+          class="launch-mark mb-ui-35 grid size-[3.25rem] place-items-center rounded-[0.95rem] bg-primary/10 text-primary-ink shadow-sm"
           aria-hidden="true"
         >
           <Icon icon={iconBrand} size={26} />
@@ -901,7 +901,7 @@
           >
             <div class="brand flex min-w-0 items-center gap-2.5">
               <span
-                class="brand-mark grid size-9 flex-none place-items-center rounded-[0.65rem] bg-primary/10 text-primary shadow-sm"
+                class="brand-mark grid size-9 flex-none place-items-center rounded-[0.65rem] bg-primary/10 text-primary-ink shadow-sm"
                 aria-hidden="true"
               >
                 <Icon icon={iconBrand} size={20} />
@@ -1037,7 +1037,7 @@
               class="empty flex flex-col items-center gap-1.5 rounded-[28px] border border-dashed border-border bg-muted/30 px-6 py-10 text-center"
             >
               <span
-                class="empty-icon mb-ui-35 grid size-14 place-items-center rounded-full bg-primary/10 text-primary"
+                class="empty-icon mb-ui-35 grid size-14 place-items-center rounded-full bg-primary/10 text-primary-ink"
                 aria-hidden="true"
               >
                 <Icon icon={iconFolder} size={30} />
@@ -1078,7 +1078,7 @@
               title={`No repositories match “${repoFilter}”`}
             >
               <button
-                class="clear-search pill-btn pill-btn-md pill-btn-ghost text-primary"
+                class="clear-search pill-btn pill-btn-md pill-btn-ghost text-primary-ink"
                 type="button"
                 onclick={() => (repoFilter = "")}
               >
@@ -1095,7 +1095,7 @@
                     type="button"
                     onclick={() => void openRepoTab(repo.path)}
                   >
-                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary" aria-hidden="true">
+                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary-ink" aria-hidden="true">
                       <Icon icon={iconFolder} size={20} />
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">
@@ -1105,7 +1105,7 @@
                           <Hint label="Pinned" side="bottom">
                             {#snippet child({ props })}
                               <span
-                                class="pin-mark inline-flex flex-none text-primary"
+                                class="pin-mark inline-flex flex-none text-primary-ink"
                                 {...props}
                               >
                                 <Icon icon={iconPin} size={14} />
@@ -1127,7 +1127,7 @@
                     <Hint label={repo.pinned ? "Unpin repository" : "Pin repository"}>
                       {#snippet child({ props })}
                         <button
-                          class="row-action pin inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary' : ''}"
+                          class="row-action pin inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent p-0 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-primary {repo.pinned ? 'text-primary-ink' : ''}"
                           class:pinned={repo.pinned}
                           type="button"
                           {...props}
@@ -1201,7 +1201,7 @@
             <div class="device-detail flex flex-col gap-3 rounded-2xl border border-border bg-muted/40 px-[1.1rem] py-4">
               <div class="detail-head flex min-w-0 items-center gap-2.5">
                 <span
-                  class="detail-icon grid size-9 flex-none place-items-center rounded-lg bg-primary/10 text-primary"
+                  class="detail-icon grid size-9 flex-none place-items-center rounded-lg bg-primary/10 text-primary-ink"
                   aria-hidden="true"
                 >
                   <Icon icon={iconDevices} size={18} />
@@ -1358,7 +1358,7 @@
                     type="button"
                     onclick={() => openDeviceDetail(device.profile.id)}
                   >
-                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary" aria-hidden="true">
+                    <span class="repo-icon grid size-10 flex-none place-items-center rounded-[0.625rem] bg-primary/10 text-primary-ink" aria-hidden="true">
                       <Icon icon={iconDevices} size={20} />
                     </span>
                     <span class="repo-main flex min-w-0 flex-1 flex-col gap-0.5">

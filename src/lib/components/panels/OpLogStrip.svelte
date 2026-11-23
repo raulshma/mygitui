@@ -65,7 +65,7 @@
       <span
         class="status inline-flex size-3.5 shrink-0 items-center justify-center {session.done &&
         session.error === null
-          ? 'text-primary'
+          ? 'text-primary-ink'
           : ''} {session.done && session.error !== null ? 'text-destructive' : ''}"
         aria-hidden="true"
       >

@@ -958,7 +958,7 @@
         <!-- The shared sparkle mark (same two-path glyph as the AI
              feature buttons), pulsing while the model works. -->
         <span
-          class="inline-flex size-3.5 flex-none items-center justify-center text-primary"
+          class="inline-flex size-3.5 flex-none items-center justify-center text-primary-ink"
           aria-hidden="true"
         >
           <svg
@@ -1047,7 +1047,7 @@
               "failed"
                 ? "text-destructive"
                 : lastOutcome === "succeeded"
-                  ? "text-primary"
+                  ? "text-primary-ink"
                   : "text-muted-foreground"}"
               aria-hidden="true"
             >
@@ -1085,7 +1085,7 @@
           >
             <span
               class="inline-flex size-3.5 flex-none items-center justify-center"
-              class:text-primary={logSession.done && logSession.error === null}
+              class:text-primary-ink={logSession.done && logSession.error === null}
               class:text-destructive={logFailed}
               aria-hidden="true"
             >
@@ -1178,7 +1178,7 @@
               aria-haspopup="menu"
               onclick={openAiModelMenu}
             >
-              <span class="inline-flex flex-none items-center text-primary" aria-hidden="true">
+              <span class="inline-flex flex-none items-center text-primary-ink" aria-hidden="true">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                   <path
                     d="M12 2l2.09 6.26L20 10.35l-5.91 2.09L12 18.7l-2.09-6.26L4 10.35l5.91-2.09L12 2z"
@@ -1278,7 +1278,7 @@
           >
             <span
               class="inline-flex flex-none items-center"
-              class:text-primary={deviceStatus === "connected"}
+              class:text-primary-ink={deviceStatus === "connected"}
               class:opacity-50={deviceStatus === "disconnected"}
               aria-hidden="true"
             >

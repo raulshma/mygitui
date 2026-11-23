@@ -57,7 +57,7 @@
       <span class="message min-w-0 flex-1 text-ui-base [overflow-wrap:anywhere]">{item.message}</span>
       {#if item.action}
         <Button
-          class="action flex-none font-medium text-primary hover:text-primary focus-visible:text-primary"
+          class="action flex-none font-medium text-primary-ink hover:text-primary-ink focus-visible:text-primary-ink"
           variant="ghost"
           size="sm"
           type="button"

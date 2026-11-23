@@ -236,7 +236,7 @@
       : 'flex-1'}"
     aria-hidden="true"
   >
-    <span class="brand-mark flex-none text-primary">
+    <span class="brand-mark flex-none text-primary-ink">
       <Icon icon={iconBrand} size={14} />
     </span>
     {#if !tabs}

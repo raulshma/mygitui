@@ -8,10 +8,14 @@
  *   3. chart color: chart-1..5 from the chart theme, both schemes
  *   4. menu accent "bold": accent := primary, accent-foreground := primary-foreground
  *   5. radius: `--radius` override in the light set (dark never overrides)
+ *   6. contrast guardrails (both schemes): fill/foreground pairs that fall
+ *      below 4.5:1 get a lightness-only repair, and `--primary-ink` /
+ *      `--primary-hover` variants are derived (see `lib/theme/contrast.ts`)
  *
  * Pure functions — the applier turns the result into CSS.
  */
 import type { AppearanceConfig } from "./codec.js";
+import { inkFor, hoverShift } from "../contrast.js";
 import {
 	getBaseColor,
 	getFont,
@@ -35,10 +39,10 @@ export function buildThemeVars(config: AppearanceConfig): ComposedTheme {
 	const theme = getTheme(config.theme);
 	if (!baseColor || !theme) {
 		// Callers pass normalized configs; fall back to the neutral base.
-		return {
-			light: { ...getBaseColor("neutral")!.cssVars.light },
-			dark: { ...getBaseColor("neutral")!.cssVars.dark },
-		};
+		const light = { ...getBaseColor("neutral")!.cssVars.light };
+		const dark = { ...getBaseColor("neutral")!.cssVars.dark };
+		applyContrastGuardrails(light, dark);
+		return { light, dark };
 	}
 
 	const light: SchemeVars = { ...baseColor.cssVars.light, ...theme.cssVars.light };
@@ -47,6 +51,7 @@ export function buildThemeVars(config: AppearanceConfig): ComposedTheme {
 	applyChartColor(light, dark, config.chartColor);
 	applyMenuAccent(light, dark, config.menuAccent);
 	applyRadius(light, config.radius);
+	applyContrastGuardrails(light, dark);
 
 	return { light, dark };
 }
@@ -85,6 +90,33 @@ function applyRadius(light: SchemeVars, radius: AppearanceConfig["radius"]): voi
 	if (radius === "default") return;
 	const entry = RADIUS_VALUES[radius];
 	if (entry) light.radius = entry;
+}
+
+/**
+ * Contrast guardrails (see `lib/theme/contrast.ts`): every fill/foreground
+ * pair the UI actually paints text into must reach 4.5:1, and the primary
+ * token gets readable ink and hover variants. Runs last so a "bold" menu
+ * accent (accent := primary) is guarded with primary's values. Pairs that
+ * already pass keep their exact hand-tuned strings.
+ */
+const CONTRAST_FILLS = ["primary", "secondary", "accent", "sidebar-primary"] as const;
+
+function applyContrastGuardrails(light: SchemeVars, dark: SchemeVars): void {
+	for (const scheme of [light, dark]) {
+		for (const fill of CONTRAST_FILLS) {
+			const fgKey = `${fill}-foreground`;
+			if (scheme[fill] && scheme[fgKey]) {
+				// Repair the FOREGROUND against its fill.
+				scheme[fgKey] = inkFor(scheme[fgKey], scheme[fill]);
+			}
+		}
+		if (scheme.primary && scheme.background) {
+			scheme["primary-ink"] = inkFor(scheme.primary, scheme.background);
+		}
+		if (scheme.primary && scheme["primary-foreground"]) {
+			scheme["primary-hover"] = hoverShift(scheme.primary, scheme["primary-foreground"]);
+		}
+	}
 }
 
 const RADIUS_VALUES: Record<AppearanceConfig["radius"], string> = {

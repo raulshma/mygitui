@@ -464,7 +464,7 @@
                 {#if updateAvailable(info)}
                   <span class="update shrink-0 font-semibold text-[var(--app-modified)]">↓ update available</span>
                 {/if}
-                <span class="head text-primary">HEAD {shortSha(info.head_sha)}</span>
+                <span class="head text-primary-ink">HEAD {shortSha(info.head_sha)}</span>
                 <span class="sep opacity-50">·</span>
                 <span>recorded {shortSha(info.recorded_sha)}</span>
                 {#if info.url}

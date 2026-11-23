@@ -773,7 +773,7 @@
       class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-ui-4 p-8 text-center text-muted-foreground"
     >
       <span
-        class="wicon inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-primary"
+        class="wicon inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-primary-ink"
         aria-hidden="true"
       ><Icon icon={iconTree} size={22} /></span>
       <p class="wtitle m-0 text-sm font-medium text-foreground">Nothing open</p>
@@ -783,7 +783,7 @@
           aria-label="Repository summary"
         >
           <span
-            class="wchip wbranch inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary"
+            class="wchip wbranch inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary-ink"
           >{branchLabel}</span>
           <span
             class="wchip inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-border px-2 py-px text-ui-micro leading-[1.4] tabular-nums"

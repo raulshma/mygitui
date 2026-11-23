@@ -49,7 +49,7 @@
         ? "border-transparent bg-violet-600/10 text-violet-700 dark:text-violet-300"
         : kind === "remote"
           ? "border-border text-muted-foreground"
-          : "border-primary bg-primary/10 text-primary",
+          : "border-primary bg-primary/10 text-primary-ink",
   );
 </script>
 

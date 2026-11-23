@@ -640,7 +640,7 @@
                   <span class="shrink-0 rounded-full bg-muted px-1.5 py-px text-ui-micro leading-normal text-muted-foreground">present</span>
                 {/if}
                 {#if row.executable}
-                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-ui-micro leading-normal text-primary">executable</span>
+                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-ui-micro leading-normal text-primary-ink">executable</span>
                 {/if}
               </span>
               <span class="flex flex-none items-center gap-1">

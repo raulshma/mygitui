@@ -685,7 +685,7 @@
       <!-- Local section: current branch pinned on top. -->
       <section class="local flex flex-none flex-col" aria-label="Local branches">
         <div class="head flex flex-none items-center gap-1.5 px-2 pb-1 pt-2">
-          <span class="shead select-none text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+          <span class="shead select-none text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink"
             >Local ({list.length})</span
           >
         </div>
@@ -751,7 +751,7 @@
                 {:else}
                   <Hint label="Current branch">
                     {#snippet child({ props })}
-                      <span class="marker w-3.5 shrink-0 text-center text-primary" {...props} aria-label="Current branch">
+                      <span class="marker w-3.5 shrink-0 text-center text-primary-ink" {...props} aria-label="Current branch">
                         {branch.is_head ? "●" : ""}
                       </span>
                     {/snippet}
@@ -768,7 +768,7 @@
                         <span class="upstream min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" {...props}>
                           {branch.upstream}
                           {#if branch.ahead > 0 || branch.behind > 0}
-                            <span class="ab pl-1.5 text-primary tabular-nums">↑{branch.ahead} ↓{branch.behind}</span>
+                            <span class="ab pl-1.5 text-primary-ink tabular-nums">↑{branch.ahead} ↓{branch.behind}</span>
                           {/if}
                           {#if branch.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-micro text-destructive">gone</Badge>{/if}
                         </span>
@@ -835,7 +835,7 @@
       <!-- Remote section: one collapsible group per remote. -->
       <section class="remote flex flex-none flex-col" aria-label="Remote branches">
         <div class="head flex flex-none items-center gap-1.5 px-2 pb-1 pt-2">
-          <span class="shead select-none text-ui-micro font-bold uppercase tracking-[0.08em] text-primary"
+          <span class="shead select-none text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink"
             >Remote ({remoteList.length})</span
           >
         </div>
@@ -902,7 +902,7 @@
                             <span class="tracked min-w-0 flex-1 truncate font-mono text-ui-micro text-muted-foreground" {...props}>
                               → {tracker.name}
                               {#if tracker.ahead > 0 || tracker.behind > 0}
-                                <span class="ab pl-1.5 text-primary">↑{tracker.ahead} ↓{tracker.behind}</span>
+                                <span class="ab pl-1.5 text-primary-ink">↑{tracker.ahead} ↓{tracker.behind}</span>
                               {/if}
                               {#if tracker.gone}<Badge variant="outline" class="gone ml-1.5 h-auto shrink-0 rounded-full border-destructive px-1.5 py-0 text-ui-micro text-destructive">gone</Badge>{/if}
                             </span>

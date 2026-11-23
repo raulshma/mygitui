@@ -1,5 +1,5 @@
 /**
- * "Open with" module (`openWithApps.ts`): the logic behind the repo
+ * "Open with" module (`openWithApps.svelte.ts`): the logic behind the repo
  * header's overflow submenu (the Workstream A home of the old
  * `OpenWithButton` split button). Covers the same behaviors the button's
  * tests did: last-used persistence (incl. the `custom:` namespace),
@@ -37,17 +37,21 @@ import {
   customEntries,
   openWithEntry,
   refreshApps,
-} from "./openWithApps";
+} from "./openWithApps.svelte";
 
 function app(patch: Partial<EditorApp> = {}): EditorApp {
   return { id: "explorer", name: "Explorer", path: "explorer", ...patch };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   localStorage.clear();
   // The module binds the app-wide singleton: start every test from empty.
   for (const a of customApps.list()) customApps.remove(a.id);
   vi.clearAllMocks();
+  // The last-used id is reactive state now, re-synced from storage on each
+  // probe (that is how the component reaches it) — probe like the mount does.
+  mocks.detectEditors.mockResolvedValue([]);
+  await refreshApps();
 });
 
 afterEach(() => {
@@ -59,8 +63,9 @@ describe("openWithApps currentEntry (last-used fallbacks)", () => {
     expect(currentEntry([app()])?.id).toBe("explorer");
   });
 
-  it("prefers the persisted last-used detected app", () => {
+  it("prefers the persisted last-used detected app", async () => {
     localStorage.setItem("mygitui.openwith.last", "vscode");
+    await refreshApps();
     const entry = currentEntry([
       app(),
       { id: "vscode", name: "VS Code", path: "C:/Programs/Code.exe" },
@@ -68,9 +73,10 @@ describe("openWithApps currentEntry (last-used fallbacks)", () => {
     expect(entry?.name).toBe("VS Code");
   });
 
-  it("restores a persisted custom last-used id from the store", () => {
+  it("restores a persisted custom last-used id from the store", async () => {
     const added = customApps.add({ name: "Neovim", command: "kitty {path}" });
     localStorage.setItem("mygitui.openwith.last", `custom:${added.id}`);
+    await refreshApps();
     const entry = currentEntry([app()]);
     expect(entry?.custom).toEqual({
       id: added.id,
@@ -79,9 +85,20 @@ describe("openWithApps currentEntry (last-used fallbacks)", () => {
     });
   });
 
-  it("falls back to Explorer when the persisted custom id no longer exists", () => {
+  it("falls back to Explorer when the persisted custom id no longer exists", async () => {
     localStorage.setItem("mygitui.openwith.last", "custom:gone-app");
+    await refreshApps();
     expect(currentEntry([app()])?.id).toBe("explorer");
+  });
+
+  it("reflects a launch in currentEntry without a re-probe (reactive mirror)", async () => {
+    // The pinned split button's main segment derives from currentEntry; a
+    // launch must flip it live (no menu re-open to re-read storage).
+    mocks.openWith.mockResolvedValue(undefined);
+    await openWithEntry("/tmp/repo", { id: "vscode", name: "VS Code" });
+    expect(
+      currentEntry([app(), { id: "vscode", name: "VS Code", path: "code" }])?.id,
+    ).toBe("vscode");
   });
 });
 

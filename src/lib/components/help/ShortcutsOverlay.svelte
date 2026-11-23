@@ -149,7 +149,7 @@
         {:else}
           {#each filtered as section (section.name)}
             <section class="flex flex-col" aria-label={`${section.name} commands`}>
-              <h3 class="sticky top-0 z-1 m-0 bg-popover px-3 pt-2.5 pb-1 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary select-none">
+              <h3 class="sticky top-0 z-1 m-0 bg-popover px-3 pt-2.5 pb-1 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink select-none">
                 {section.name}
               </h3>
               <ul class="m-0 list-none p-0">

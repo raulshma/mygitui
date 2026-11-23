@@ -643,7 +643,7 @@
         <button
           class="scope-chip inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-full border px-2 py-px text-ui-meta leading-[1.45] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring {scope.id ===
           activeScopeId
-            ? "border-primary/40 bg-primary/10 text-primary"
+            ? "border-primary/40 bg-primary/10 text-primary-ink"
             : "border-border bg-muted/50 text-muted-foreground hover:bg-accent hover:text-foreground"}"
           type="button"
           aria-pressed={scope.id === activeScopeId}
@@ -831,7 +831,7 @@ ${m.body}` : m.subject;
               <Hint label={`${hook.kind} will run on commit`}>
                 {#snippet child({ props })}
                   <span
-                    class="meta-icon hook inline-flex items-center justify-center text-primary opacity-90"
+                    class="meta-icon hook inline-flex items-center justify-center text-primary-ink opacity-90"
                     role="img"
                     {...props}
                     aria-label={`${hook.kind} hook will run`}
@@ -872,7 +872,7 @@ ${m.body}` : m.subject;
         <Hint label="More commit actions">
           {#snippet child({ props })}
             <Button
-              class="h-7 w-6 flex-none rounded-l-none rounded-r-full border-0 border-l border-primary-foreground/25 px-1 hover:bg-primary/90"
+              class="h-7 w-6 flex-none rounded-l-none rounded-r-full border-0 border-l border-primary-foreground/25 px-1 hover:bg-(--primary-hover)"
               {...props}
               variant="default"
               type="button"
@@ -895,7 +895,7 @@ ${m.body}` : m.subject;
       <Hint label="Fold the next change into the previous commit (amend)">
         {#snippet child({ props })}
           <Button
-            class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary hover:bg-accent hover:text-accent-foreground"
+            class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary-ink hover:bg-accent hover:text-accent-foreground"
             variant="ghost"
             type="button"
             {...props}

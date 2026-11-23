@@ -387,7 +387,7 @@
           {testing ? "Testing…" : "Test connection"}
         </Button>
         {#if testResult}
-          <span class="test-ok text-primary wrap-anywhere text-xs" role="status">
+          <span class="test-ok text-primary-ink wrap-anywhere text-xs" role="status">
             {testResult}
           </span>
         {:else if testError}

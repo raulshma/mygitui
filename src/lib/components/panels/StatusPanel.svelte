@@ -2185,7 +2185,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
               <Badge
                 {...props}
                 variant="secondary"
-                class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary tabular-nums"
+                class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary-ink tabular-nums"
                 role="img"
                 aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
               >
@@ -2475,7 +2475,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         <div class="repo-accordion border-b border-border">
           <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-0.5 box-border bg-card border-y border-border select-none gap-1">
             <button
-              class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-ui-35 h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-ui-2 cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+              class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-ui-35 h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-ui-2 cursor-pointer text-left hover:text-primary-ink focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
               type="button"
               aria-expanded={!mainRepoCollapsed}
               onclick={toggleMainRepo}
@@ -2625,7 +2625,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
           <div class="repo-accordion submodule-accordion border-b border-border">
             <div class="repo-accordion-header group/acc flex items-center w-full min-h-7 px-1 py-0.5 box-border bg-card border-y border-border select-none gap-1">
               <button
-                class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-ui-35 h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-ui-2 cursor-pointer text-left hover:text-primary focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+                class="repo-accordion-toggle flex-1 min-w-0 flex items-center gap-ui-35 h-6 bg-transparent border-0 text-foreground text-xs font-semibold px-ui-2 cursor-pointer text-left hover:text-primary-ink focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
                 type="button"
                 aria-expanded={!isCollapsed}
                 onclick={() => toggleSubmodule(info.path)}
@@ -2760,7 +2760,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
                   <Button
                     variant="outline"
                     size="xs"
-                    class="gap-ui-35 rounded-sm px-2.5 py-1 bg-muted text-primary hover:bg-accent hover:text-primary text-ui-meta dark:bg-muted dark:hover:bg-accent [&_svg:not([class*='size-'])]:size-3.5"
+                    class="gap-ui-35 rounded-sm px-2.5 py-1 bg-muted text-primary-ink hover:bg-accent hover:text-primary-ink text-ui-meta dark:bg-muted dark:hover:bg-accent [&_svg:not([class*='size-'])]:size-3.5"
                     onclick={() => void updateSubmodule(info)}
                     disabled={moduleBusy !== null}
                   >

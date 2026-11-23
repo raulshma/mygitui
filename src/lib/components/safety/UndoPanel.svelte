@@ -273,7 +273,7 @@
                 {#if cp.has_worktree_state}
                   <Hint label="Snapshot includes working-copy + index state">
                     {#snippet child({ props })}
-                      <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-micro text-primary text-ellipsis whitespace-nowrap" {...props}>worktree</Badge>
+                      <Badge variant="outline" class="chip worktree h-auto max-w-40 overflow-hidden rounded-full border-primary px-2 py-0 text-ui-micro text-primary-ink text-ellipsis whitespace-nowrap" {...props}>worktree</Badge>
                     {/snippet}
                   </Hint>
                 {/if}

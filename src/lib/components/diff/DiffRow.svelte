@@ -272,13 +272,13 @@
   >
     <span class="hh overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px] leading-[20px] font-medium text-muted-foreground [tab-size:8] group-hover/hh:text-foreground">@@ -{row.oldStart},{row.oldCount} +{row.newStart},{row.newCount} @@</span>
     {#if selectionCount > 0}
-      <span class="sel-count shrink-0 whitespace-nowrap text-ui-micro tabular-nums text-primary" aria-live="polite">{selectionCount} selected</span>
+      <span class="sel-count shrink-0 whitespace-nowrap text-ui-micro tabular-nums text-primary-ink" aria-live="polite">{selectionCount} selected</span>
     {/if}
     <span class="hunk-actions ml-auto shrink-0 items-center gap-1 {selectionCount > 0 ? "inline-flex" : "hidden"} group-hover/hh:inline-flex group-focus-within/hh:inline-flex group-focus-visible/hh:inline-flex">
       {#if selectionCount > 0 && onStageSelection}
         <button
           type="button"
-          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-meta font-semibold text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          class="sel cursor-pointer rounded-lg border border-primary bg-background px-2 py-px font-sans text-ui-meta font-semibold text-primary-ink disabled:cursor-not-allowed disabled:opacity-50"
           disabled={actionBusy}
           onclick={(e) => {
             e.stopPropagation();

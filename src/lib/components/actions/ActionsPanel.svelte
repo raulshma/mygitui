@@ -275,7 +275,7 @@
       {#each projects as project (project.kind + ":" + project.path)}
         <li class="project-card flex flex-col gap-ui-4 rounded-lg border border-border bg-card px-2 py-ui-45">
           <div class="project-head flex min-w-0 flex-wrap items-baseline gap-ui-4">
-            <span class="project-kind flex-none text-ui-meta font-bold uppercase tracking-[0.04em] text-primary">{projectKindLabel(project.kind)}</span>
+            <span class="project-kind flex-none text-ui-meta font-bold uppercase tracking-[0.04em] text-primary-ink">{projectKindLabel(project.kind)}</span>
             <Hint label={project.name}>
               {#snippet child({ props })}
                 <span class="project-name min-w-0 truncate text-ui-meta font-semibold" {...props}>{project.name}</span>
@@ -323,7 +323,7 @@
                       {script.watch ? "watch" : scriptKindLabel(script.kind)}
                     </Badge>
                     {#if running}
-                      <span class="script-state flex-none text-ui-meta text-primary">running…</span>
+                      <span class="script-state flex-none text-ui-meta text-primary-ink">running…</span>
                     {/if}
                   </Button>
                   <span class="script-command-row flex min-w-0 items-center gap-ui-2 border-t border-border pb-ui-15 pl-ui-4 pr-ui-2 pt-ui-15">
@@ -409,7 +409,7 @@
             <Hint label="Focus and press a key combination (e.g. Ctrl+Shift+R). Escape clears.">
               {#snippet child({ props })}
                 <Input
-                  class="def-shortcut flex-[0_0_7.5rem] cursor-pointer font-mono text-ui-micro text-primary"
+                  class="def-shortcut flex-[0_0_7.5rem] cursor-pointer font-mono text-ui-micro text-primary-ink"
                   {...props}
                   type="text"
                   readonly
@@ -503,7 +503,7 @@
                 >
                   <Badge
                     variant="outline"
-                    class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
+                    class={`chip chip-${run.status} h-auto flex-none rounded-full border-transparent px-2 py-px text-ui-micro font-semibold ${run.status === "running" ? "bg-secondary text-secondary-foreground" : run.status === "success" ? "bg-primary/15 text-primary-ink" : run.status === "cancelled" ? "bg-muted text-muted-foreground" : "bg-destructive/10 text-destructive"}`}
                   >
                     {runStatusLabel(run.status, run.exit_code)}
                   </Badge>

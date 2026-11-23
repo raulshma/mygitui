@@ -233,7 +233,7 @@
 
   .md :global(p) { margin: 0.65em 0; }
 
-  .md :global(a) { color: var(--primary); text-decoration: none; }
+  .md :global(a) { color: var(--primary-ink); text-decoration: none; }
   .md :global(a:hover) { text-decoration: underline; }
 
   .md :global(ul),
@@ -302,7 +302,7 @@
 
   .md :global(.tok-keyword),
   .md :global(.tok-controlKeyword),
-  .md :global(.tok-moduleKeyword) { color: var(--primary); }
+  .md :global(.tok-moduleKeyword) { color: var(--primary-ink); }
 
   .md :global(.tok-string),
   .md :global(.tok-number),
@@ -335,12 +335,12 @@
 
   .md :global(.tok-meta) { color: var(--muted-foreground); font-style: italic; }
 
-  .md :global(.tok-heading) { color: var(--primary); font-weight: 600; }
+  .md :global(.tok-heading) { color: var(--primary-ink); font-weight: 600; }
   .md :global(.tok-strong) { font-weight: 600; }
   .md :global(.tok-emphasis) { font-style: italic; }
   .md :global(.tok-strikethrough) { text-decoration: line-through; }
   .md :global(.tok-link),
-  .md :global(.tok-url) { color: var(--primary); text-decoration: underline; }
+  .md :global(.tok-url) { color: var(--primary-ink); text-decoration: underline; }
   .md :global(.tok-quote) { color: var(--muted-foreground); font-style: italic; }
   .md :global(.tok-invalid) { color: var(--destructive); }
 </style>

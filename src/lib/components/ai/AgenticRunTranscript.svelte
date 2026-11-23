@@ -73,7 +73,7 @@
                 ? 'text-destructive'
                 : view.status === 'ok'
                   ? 'text-muted-foreground'
-                  : 'text-primary'}"
+                  : 'text-primary-ink'}"
             >
               {view.status === "called" ? "running" : view.status}
             </span>

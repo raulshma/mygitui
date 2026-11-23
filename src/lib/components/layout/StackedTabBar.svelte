@@ -96,7 +96,7 @@
   {#each views as panel (panel)}
     {@const count = badges[panel] ?? 0}
     <button
-      class="stacked-tab group relative flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary aria-pressed:bg-primary/15 aria-pressed:text-primary"
+      class="stacked-tab group relative flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary aria-pressed:bg-primary/15 aria-pressed:text-primary-ink"
       type="button"
       data-stacked-tab={panel}
       aria-pressed={active === panel}
@@ -129,7 +129,7 @@
 
   {#if morePanels.length > 0}
     <button
-      class="stacked-tab relative flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary aria-pressed:bg-primary/15 aria-pressed:text-primary"
+      class="stacked-tab relative flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary aria-pressed:bg-primary/15 aria-pressed:text-primary-ink"
       type="button"
       data-stacked-tab="more"
       aria-label="More views"

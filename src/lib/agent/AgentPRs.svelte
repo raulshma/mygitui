@@ -148,7 +148,7 @@
                   <span class="flex-none rounded-full border border-border px-1.5 text-ui-micro font-semibold text-muted-foreground">Draft</span>
                 {/if}
                 {#if pr.review_decision === "APPROVED"}
-                  <span class="flex-none text-primary" title="Approved">
+                  <span class="flex-none text-primary-ink" title="Approved">
                     <Icon icon={iconApproved} size={12} />
                   </span>
                 {:else if pr.review_decision === "CHANGES_REQUESTED"}

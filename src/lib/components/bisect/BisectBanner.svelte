@@ -144,7 +144,7 @@
   <div
     class={"banner flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-ui-base " +
       (bisect.remaining === 0
-        ? "done bg-primary/15 text-primary"
+        ? "done bg-primary/15 text-primary-ink"
         : "bg-secondary text-secondary-foreground")}
     role="status"
   >
@@ -285,7 +285,7 @@
                 class={"mark w-12 flex-none rounded-full px-1.5 text-center text-ui-micro font-semibold uppercase tracking-wide " +
                   `mark-${entry.mark} ` +
                   (entry.mark === "good"
-                    ? "bg-primary/15 text-primary"
+                    ? "bg-primary/15 text-primary-ink"
                     : entry.mark === "bad"
                       ? "bg-destructive/10 text-destructive"
                       : "bg-muted text-muted-foreground")}
@@ -295,7 +295,7 @@
                   <code
                     {...props}
                     tabindex="-1"
-                    class="log-sha font-mono text-primary"
+                    class="log-sha font-mono text-primary-ink"
                   >{entry.sha.slice(0, 8)}</code>
                 {/snippet}
               </Hint>

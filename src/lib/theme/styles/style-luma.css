@@ -60,7 +60,7 @@
   }
 
   .cn-button-variant-default {
-    @apply bg-primary text-primary-foreground hover:bg-primary/80;
+    @apply bg-primary text-primary-foreground hover:bg-(--primary-hover);
   }
 
   .cn-button-variant-outline {
@@ -80,7 +80,7 @@
   }
 
   .cn-button-variant-link {
-    @apply text-primary underline-offset-4 hover:underline;
+    @apply text-primary-ink underline-offset-4 hover:underline;
   }
 
   .cn-button-size-xs {
@@ -342,7 +342,7 @@
   }
 
   .cn-badge-variant-default {
-    @apply bg-primary text-primary-foreground [a]:hover:bg-primary/80;
+    @apply bg-primary text-primary-foreground [a]:hover:bg-(--primary-hover);
   }
 
   .cn-badge-variant-secondary {
@@ -362,7 +362,7 @@
   }
 
   .cn-badge-variant-link {
-    @apply text-primary underline-offset-4 hover:underline;
+    @apply text-primary-ink underline-offset-4 hover:underline;
   }
 
   /* MARK: Command */

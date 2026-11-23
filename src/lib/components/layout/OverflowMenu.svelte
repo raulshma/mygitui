@@ -41,7 +41,7 @@
     align?: "start" | "center" | "end";
     /** Extra classes for the trigger (base: 28px ghost hit-target). */
     class?: string;
-    /** Extra classes for the menu content (default min-width 10rem). */
+    /** Extra classes for the menu content (default auto-width: 11–20rem). */
     contentClass?: string;
     /** The menu body: DropdownMenu.Item / .Separator / .CheckboxItem… */
     content: Snippet;
@@ -68,7 +68,11 @@
       </DropdownMenu.Trigger>
     {/snippet}
   </Hint>
-  <DropdownMenu.Content {align} {side} class={cn("min-w-40", contentClass)}>
+  <!-- Auto-width (ContextMenu idiom): the vendored content pins its width to
+       the 28px anchor, flooring at min-width — long labels wrapped inside
+       160px even with the whole screen free. `w-auto` wins the tailwind-merge
+       conflict against that var; `max-w-80` still caps pathological rows. -->
+  <DropdownMenu.Content {align} {side} class={cn("w-auto min-w-44 max-w-80", contentClass)}>
     {@render content()}
   </DropdownMenu.Content>
 </DropdownMenu.Root>

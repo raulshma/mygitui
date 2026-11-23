@@ -402,7 +402,7 @@
                     </option>
                   {/each}
                 </select>
-                <span class="psha flex-none font-mono text-primary">{row.sha.slice(0, 7)}</span>
+                <span class="psha flex-none font-mono text-primary-ink">{row.sha.slice(0, 7)}</span>
                 <Hint label={row.summary}>
                   {#snippet child({ props })}
                     <span
@@ -454,7 +454,7 @@
         {#if baseSha !== null}
           <Button
             variant="outline"
-            class="text-primary"
+            class="text-primary-ink"
             type="button"
             onclick={() => void onAutosquash()}
             disabled={autosquashing || loading}
@@ -464,7 +464,7 @@
           </Button>
         {/if}
         <span style:flex="1"></span>
-        <Button variant="outline" class="text-primary" type="button" onclick={cancel} disabled={starting}>
+        <Button variant="outline" class="text-primary-ink" type="button" onclick={cancel} disabled={starting}>
           Cancel
         </Button>
         <Button variant="default" type="button" onclick={startRebase} disabled={!canStart}>
@@ -497,7 +497,7 @@
           </p>
           <Button
             variant="outline"
-            class="text-primary"
+            class="text-primary-ink"
             type="button"
             onclick={onClose}
           >
@@ -535,7 +535,7 @@
                  conflicted step or a failed exec (backend-gated). -->
             <Button
               variant="outline"
-              class="text-primary"
+              class="text-primary-ink"
               type="button"
               disabled={monitor.inConflict && !monitor.state?.paused_for_exec}
               title={monitor.state?.paused_for_exec
@@ -547,7 +547,7 @@
             </Button>
           {/if}
           <span style:flex="1"></span>
-          <Button variant="outline" class="text-primary" type="button" onclick={onClose}>
+          <Button variant="outline" class="text-primary-ink" type="button" onclick={onClose}>
             Hide
           </Button>
           <Button

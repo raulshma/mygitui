@@ -222,7 +222,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
           {@const cmdIcon = commandIcon(entry.command)}
           {#if isFirstOfSection(i)}
             <li
-              class="section px-3 pt-2.5 pb-1 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary select-none"
+              class="section px-3 pt-2.5 pb-1 text-ui-micro font-bold uppercase tracking-[0.08em] text-primary-ink select-none"
               role="presentation"
             >{sectionFor(i)?.name}</li>
           {/if}
@@ -254,7 +254,7 @@ import { Kbd } from "$lib/components/ui/kbd/index.js";
             <span class="label flex-1 min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
               {#each entry.command.title as ch, j (j)}<span
                   class:hl={hits.has(j)}
-                  class:text-primary={hits.has(j)}
+                  class:text-primary-ink={hits.has(j)}
                   class:font-bold={hits.has(j)}
                 >{ch}</span>{/each}
             </span>

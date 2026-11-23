@@ -87,7 +87,7 @@
   const runTone: Record<string, string> = {
     "run-success": "text-[var(--app-added)]",
     "run-failure": "text-[var(--app-deleted)]",
-    "run-running": "text-primary",
+    "run-running": "text-primary-ink",
     "run-queued": "text-muted-foreground",
     "run-cancelled": "text-muted-foreground",
     "run-skipped": "text-muted-foreground opacity-60",
@@ -536,7 +536,7 @@
     {#if live}
       <Hint label="Following this run while GitHub publishes output">
         {#snippet child({ props })}
-          <span class="live-badge flex-none inline-flex items-center gap-1 whitespace-nowrap text-ui-micro font-semibold text-primary" {...props}>
+          <span class="live-badge flex-none inline-flex items-center gap-1 whitespace-nowrap text-ui-micro font-semibold text-primary-ink" {...props}>
             <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
             Live
           </span>
@@ -563,7 +563,7 @@
       <Hint label="Open GitHub's live console for this run">
         {#snippet child({ props })}
           <Button
-            class="live-console {tb} border-current/40 text-primary"
+            class="live-console {tb} border-current/40 text-primary-ink"
             variant="outline"
             {...props}
             type="button"

@@ -3000,7 +3000,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         <Hint label="Show history sidebar" side="left">
           {#snippet child({ props })}
             <button
-              class="history-rail-toggle inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-primary focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
+              class="history-rail-toggle inline-flex size-ui-hit flex-none cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-primary-ink focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary"
               type="button"
               {...props}
               aria-label="Show history sidebar"

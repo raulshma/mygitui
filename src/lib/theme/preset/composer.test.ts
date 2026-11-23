@@ -2,10 +2,12 @@
  * Tests for the theme composer (src/lib/theme/preset/composer).
  *
  * Merge order must mirror upstream `buildRegistryTheme`: base color full
- * set → theme override → chart color → menu accent → radius (light only).
+ * set → theme override → chart color → menu accent → radius (light only) →
+ * contrast guardrails (fill/foreground repairs + primary-ink/-hover).
  */
 import { describe, expect, it } from "vitest";
 
+import { contrastRatio, parseOklch } from "../contrast";
 import { DEFAULT_APPEARANCE, type AppearanceConfig } from "./codec";
 import { buildFontVars, buildThemeVars } from "./composer";
 import { getBaseColor, getTheme } from "./values";
@@ -68,6 +70,74 @@ describe("buildThemeVars", () => {
       config({ baseColor: "nope" as never, theme: "nope" as never }),
     );
     expect(light.background).toBe(getBaseColor("neutral")!.cssVars.light.background);
+  });
+});
+
+describe("contrast guardrails", () => {
+  it("repair below-threshold fill/foreground pairs (yellow, both schemes)", () => {
+    for (const scheme of ["light", "dark"] as const) {
+      const vars = buildThemeVars(config({ theme: "yellow" }))[scheme];
+      const raw = getTheme("yellow")!.cssVars[scheme];
+      // The shipped pair is under 4.5:1 (the reported wash-out)…
+      expect(
+        contrastRatio(raw["primary-foreground"], raw.primary),
+      ).toBeLessThan(4.5);
+      // …and the guardrail darkens the foreground past it, hue intact.
+      const fg = parseOklch(vars["primary-foreground"])!;
+      expect(contrastRatio(vars["primary-foreground"], vars.primary)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(fg.h).toBeCloseTo(parseOklch(raw["primary-foreground"])!.h, 0);
+      // The fill itself keeps the theme's identity (only the fg moves).
+      expect(vars.primary).toBe(raw.primary);
+    }
+  });
+
+  it("leave passing pairs byte-identical (red dark, neutral base)", () => {
+    const red = buildThemeVars(config({ theme: "red" }));
+    expect(red.dark["primary-foreground"]).toBe(
+      getTheme("red")!.cssVars.dark["primary-foreground"],
+    );
+    const neutral = buildThemeVars(config({}));
+    const base = getBaseColor("neutral")!;
+    expect(neutral.light["accent-foreground"]).toBe(base.cssVars.light["accent-foreground"]);
+    expect(neutral.dark["primary-foreground"]).toBe(base.cssVars.dark["primary-foreground"]);
+  });
+
+  it("derive a readable --primary-ink against the background in both schemes", () => {
+    for (const scheme of ["light", "dark"] as const) {
+      const vars = buildThemeVars(config({ theme: "yellow" }))[scheme];
+      const ink = parseOklch(vars["primary-ink"])!;
+      expect(contrastRatio(vars["primary-ink"], vars.background)).toBeGreaterThanOrEqual(4.5);
+      // Hue preserved: the ink stays the theme color, not a gray.
+      expect(ink.h).toBeCloseTo(parseOklch(vars.primary)!.h, 0);
+    }
+  });
+
+  it("derive --primary-hover stepping away from the foreground", () => {
+    const { light, dark } = buildThemeVars(config({ theme: "yellow" }));
+    // Direction follows the pair, not the scheme: yellow's foreground is
+    // darker than its fill in both schemes, and so is the neutral dark
+    // scheme's — hover lightens all three fills (away from the fg).
+    const lightHover = parseOklch(light["primary-hover"])!;
+    expect(lightHover.l).toBeGreaterThan(parseOklch(light.primary)!.l);
+    const darkHover = parseOklch(dark["primary-hover"])!;
+    expect(darkHover.l).toBeGreaterThan(parseOklch(dark.primary)!.l);
+    const neutralDark = buildThemeVars(config({})).dark;
+    expect(parseOklch(neutralDark["primary-hover"])!.l).toBeGreaterThan(
+      parseOklch(neutralDark.primary)!.l,
+    );
+  });
+
+  it("guard the bold accent pair after accent := primary", () => {
+    const bold = buildThemeVars(config({ theme: "yellow", menuAccent: "bold" }));
+    expect(bold.light.accent).toBe(bold.light.primary);
+    expect(
+      contrastRatio(bold.light["accent-foreground"], bold.light.accent),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(bold.dark["accent-foreground"], bold.dark.accent),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
 

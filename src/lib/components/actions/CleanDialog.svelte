@@ -156,8 +156,8 @@
         </p>
 
         <div class="bulk mb-ui-4 flex gap-3">
-          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(true)}>Select all</button>
-          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(false)}>Select none</button>
+          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary-ink underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(true)}>Select all</button>
+          <button class="link cursor-pointer border-0 bg-transparent p-0 text-xs font-[inherit] text-primary-ink underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" type="button" onclick={() => setAll(false)}>Select none</button>
         </div>
 
         <div class="file-list mb-3 max-h-64 overflow-y-auto rounded border border-border bg-background p-[0.5rem_0.6rem]" role="list" aria-label="Untracked paths to delete">

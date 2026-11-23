@@ -508,7 +508,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
 
   /** Classes for the small toolbar buttons (idle vs tonal emphasis). */
   const tbIdle = "text-muted-foreground";
-  const tbTonal = "bg-primary/15 font-semibold text-primary hover:bg-primary/25";
+  const tbTonal = "bg-primary/15 font-semibold text-primary-ink hover:bg-primary/25";
 </script>
 
 <!-- Shortcuts work anywhere while the editor is mounted (including inside
@@ -523,7 +523,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
         <Badge
           {...props}
           variant="outline"
-          class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro font-semibold uppercase tracking-wider text-primary"
+          class="source h-auto whitespace-nowrap rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro font-semibold uppercase tracking-wider text-primary-ink"
         >
           {files[0]?.source ?? "merge"}
         </Badge>
@@ -585,7 +585,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
         >
           <span
             class={"mark w-3.5 flex-none text-center font-bold " +
-              (marked[file.path] ? "text-[var(--app-added)]" : "text-primary")}
+              (marked[file.path] ? "text-[var(--app-added)]" : "text-primary-ink")}
             aria-hidden="true"
           >
             {#if resolvingPath === file.path}…{:else if marked[file.path]}✓{:else if fileDirty(file.path)}•{/if}
@@ -613,7 +613,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
         <p class="empty p-4 text-muted-foreground">Loading {selected.path}…</p>
       {:else}
         {#if !selected.has_base}
-          <p class="hint flex-none bg-primary/10 px-2.5 py-1 text-ui-micro text-primary" role="note">
+          <p class="hint flex-none bg-primary/10 px-2.5 py-1 text-ui-micro text-primary-ink" role="note">
             Base unavailable (rename/add conflict) — showing ours vs theirs only.
           </p>
         {/if}
@@ -654,7 +654,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                         ? "bg-destructive/10 text-destructive"
                         : st === "edited"
                           ? "bg-secondary text-secondary-foreground"
-                          : "bg-primary/15 text-primary")}
+                          : "bg-primary/15 text-primary-ink")}
                   >{st}</Badge>
                   <span class="head-spacer flex-1"></span>
                   <Button
@@ -777,7 +777,7 @@ import type { FeatureOutcome } from "$lib/ai/features";
                 <Badge
                   {...props}
                   variant="outline"
-                  class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro text-primary"
+                  class="unsaved h-auto rounded-full border-transparent bg-primary/10 px-2 py-0.5 text-ui-micro text-primary-ink"
                 >
                   unsaved
                 </Badge>

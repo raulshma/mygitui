@@ -258,7 +258,7 @@
                     onclick={() => copySha(entry)}
                     oncontextmenu={(e) => entryMenu(e, entry)}
                   >
-                    <span class="sha shrink-0 font-mono text-ui-meta text-primary"
+                    <span class="sha shrink-0 font-mono text-ui-meta text-primary-ink"
                       >{shortSha(entry.new_sha)}</span
                     >
                     <span class="what flex min-w-0 flex-col">

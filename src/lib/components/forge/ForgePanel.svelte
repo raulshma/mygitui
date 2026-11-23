@@ -129,21 +129,21 @@
   const tb =
     "flex-none gap-1 whitespace-nowrap rounded-sm px-2 py-0.5 text-ui-meta leading-[1.4] font-normal text-muted-foreground";
   const chipTone: Record<string, string> = {
-    "chip-pass": "bg-primary/15 text-primary",
+    "chip-pass": "bg-primary/15 text-primary-ink",
     "chip-fail": "bg-destructive/15 text-destructive",
     "chip-pending": "bg-accent text-muted-foreground",
     "chip-skipping": "bg-accent text-muted-foreground",
     "chip-none": "bg-muted text-muted-foreground",
-    "chip-pr-open": "bg-primary/15 text-primary",
-    "chip-pr-merged": "bg-primary/10 text-primary",
+    "chip-pr-open": "bg-primary/15 text-primary-ink",
+    "chip-pr-merged": "bg-primary/10 text-primary-ink",
     "chip-pr-closed": "bg-accent text-muted-foreground",
-    "check-pass": "text-primary",
+    "check-pass": "text-primary-ink",
     "check-fail": "text-destructive font-bold",
     "check-pending": "text-muted-foreground",
     "check-skipping": "text-muted-foreground",
     "run-success": "bg-[var(--app-added-bg)] text-[var(--app-added)]",
     "run-failure": "bg-[var(--app-deleted-bg)] text-[var(--app-deleted)]",
-    "run-running": "bg-primary/10 text-primary",
+    "run-running": "bg-primary/10 text-primary-ink",
     "run-queued": "bg-accent text-muted-foreground",
     "run-cancelled": "bg-accent text-muted-foreground",
     "run-skipped": "bg-accent text-muted-foreground",
@@ -1036,7 +1036,7 @@
   {#snippet prBody(pr: PrInfo)}
     {#if pr.body.trim()}
       <details class="pr-body mt-ui-35 text-ui-meta text-muted-foreground">
-        <summary class="w-fit cursor-pointer text-ui-micro text-primary">Description</summary>
+        <summary class="w-fit cursor-pointer text-ui-micro text-primary-ink">Description</summary>
         <div class="pr-body-text mt-ui-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-r-sm border-l-2 border-border bg-muted/40 px-2 py-ui-4 leading-[1.45] [overflow-wrap:anywhere]">{pr.body}</div>
       </details>
     {/if}
@@ -1158,7 +1158,7 @@
           : "Auto-refresh checks every 10 seconds"}>
           {#snippet child({ props })}
             <Button
-              class="{tb} watching {isWatching ? "border-primary text-primary" : ""}"
+              class="{tb} watching {isWatching ? "border-primary text-primary-ink" : ""}"
               variant="outline"
               {...props}
               type="button"

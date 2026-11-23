@@ -3,8 +3,10 @@
  * the two header-owned submenus (Layout preset, Open with) and RepoView's
  * commands — can be pinned to the header bar. A pinned command renders as
  * an always-visible icon button that runs the same action; a pinned
- * submenu opens its picker. Right-click on a pinned button unpins it; the
- * pin list persists across reloads (repoActionPins, `mygitui.repoActionPins`).
+ * submenu opens its picker (Open with as a split button: the main segment
+ * launches the last-used app, the chevron opens the picker). Right-click
+ * on a pinned button unpins it; the pin list persists across reloads
+ * (repoActionPins, `mygitui.repoActionPins`).
  */
 
 import { expect, test, type Page } from "@playwright/test";
@@ -117,6 +119,68 @@ test("pins persist across reloads and the menu reflects pin state", async ({
   await openMoreMenu(page);
   await expect(
     page.getByRole("button", { name: "Unpin Recent repositories from the bar" }),
+  ).toBeVisible();
+
+  expect(tracked.errors).toEqual([]);
+});
+
+test("pinning Open with gives a split button: last-used launch + picker", async ({
+  page,
+}) => {
+  const tracked = trackErrors(page);
+  const { commits, rows } = linearLog(3);
+  await seedStorage(page, recentRepos(["/tmp/repo"]));
+  const mock = await installTauriMock(page, {
+    commands: {
+      ...historyCommands({ commits, rows }),
+      detect_editors: [
+        { id: "code", name: "Visual Studio Code" },
+        { id: "explorer", name: "Files" },
+      ],
+    },
+  });
+  await openRecentRepo(page);
+  await expect(page.locator(".history .row").first()).toBeVisible();
+
+  // Pin "Open with" from the overflow submenu.
+  await openMoreMenu(page);
+  await page.getByRole("menuitem", { name: "Open with" }).click();
+  await page.getByRole("menuitem", { name: "Pin Open with to bar" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  // The pinned entry is a group: the main segment carries the last-used
+  // app (default: the platform file manager), the chevron opens the picker.
+  const group = page
+    .locator(".repo-header")
+    .getByRole("group", { name: "Open repository with an app" });
+  const main = group.getByRole("button", { name: "Open with Files (last used)" });
+  await expect(main).toBeVisible();
+
+  // Main segment launches the last-used app in one click.
+  await main.click();
+  await expect
+    .poll(async () => (await mock.callsOf("open_with")).length, { timeout: 5_000 })
+    .toBe(1);
+  expect((await mock.callsOf("open_with"))[0]).toMatchObject({
+    app_id: "explorer",
+    repo_root: "/tmp/repo",
+  });
+
+  // Chevron opens the picker (fresh detection per open) and picking another
+  // app launches it — and becomes the new last-used on the main segment.
+  await group
+    .getByRole("button", { name: "Choose an app to open the repository with" })
+    .click();
+  const code = page.getByRole("menuitem", { name: "Visual Studio Code" });
+  await expect(code).toBeVisible();
+  await code.click();
+  await expect
+    .poll(async () => (await mock.callsOf("open_with")).length, { timeout: 5_000 })
+    .toBe(2);
+  expect((await mock.callsOf("open_with"))[1]).toMatchObject({ app_id: "code" });
+  await expect(
+    group.getByRole("button", { name: "Open with Visual Studio Code (last used)" }),
   ).toBeVisible();
 
   expect(tracked.errors).toEqual([]);

@@ -451,7 +451,7 @@
           {#snippet child({ props })}
             <button
               class="tab-main flex min-w-0 cursor-pointer select-none items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-t-lg border-0 bg-transparent py-1 pl-3.5 pr-1 text-sm font-medium text-muted-foreground outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-              class:text-primary={isActive}
+              class:text-accent-foreground={isActive}
               type="button"
               {...props}
               {...cell.triggerProps}

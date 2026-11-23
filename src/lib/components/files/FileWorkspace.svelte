@@ -476,7 +476,7 @@
             {...props}
             type="button"
             class="tact text-muted-foreground hover:bg-accent hover:text-accent-foreground [&_svg:not([class*='size-'])]:size-3.5 {editorPrefs.wrap
-              ? 'bg-primary/10 text-primary'
+              ? 'bg-primary/10 text-primary-ink'
               : ''}"
             variant="ghost"
             size="icon-xs"

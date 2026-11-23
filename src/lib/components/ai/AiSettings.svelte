@@ -742,7 +742,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
                 <strong class="text-sm font-semibold">{option === "opencode" ? "OpenCode" : "OpenRouter"}</strong>
                 <span class="text-ui-meta text-muted-foreground">{option === "opencode" ? "Local server, managed by mygitui" : "Direct API, requires an API key"}</span>
               </span>
-              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-ui-15 text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 wm-stacked:col-start-2 wm-stacked:text-left {statuses[option].status === 'ok' ? 'text-primary' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
+              <span class="backend-status {statuses[option].status} flex min-w-0 flex-col gap-ui-15 text-right text-ui-meta [overflow-wrap:anywhere] max-w-56 wm-stacked:col-start-2 wm-stacked:text-left {statuses[option].status === 'ok' ? 'text-primary-ink' : statuses[option].status === 'down' || statuses[option].status === 'unauthenticated' ? 'text-destructive' : 'text-muted-foreground'}">{statusLine(option)}</span>
             </label>
           {/each}
         </fieldset>
@@ -981,7 +981,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
             <Button
               variant="outline"
               size="sm"
-              class="rounded-full text-primary"
+              class="rounded-full text-primary-ink"
               type="button"
               onclick={() => customPrompts.add()}
             >
@@ -1025,7 +1025,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
         </fieldset>
 
         <div class="status mb-0 mt-1 flex items-center gap-3 border-b border-t border-border py-3 wm-stacked:flex-col wm-stacked:items-stretch" role="status">
-          <Button variant="outline" class="secondary rounded-full text-primary" type="button" disabled={testing} onclick={() => void testConnection()}>
+          <Button variant="outline" class="secondary rounded-full text-primary-ink" type="button" disabled={testing} onclick={() => void testConnection()}>
             {#if testing}Checking…{:else}Check connections{/if}
           </Button>
           <ul class="status-list m-0 flex list-none flex-col gap-ui-125 p-0 text-ui-meta text-muted-foreground">
@@ -1042,7 +1042,7 @@ import type { AiFeatureMode } from "$lib/ai/types";
           <Button variant="default" class="primary rounded-full" type="submit" disabled={saving}>
             {#if saving}Saving…{:else}Save{/if}
           </Button>
-          <Button variant="outline" class="secondary rounded-full text-primary" type="button" onclick={close}>Cancel</Button>
+          <Button variant="outline" class="secondary rounded-full text-primary-ink" type="button" onclick={close}>Cancel</Button>
         </div>
       </form>
     </Dialog.Content>

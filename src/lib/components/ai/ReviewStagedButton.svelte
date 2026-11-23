@@ -115,7 +115,7 @@
       </div>
     {:else}
       <p class="rs-loading m-0 mb-3 flex items-center gap-2 text-ui-meta text-muted-foreground" role="status">
-        <Spinner class="size-3 text-primary" aria-hidden="true" />
+        <Spinner class="size-3 text-primary-ink" aria-hidden="true" />
         Analyzing the staged diff…
       </p>
     {/if}

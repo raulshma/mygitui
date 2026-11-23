@@ -256,7 +256,7 @@
               <span class="label min-w-0 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
                 {#each item.label as ch, j (j)}<span
                     class:hl={hits.has(j)}
-                    class:text-primary={hits.has(j)}
+                    class:text-primary-ink={hits.has(j)}
                     class:font-bold={hits.has(j)}
                   >{ch}</span>{/each}
               </span>
@@ -265,7 +265,7 @@
               >{item.sub}</span>
               {#if item.kind === "tab"}
                 <Badge
-                  class="badge shrink-0 uppercase tracking-[0.05em] text-primary"
+                  class="badge shrink-0 uppercase tracking-[0.05em] text-primary-ink"
                   variant="outline"
                   aria-label="Open tab"
                 >open</Badge>
@@ -275,7 +275,7 @@
                   <button
                     {...props}
                     type="button"
-                    class="shrink-0 flex cursor-pointer items-center justify-center rounded-full size-6 text-muted-foreground hover:bg-accent hover:text-primary aria-pressed:text-primary"
+                    class="shrink-0 flex cursor-pointer items-center justify-center rounded-full size-6 text-muted-foreground hover:bg-accent hover:text-accent-foreground aria-pressed:text-primary-ink"
                     aria-pressed={favoriteRepos.has(item.sub)}
                     aria-label={favoriteRepos.has(item.sub) ? `Remove ${item.label} from favorites` : `Add ${item.label} to favorites`}
                     onclick={(e) => star(e, item)}

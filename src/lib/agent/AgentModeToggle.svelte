@@ -25,7 +25,7 @@
       {#snippet child({ props })}
         <Button
           {...props}
-          class="agent-mode-toggle{agentMode.enabled ? ' text-primary' : ''}"
+          class="agent-mode-toggle{agentMode.enabled ? ' text-primary-ink' : ''}"
           variant="ghost"
           size="icon-sm"
           type="button"

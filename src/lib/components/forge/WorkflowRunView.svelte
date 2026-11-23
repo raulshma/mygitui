@@ -77,7 +77,7 @@
   const chipTone: Record<string, string> = {
     "run-success": "bg-[var(--app-added-bg)] text-[var(--app-added)]",
     "run-failure": "bg-[var(--app-deleted-bg)] text-[var(--app-deleted)]",
-    "run-running": "bg-primary/10 text-primary",
+    "run-running": "bg-primary/10 text-primary-ink",
     "run-queued": "bg-accent text-muted-foreground",
     "run-cancelled": "bg-accent text-muted-foreground",
     "run-skipped": "bg-accent text-muted-foreground",
@@ -86,7 +86,7 @@
   const runTone: Record<string, string> = {
     "run-success": "text-[var(--app-added)]",
     "run-failure": "text-[var(--app-deleted)]",
-    "run-running": "text-primary",
+    "run-running": "text-primary-ink",
     "run-queued": "text-muted-foreground",
     "run-cancelled": "text-muted-foreground",
     "run-skipped": "text-muted-foreground opacity-60",
@@ -590,7 +590,7 @@
       {#if active}
         <span
           class="live-badge flex-none inline-flex items-center gap-ui-3 text-ui-micro font-semibold {autoRefresh
-            ? "text-primary"
+            ? "text-primary-ink"
             : "text-muted-foreground"}"
           class:paused={!autoRefresh}
         >
@@ -946,7 +946,7 @@
           {#if failedOnly}<span class="scope-chip rounded-full bg-muted px-2 text-ui-micro font-medium text-muted-foreground">failed steps</span>{/if}
         </h3>
         {#if live}
-          <span class="live-badge small flex-none inline-flex items-center gap-ui-3 text-ui-micro font-medium text-primary">
+          <span class="live-badge small flex-none inline-flex items-center gap-ui-3 text-ui-micro font-medium text-primary-ink">
             <span class="live-dot size-[0.42rem] animate-pulse rounded-full bg-current" aria-hidden="true"></span>
             Live
           </span>
