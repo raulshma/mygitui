@@ -332,6 +332,7 @@ fn restore_returns_workdir_and_index_to_exact_snapshot() {
         .checkpoint_create_impl(&repo, "second")
         .expect("checkpoint 2");
 
+    tick();
     ENGINE
         .checkpoint_restore_impl(&repo, &first.id)
         .expect("restore");

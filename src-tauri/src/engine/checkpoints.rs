@@ -30,6 +30,7 @@
 //! `*_impl` methods. Integration forwards `GitEngineM3::checkpoint_*` to
 //! these; the IPC commands call them directly in the meantime.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::git_engine::{EngineError, EngineResult};
@@ -447,11 +448,22 @@ fn unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
+static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
+
 fn unix_millis() -> u128 {
-    SystemTime::now()
+    let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut current = LAST_MILLIS.load(Ordering::Relaxed);
+    loop {
+        let next = if now > current { now } else { current + 1 };
+        match LAST_MILLIS.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return next as u128,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 /// HEAD peeled to a commit; `None` on an unborn HEAD.
