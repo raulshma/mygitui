@@ -242,8 +242,8 @@ fn output_capture_exit_event_and_unregister() {
         spawn_session(&registry, spec(Some(echo_command(&tag))), sink.clone()).expect("spawn");
 
     assert!(
-        registry.get(&session_id).is_some(),
-        "session must be registered right after spawn"
+        registry.get(&session_id).is_some() || !sink.exits().is_empty(),
+        "session must be registered right after spawn (or already exited)"
     );
 
     // Output arrives coalesced through the sink until it contains the tag.
