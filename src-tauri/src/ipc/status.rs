@@ -199,7 +199,7 @@ mod summary_tests {
 
     use crate::engine::types::ChangeKind;
 
-    use super::summarize;
+    use super::{normalize_root, summarize};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -245,7 +245,8 @@ mod summary_tests {
 
         let summary = summarize(&dir).expect("summary");
         assert_eq!(summary.name, dir.file_name().unwrap().to_string_lossy());
-        assert_eq!(summary.root, dir.to_string_lossy());
+        let expected_root = normalize_root(repo.workdir().unwrap().to_path_buf());
+        assert_eq!(summary.root, expected_root.to_string_lossy());
         assert_eq!(summary.branch.as_deref(), Some("master"));
         assert!(!summary.detached);
         assert_eq!((summary.ahead, summary.behind), (0, 0));
