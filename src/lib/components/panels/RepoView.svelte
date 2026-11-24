@@ -156,6 +156,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     TREE_PANELS,
     visiblePanels,
     type LayoutNode,
+    type MoveTarget,
     type PanelGroupAction,
     type PanelId,
   } from "$lib/layout/layoutModel";
@@ -1340,11 +1341,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** Whether the tab group at `tabsId` has a group to its left. */
   function canMoveLeftFor(tabsId: string): boolean {
-    return leftSiblingOf(resolved.layout.main, tabsId) !== null;
+    const sib = leftSiblingOf(resolved.layout.main, tabsId);
+    return sib !== null && sib.kind !== "split";
   }
   /** Whether the tab group at `tabsId` has a group to its right. */
   function canMoveRightFor(tabsId: string): boolean {
-    return rightSiblingOf(resolved.layout.main, tabsId) !== null;
+    const sib = rightSiblingOf(resolved.layout.main, tabsId);
+    return sib !== null && sib.kind !== "split";
   }
 
   function onRatio(splitId: string, ratio: number): void {
@@ -1364,6 +1367,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     layouts.addPanel(root, panel, tabsId);
   }
 
+  function onMovePanel(panel: PanelId, target: MoveTarget): void {
+    layouts.movePanelTo(root, panel, target);
+  }
+
   function onPanelAction(
     action: PanelGroupAction,
     tabsId: string,
@@ -1374,11 +1381,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       return;
     }
     if (action === "new-group-left") {
-      layouts.movePanelTo(root, panel, { kind: "before", nodeId: tabsId });
+      layouts.movePanelTo(root, panel, { kind: "before", nodeId: tabsId, asTabs: true });
       return;
     }
     if (action === "new-group-right") {
-      layouts.movePanelTo(root, panel, { kind: "after", nodeId: tabsId });
+      layouts.movePanelTo(root, panel, { kind: "after", nodeId: tabsId, asTabs: true });
       return;
     }
     // move-left-group / move-right-group: merge into the adjacent sibling
@@ -1402,6 +1409,8 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
       toast(`No group to the ${side}`);
     }
   }
+
+  const handleTabAction = onPanelAction;
 
   /** Save-layout prompt + abort confirmation (M9 F9 dialog state). */
   let saveLayoutOpen = $state(false);
@@ -2987,6 +2996,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         onActivateTab={onActivateTab}
         onAddPanel={onAddPanel}
         onPanelAction={onPanelAction}
+        onMovePanel={onMovePanel}
         rightRail={showHistoryRail}
       />
     </div>

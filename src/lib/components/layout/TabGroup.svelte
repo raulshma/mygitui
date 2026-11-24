@@ -43,10 +43,16 @@
   import {
     PANEL_META,
     panelLabel,
+    type MoveTarget,
     type PanelGroupAction,
     type PanelId,
     type TabsNode,
   } from "$lib/layout/layoutModel";
+  import {
+    PANEL_DRAG_MIME,
+    getDragPanelInfo,
+    setInFlightDrag,
+  } from "$lib/layout/panelDnd";
 import {
   overlayHostAttrs,
   overlayPaneClass,
@@ -67,6 +73,7 @@ import {
     onActivate,
     onAdd,
     onAction,
+    onMovePanel,
   }: {
     node: TabsNode;
     /** Snippet factory: PanelId → the panel's rendered content. */
@@ -87,6 +94,7 @@ import {
     onActivate: (tabsId: string, index: number) => void;
     onAdd: (tabsId: string, panel: PanelId) => void;
     onAction: (action: PanelGroupAction, tabsId: string, panel: PanelId) => void;
+    onMovePanel?: (panel: PanelId, target: MoveTarget) => void;
   } = $props();
 
   /** Active index clamped against the current tabs (defensive vs overlays). */
@@ -216,13 +224,165 @@ import {
     menu = null;
     onAdd(node.id, panel);
   }
+
+  // -- drag and drop ---------------------------------------------------------
+  let dragPanel = $state<PanelId | null>(null);
+  let dropTargetPanel = $state<PanelId | null>(null);
+  let dropPosition = $state<"before" | "after" | "left-split" | "right-split" | "tab-end" | null>(null);
+
+  function onTabDragStart(event: DragEvent, panel: PanelId): void {
+    dragPanel = panel;
+    setInFlightDrag({ panel, sourceGroupId: node.id });
+    event.dataTransfer?.setData(PANEL_DRAG_MIME, JSON.stringify({ panel, sourceGroupId: node.id }));
+    event.dataTransfer?.setData("text/plain", panel);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  function onTabDragEnd(): void {
+    dragPanel = null;
+    dropTargetPanel = null;
+    dropPosition = null;
+    setInFlightDrag(null);
+  }
+
+  function onTabDragOver(event: DragEvent, targetPanel: PanelId, index: number): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+
+    if (info.sourceGroupId === node.id && info.panel === targetPanel) {
+      dropTargetPanel = null;
+      dropPosition = null;
+      return;
+    }
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const isAfter = event.clientX >= rect.left + rect.width / 2;
+    dropTargetPanel = targetPanel;
+    dropPosition = isAfter ? "after" : "before";
+  }
+
+  function onTabDrop(event: DragEvent, targetPanel: PanelId, index: number): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const { panel, sourceGroupId } = info;
+    const isAfter = dropPosition === "after";
+    let targetIndex = isAfter ? index + 1 : index;
+
+    if (sourceGroupId === node.id) {
+      const fromIndex = node.tabs.indexOf(panel);
+      if (fromIndex !== -1 && fromIndex < targetIndex) {
+        targetIndex -= 1;
+      }
+      if (targetIndex !== fromIndex) {
+        if (onMovePanel) {
+          onMovePanel(panel, { kind: "tab", nodeId: node.id, index: targetIndex });
+        }
+      }
+    } else {
+      if (onMovePanel) {
+        onMovePanel(panel, { kind: "tab", nodeId: node.id, index: targetIndex });
+      }
+    }
+
+    onTabDragEnd();
+  }
+
+  function onStripDragOver(event: DragEvent): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    dropTargetPanel = null;
+    dropPosition = "tab-end";
+  }
+
+  function onStripDrop(event: DragEvent): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+    const { panel, sourceGroupId } = info;
+    if (sourceGroupId === node.id) {
+      const fromIndex = node.tabs.indexOf(panel);
+      if (fromIndex !== node.tabs.length - 1 && onMovePanel) {
+        onMovePanel(panel, { kind: "tab", nodeId: node.id, index: node.tabs.length - 1 });
+      }
+    } else {
+      if (onMovePanel) {
+        onMovePanel(panel, { kind: "tab", nodeId: node.id });
+      }
+    }
+    onTabDragEnd();
+  }
+
+  function onBodyDragOver(event: DragEvent): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const relX = event.clientX - rect.left;
+    if (relX < rect.width * 0.25) {
+      dropPosition = "left-split";
+    } else if (relX > rect.width * 0.75) {
+      dropPosition = "right-split";
+    } else {
+      dropPosition = null;
+    }
+  }
+
+  function onBodyDragLeave(event: DragEvent): void {
+    const related = event.relatedTarget as Node | null;
+    if (event.currentTarget && (event.currentTarget as HTMLElement).contains(related)) {
+      return;
+    }
+    if (dropPosition === "left-split" || dropPosition === "right-split") {
+      dropPosition = null;
+    }
+  }
+
+  function onBodyDrop(event: DragEvent): void {
+    const info = getDragPanelInfo(event);
+    if (!info) return;
+    event.preventDefault();
+
+    const { panel } = info;
+    if (dropPosition === "left-split") {
+      if (onMovePanel) {
+        onMovePanel(panel, { kind: "before", nodeId: node.id, asTabs: true });
+      } else {
+        onAction("new-group-left", node.id, panel);
+      }
+    } else if (dropPosition === "right-split") {
+      if (onMovePanel) {
+        onMovePanel(panel, { kind: "after", nodeId: node.id, asTabs: true });
+      } else {
+        onAction("new-group-right", node.id, panel);
+      }
+    } else if (info.sourceGroupId !== node.id) {
+      if (onMovePanel) {
+        onMovePanel(panel, { kind: "tab", nodeId: node.id });
+      }
+    }
+    onTabDragEnd();
+  }
 </script>
 
 <div class="tabgroup flex h-full w-full min-h-0 flex-col" bind:this={rootEl}>
   {#if hideTabs}
     {#if activePanel}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="panel-head flex flex-none items-center gap-ui-35 border-b border-border bg-popover px-2.5 py-1"
+        class="panel-head flex flex-none items-center gap-ui-35 border-b border-border bg-popover px-2.5 py-1 cursor-grab"
+        draggable="true"
+        ondragstart={(e) => onTabDragStart(e, activePanel)}
+        ondragend={onTabDragEnd}
         onauxclick={(e) => onAuxClick(e, activePanel)}
       >
         <svg
@@ -271,68 +431,120 @@ import {
       onStripContextMenu={(e) => e.preventDefault()}
     >
       {#snippet tab(item, cell)}
-        <Hint label={`${panelLabel(item.id)} — middle-click to close`}>
-          {#snippet child({ props })}
-            <button
-              data-tab-index={cell.index}
-              class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary-ink"
-              type="button"
-              {...props}
-              {...cell.triggerProps}
-              id={`tab-${node.id}-${item.id}`}
-              aria-controls={`tabpanel-${node.id}`}
-              aria-label={panelLabel(item.id)}
-              onclick={() => onActivate(node.id, cell.index)}
-              onauxclick={(e) => onAuxClick(e, item.id)}
-              oncontextmenu={(e) => openContext(e, item.id)}
-            >
-              <svg
-                class="tab-icon h-3 w-3 flex-none"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d={PANEL_META[item.id]?.icon ?? ""} />
-              </svg>
-              {panelLabel(item.id)}
-            </button>
-          {/snippet}
-        </Hint>
-      {/snippet}
-      {#snippet inStrip()}
-        {#if hiddenPanels.length > 0}
-          <Hint label="Add panel">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="relative inline-flex items-stretch"
+          ondragover={(e) => onTabDragOver(e, item.id, cell.index)}
+          ondrop={(e) => onTabDrop(e, item.id, cell.index)}
+        >
+          {#if dropTargetPanel === item.id && dropPosition === "before"}
+            <span
+              class="pointer-events-none absolute -left-0.5 inset-y-0.5 w-1 rounded-full bg-primary z-20"
+              aria-hidden="true"
+            ></span>
+          {/if}
+          <Hint label={`${panelLabel(item.id)} — middle-click to close`}>
             {#snippet child({ props })}
-              <Button
-                class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
-                variant="ghost"
-                size="sm"
+              <button
+                data-tab-index={cell.index}
+                class="panel-tab inline-flex flex-none cursor-pointer items-center gap-1 whitespace-nowrap rounded-t-sm border border-b-0 bg-transparent px-2 py-1 text-ui-micro font-medium text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2 aria-selected:-mb-px aria-selected:rounded-b-none aria-selected:bg-card aria-selected:pb-[calc(0.25rem+1px)] aria-selected:text-primary-ink {dragPanel === item.id ? 'opacity-40' : ''}"
                 type="button"
+                draggable="true"
                 {...props}
-                aria-haspopup="menu"
-                aria-expanded={menu?.kind === "add"}
-                onclick={openAdd}
+                {...cell.triggerProps}
+                id={`tab-${node.id}-${item.id}`}
+                aria-controls={`tabpanel-${node.id}`}
+                aria-label={panelLabel(item.id)}
+                onclick={() => onActivate(node.id, cell.index)}
+                onauxclick={(e) => onAuxClick(e, item.id)}
+                oncontextmenu={(e) => openContext(e, item.id)}
+                ondragstart={(e) => onTabDragStart(e, item.id)}
+                ondragend={onTabDragEnd}
+                onmousedown={(e) => {
+                  if (e.button === 1) e.preventDefault();
+                }}
               >
-                +
-              </Button>
+                <svg
+                  class="tab-icon h-3 w-3 flex-none"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d={PANEL_META[item.id]?.icon ?? ""} />
+                </svg>
+                {panelLabel(item.id)}
+              </button>
             {/snippet}
           </Hint>
-        {/if}
+          {#if dropTargetPanel === item.id && dropPosition === "after"}
+            <span
+              class="pointer-events-none absolute -right-0.5 inset-y-0.5 w-1 rounded-full bg-primary z-20"
+              aria-hidden="true"
+            ></span>
+          {/if}
+        </div>
+      {/snippet}
+      {#snippet inStrip()}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="tab-strip-drop flex flex-1 items-center h-full min-w-8"
+          ondragover={onStripDragOver}
+          ondrop={onStripDrop}
+        >
+          {#if hiddenPanels.length > 0}
+            <Hint label="Add panel">
+              {#snippet child({ props })}
+                <Button
+                  class="panel-add h-auto flex-none rounded-b-none rounded-t-sm border-b border-b-transparent px-2 py-1 text-ui-base leading-none hover:text-primary-ink focus-visible:bg-accent focus-visible:text-primary-ink"
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  {...props}
+                  aria-haspopup="menu"
+                  aria-expanded={menu?.kind === "add"}
+                  onclick={openAdd}
+                >
+                  +
+                </Button>
+              {/snippet}
+            </Hint>
+          {/if}
+        </div>
       {/snippet}
     </UnifiedTabStrip>
   {/if}
 
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="panel-body flex min-h-0 flex-1 flex-col overflow-hidden"
+    class="panel-body relative flex min-h-0 flex-1 flex-col overflow-hidden"
     id={`tabpanel-${node.id}`}
     role="tabpanel"
+    tabindex="0"
     aria-label={hideTabs && activePanel ? panelLabel(activePanel) : undefined}
     aria-labelledby={!hideTabs && activePanel ? `tab-${node.id}-${activePanel}` : undefined}
+    ondragover={onBodyDragOver}
+    ondragleave={onBodyDragLeave}
+    ondrop={onBodyDrop}
   >
+    {#if dropPosition === "left-split"}
+      <div
+        class="pointer-events-none absolute inset-y-0 left-0 w-1/4 z-30 bg-primary/15 border-r-2 border-primary flex items-center justify-center text-xs font-semibold text-primary select-none backdrop-blur-[1px]"
+        aria-hidden="true"
+      >
+        <span class="rounded bg-popover/90 px-2 py-1 shadow-sm border border-border">Drop to split left</span>
+      </div>
+    {:else if dropPosition === "right-split"}
+      <div
+        class="pointer-events-none absolute inset-y-0 right-0 w-1/4 z-30 bg-primary/15 border-l-2 border-primary flex items-center justify-center text-xs font-semibold text-primary select-none backdrop-blur-[1px]"
+        aria-hidden="true"
+      >
+        <span class="rounded bg-popover/90 px-2 py-1 shadow-sm border border-border">Drop to split right</span>
+      </div>
+    {/if}
     <!-- Keep-alive hosts: one per visited panel; inactive ones are hidden,
          not unmounted (see the script's keep-alive note). A drawerized
          panel's host presents as a non-modal overlay drawer instead — the

@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  adjacentGroup,
   applyRatios,
   cloneTree,
   DEFAULT_LAYOUT,
@@ -41,6 +42,7 @@ import {
   visiblePanels,
   wrapPanelRight,
   type LayoutNode,
+  type LeafNode,
   type PanelId,
   type SplitNode,
   type TabsNode,
@@ -168,6 +170,16 @@ describe("queries", () => {
     expect(leftSiblingOf(SIMPLE, "n1")).toBeNull();
     expect(firstTabsId(DEFAULT_LAYOUT.main)).toBe("tabs-left");
     expect(firstTabsId(HISTORY)).toBeNull();
+  });
+
+  it("finds adjacent groups in visual layout order", () => {
+    // DEFAULT_LAYOUT.main: tabs-left | leaf-editor | leaf-history
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "tabs-left", "left")).toBeNull();
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "tabs-left", "right")?.id).toBe("leaf-editor");
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "leaf-editor", "left")?.id).toBe("tabs-left");
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "leaf-editor", "right")?.id).toBe("leaf-history");
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "leaf-history", "left")?.id).toBe("leaf-editor");
+    expect(adjacentGroup(DEFAULT_LAYOUT.main, "leaf-history", "right")).toBeNull();
   });
 
   it("labels every registered panel", () => {
@@ -358,6 +370,53 @@ describe("insertPanel / movePanel", () => {
     const moved = movePanel(group, "remotes", { kind: "tab", nodeId: "t" }) as TabsNode;
     expect(moved.tabs).toEqual(["status", "branches", "remotes"]);
     expect(moved.active).toBe(2);
+
+    const reorderedFirst = movePanel(group, "remotes", { kind: "tab", nodeId: "t", index: 0 }) as TabsNode;
+    expect(reorderedFirst.tabs).toEqual(["remotes", "status", "branches"]);
+    expect(reorderedFirst.active).toBe(0);
+
+    const reorderedMid = movePanel(group, "status", { kind: "tab", nodeId: "t", index: 1 }) as TabsNode;
+    expect(reorderedMid.tabs).toEqual(["branches", "status", "remotes"]);
+    expect(reorderedMid.active).toBe(1);
+  });
+
+  it("splits a multi-tab group into a new group before or after with asTabs", () => {
+    const group = tabs("t", ["status", "branches", "remotes"], 0);
+    const splitAfter = movePanel(group, "branches", { kind: "after", nodeId: "t", asTabs: true }) as SplitNode;
+    expect(splitAfter.kind).toBe("split");
+    expect(splitAfter.a.kind).toBe("tabs");
+    expect((splitAfter.a as TabsNode).tabs).toEqual(["status", "remotes"]);
+    expect(splitAfter.b.kind).toBe("tabs");
+    expect((splitAfter.b as TabsNode).tabs).toEqual(["branches"]);
+    expect(visiblePanels(splitAfter)).toEqual(["status", "remotes", "branches"]);
+    expect(validateTree(splitAfter)).toEqual([]);
+
+    const splitBefore = movePanel(group, "remotes", { kind: "before", nodeId: "t", asTabs: true }) as SplitNode;
+    expect(splitBefore.kind).toBe("split");
+    expect(splitBefore.a.kind).toBe("tabs");
+    expect((splitBefore.a as TabsNode).tabs).toEqual(["remotes"]);
+    expect(splitBefore.b.kind).toBe("tabs");
+    expect((splitBefore.b as TabsNode).tabs).toEqual(["status", "branches"]);
+    expect(visiblePanels(splitBefore)).toEqual(["remotes", "status", "branches"]);
+    expect(validateTree(splitBefore)).toEqual([]);
+  });
+
+  it("moves a tab from one group to another at a specific index", () => {
+    const tree = split(
+      "s",
+      0.5,
+      tabs("t1", ["status", "branches"], 0),
+      tabs("t2", ["history", "terminal"], 0),
+    );
+    const moved = movePanel(tree, "branches", { kind: "tab", nodeId: "t2", index: 1 });
+    const t1 = nodeById(moved, "t1") as LeafNode;
+    expect(t1.kind).toBe("leaf"); // collapsed 2-tab group to leaf
+    expect(t1.panel).toBe("status");
+
+    const t2 = nodeById(moved, "t2") as TabsNode;
+    expect(t2.kind).toBe("tabs");
+    expect(t2.tabs).toEqual(["history", "branches", "terminal"]);
+    expect(t2.active).toBe(1);
   });
 
   it("no-ops self-referential moves", () => {
