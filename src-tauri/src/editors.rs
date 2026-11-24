@@ -1001,8 +1001,7 @@ mod tests {
         );
 
         // SSH URI passed directly is cleaned to remote filesystem path
-        let args_from_uri =
-            super::remote_launch_args("ssh://dev-1/home/u/repo", "u@dev:2222");
+        let args_from_uri = super::remote_launch_args("ssh://dev-1/home/u/repo", "u@dev:2222");
         assert_eq!(
             args_from_uri,
             vec!["--remote", "ssh-remote+u@dev:2222", "/home/u/repo"]

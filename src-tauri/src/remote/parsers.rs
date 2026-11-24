@@ -1236,10 +1236,7 @@ subject line\n\nbody line\n\u{1}";
             parse_decorations("refs/sessions/turn-1"),
             Vec::<String>::new()
         );
-        assert_eq!(
-            parse_decorations("sessions/e43a8348"),
-            Vec::<String>::new()
-        );
+        assert_eq!(parse_decorations("sessions/e43a8348"), Vec::<String>::new());
         assert_eq!(
             parse_decorations("refs/antigravity/abc"),
             Vec::<String>::new()

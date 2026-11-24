@@ -2090,13 +2090,8 @@ fn plant_internal_refs(temp: &TempRepo) -> (String, String, String) {
             &[&head],
         )
         .expect("session commit");
-    repo.reference(
-        "refs/sessions/e43a8348",
-        session,
-        true,
-        "test: session ref",
-    )
-    .expect("session ref");
+    repo.reference("refs/sessions/e43a8348", session, true, "test: session ref")
+        .expect("session ref");
     repo.reference(
         "refs/antigravity/session-1",
         session,
@@ -2129,7 +2124,10 @@ fn log_excludes_internal_refs_from_walk_and_decorations() {
     for commit in &page {
         assert_ne!(commit.sha, cp_sha, "checkpoint commit leaked into the log");
         assert_ne!(commit.sha, stash_sha, "stash commit leaked into the log");
-        assert_ne!(commit.sha, session_sha, "agent session commit leaked into the log");
+        assert_ne!(
+            commit.sha, session_sha,
+            "agent session commit leaked into the log"
+        );
         for r in &commit.refs {
             assert!(
                 !r.starts_with("mygitui/")

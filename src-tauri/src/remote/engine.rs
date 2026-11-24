@@ -3201,7 +3201,10 @@ mod tests {
         let branches = args
             .find(" --branches --tags --remotes")
             .expect("branches present");
-        assert!(exclude < branches, "exclusions must precede ref selectors: {args}");
+        assert!(
+            exclude < branches,
+            "exclusions must precede ref selectors: {args}"
+        );
         assert!(!args.contains("--all"), "--all must not be present: {args}");
         // Quoted so the remote shell never glob-expands the `*`.
         assert!(args.contains("--exclude='refs/mygitui/*'"), "{args}");
