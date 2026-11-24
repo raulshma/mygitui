@@ -381,6 +381,16 @@ fn is_hidden_decoration(name: &str) -> bool {
         || name == "refs/stash"
         || name.starts_with("mygitui/")
         || name.starts_with("refs/mygitui/")
+        || name.starts_with("antigravity/")
+        || name.starts_with("refs/antigravity/")
+        || name.starts_with("sessions/")
+        || name.starts_with("refs/sessions/")
+        || name.starts_with("notes/")
+        || name.starts_with("refs/notes/")
+        || name.starts_with("gemini/")
+        || name.starts_with("refs/gemini/")
+        || name.starts_with("t3/")
+        || name.starts_with("refs/t3/")
 }
 
 // ---------- blame (porcelain) ----------
@@ -1211,15 +1221,27 @@ subject line\n\nbody line\n\u{1}";
 
     #[test]
     fn decorations_drop_internal_refs() {
-        // mygitui checkpoints/trash and the stash never surface as chips,
+        // mygitui checkpoints/trash, stash, and agent sessions/notes never surface as chips,
         // even if a device's git skips --exclude during decoration.
         let refs = parse_decorations(
-            "HEAD -> main, mygitui/checkpoints/1-pre-restore, origin/main, stash, tag: v1",
+            "HEAD -> main, mygitui/checkpoints/1-pre-restore, origin/main, stash, sessions/turn-1, tag: v1, refs/antigravity/state",
         );
         assert_eq!(refs, vec!["HEAD -> main", "origin/main", "tag: v1"]);
         assert_eq!(parse_decorations("stash"), Vec::<String>::new());
         assert_eq!(
             parse_decorations("refs/mygitui/trash/x"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_decorations("refs/sessions/turn-1"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_decorations("sessions/e43a8348"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_decorations("refs/antigravity/abc"),
             Vec::<String>::new()
         );
         // The HEAD label itself always survives.
