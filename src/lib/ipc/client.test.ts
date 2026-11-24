@@ -20,9 +20,14 @@ import {
   conflictResolve,
   discard,
   fetchRepo,
+  forgeSnapshot,
+  githubConfigure,
+  GITHUB_DISABLED_CODE,
   hooksList,
   IpcError,
   ipcErrorText,
+  isGithubDisabledError,
+  issuesList,
   lfsLock,
   lfsLocks,
   lfsUnlock,
@@ -36,6 +41,7 @@ import {
   openRepo,
   openWithCustom,
   pickFolder,
+  prList,
   pullRepo,
   pushRepo,
   readBlob,
@@ -80,6 +86,7 @@ import {
   type ChannelLike,
   type Transport,
 } from "$lib/ipc/client";
+import { appSettings } from "$lib/state/appSettings.svelte";
 import type {
   BlameLine,
   BlameQuery,
@@ -88,6 +95,7 @@ import type {
   FetchOptions,
   FileDiff,
   HookInfo,
+  IssueListQuery,
   LfsLock,
   LogPage,
   NetStats,
@@ -214,6 +222,14 @@ function channelOf<T>(call: RecordedCall): ChannelLike<T> {
 afterEach(() => {
   resetTransport();
   resetChannelFactory();
+  appSettings.update({
+    githubEnabled: true,
+    githubPullRequests: true,
+    githubActions: true,
+    githubIssues: true,
+    githubNotifications: true,
+    githubStatusChips: true,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1550,6 +1566,98 @@ describe("ipc client phase-5 wrappers", () => {
     expect(calls[2]).toEqual({
       command: "submodule_deinit",
       args: { repo_id: "repo-1", path: "vendor/lib" },
+    });
+  });
+
+  describe("GitHub feature gate", () => {
+    it("githubConfigure maps camelCase switches to snake_case wire args", async () => {
+      const { transport, calls } = mockTransport(() => undefined);
+      setTransport(transport);
+
+      await githubConfigure({
+        enabled: false,
+        pullRequests: false,
+        actions: true,
+        issues: false,
+        notifications: true,
+        statusChips: false,
+      });
+
+      expect(calls).toEqual([
+        {
+          command: "github_configure",
+          args: {
+            enabled: false,
+            pull_requests: false,
+            actions: true,
+            issues: false,
+            notifications: true,
+            status_chips: false,
+          },
+        },
+      ]);
+    });
+
+    const DUMMY_ISSUE_QUERY: IssueListQuery = {
+      state: "open",
+      search: "",
+      labels: [],
+      assignees: [],
+      milestone: "",
+      sort: "created",
+      direction: "desc",
+      per_page: 30,
+      page: 1,
+    };
+
+    it("rejects GitHub commands before transport when master switch is off", async () => {
+      const { transport, calls } = mockTransport(() => undefined);
+      setTransport(transport);
+
+      appSettings.update({ githubEnabled: false });
+
+      await expect(prList("repo-1")).rejects.toMatchObject({
+        code: GITHUB_DISABLED_CODE,
+        command: "pr_list",
+      });
+      await expect(forgeSnapshot("repo-1")).rejects.toMatchObject({
+        code: GITHUB_DISABLED_CODE,
+        command: "forge_snapshot",
+      });
+      await expect(issuesList("repo-1", "origin", DUMMY_ISSUE_QUERY)).rejects.toMatchObject({
+        code: GITHUB_DISABLED_CODE,
+        command: "issues_list",
+      });
+
+      expect(calls).toEqual([]);
+
+      await fetchRepo("repo-1", FETCH_OPTIONS);
+      expect(calls.length).toBe(1);
+      expect(calls[0].command).toBe("fetch");
+    });
+
+    it("gates individual features independently", async () => {
+      const { transport, calls } = mockTransport(() => undefined);
+      setTransport(transport);
+
+      appSettings.update({
+        githubEnabled: true,
+        githubPullRequests: true,
+        githubIssues: false,
+        githubActions: false,
+      });
+
+      let error: unknown;
+      try {
+        await issuesList("repo-1", "origin", DUMMY_ISSUE_QUERY);
+      } catch (e) {
+        error = e;
+      }
+      expect(isGithubDisabledError(error)).toBe(true);
+
+      await prList("repo-1");
+      expect(calls.length).toBe(1);
+      expect(calls[0].command).toBe("pr_list");
     });
   });
 });

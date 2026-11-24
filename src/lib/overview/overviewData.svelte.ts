@@ -28,6 +28,12 @@ import {
 } from "$lib/ipc/client";
 import type { PrInfo, RepoId, RepoStatus, RepoSummary } from "$lib/ipc/types";
 import { forgeStore } from "$lib/stores/forge.svelte";
+import {
+  githubSnapshotParts,
+  hasGithubSnapshotParts,
+  isGithubAnyFeatureEnabled,
+  isGithubFeatureEnabled,
+} from "$lib/state/githubGate";
 import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
 import { parseSshUri, recentRepos, tabStore } from "$lib/stores/tabs.svelte";
 import {
@@ -510,16 +516,22 @@ export class OverviewData {
   /** PRs + head checks for a warmed/open repo (silent, cached lanes). */
   async refreshForgeRow(root: string, repoId: RepoId): Promise<void> {
     try {
+      // GitHub off = rows keep their em-dash columns and no gh spawns.
+      if (!isGithubAnyFeatureEnabled()) return;
       // Snapshot + PR list only when the machine's gh is authed; the strip
       // shows the banner once when it is not (the rows stay em-dash).
       const status = forgeStore.statusFor(repoId);
       if (status === null) await forgeStore.refreshStatus(repoId);
       const gh = forgeStore.statusFor(repoId);
       if (gh === null || !gh.available || !gh.authed) return;
-      await Promise.all([
-        forgeStore.refreshSnapshot(repoId, { silent: true }).catch(() => null),
-        forgeStore.refreshPrs(repoId).catch(() => []),
-      ]);
+      const jobs: Promise<unknown>[] = [];
+      if (hasGithubSnapshotParts(githubSnapshotParts())) {
+        jobs.push(forgeStore.refreshSnapshot(repoId, { silent: true }).catch(() => null));
+      }
+      if (isGithubFeatureEnabled("pullRequests")) {
+        jobs.push(forgeStore.refreshPrs(repoId).catch(() => []));
+      }
+      await Promise.all(jobs);
       const row = this.rowFor(root);
       if (row) {
         if (!row.remoteUrl) {

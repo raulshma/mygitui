@@ -22,6 +22,7 @@
   import { streamLog } from "$lib/ipc/client";
   import { forgeStore, openExternal } from "$lib/stores/forge.svelte";
   import { forgeChips } from "$lib/forge/chips.svelte";
+  import { isGithubAnyFeatureEnabled } from "$lib/state/githubGate";
   import {
     countChecks,
     degradedGuidance,
@@ -490,7 +491,8 @@
           </div>
         </div>
 
-        <!-- GitHub Integration Card -->
+        <!-- GitHub Integration Card (hidden while GitHub is off) -->
+        {#if isGithubAnyFeatureEnabled()}
         <div
           class="flex flex-col gap-3 rounded-lg border border-border bg-card/60 p-3.5 text-left shadow-2xs"
           aria-label="GitHub details"
@@ -694,6 +696,7 @@
             </div>
           {/if}
         </div>
+        {/if}
       </div>
 
       <!-- Quick Actions -->

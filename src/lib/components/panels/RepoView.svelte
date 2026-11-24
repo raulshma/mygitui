@@ -109,6 +109,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   import { trapTab } from "$lib/components/safety/trapTab";
   import { forgeStore } from "$lib/stores/forge.svelte";
   import { forgeChips } from "$lib/forge/chips.svelte";
+  import { isGithubFeatureEnabled } from "$lib/state/githubGate";
   import {
     hostOfRemoteUrl,
     loadForgeRemote,
@@ -1998,7 +1999,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         syncSession();
       }
       // Cold launch: leave the center empty; HistoryView's resolve owns it.
-    } else if (session.centerKind === "issues") {
+    } else if (session.centerKind === "issues" && isGithubFeatureEnabled("issues")) {
       center = { kind: "issues", selectedIssueNumber: session.issueNumber ?? null };
       issuesRuntimeCommentId = undefined;
       syncSession();
@@ -2104,6 +2105,12 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     commentId?: number | string,
     requestNonce?: number,
   ): void {
+    // GitHub Issues off = the workspace cannot fetch anything; keep the
+    // center pane on whatever it was showing.
+    if (!isGithubFeatureEnabled("issues")) {
+      toast("GitHub Issues are turned off in Settings.", { kind: "error" });
+      return;
+    }
     const incomingComment = commentId as number | string | undefined;
     const numericComment =
       typeof incomingComment === "number" &&

@@ -29,6 +29,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -393,6 +394,160 @@ impl std::fmt::Display for ForgeError {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub feature gate (mirrored from the frontend settings)
+// ---------------------------------------------------------------------------
+
+/// One independently configurable GitHub surface (mirrors
+/// `src/lib/state/githubGate.ts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubFeature {
+    PullRequests,
+    Actions,
+    Issues,
+    Notifications,
+    StatusChips,
+}
+
+/// Snapshot of the frontend's GitHub switches. Defaults are all-on so the
+/// gate is permissive until the frontend syncs (and in tests).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GithubSwitches {
+    pub enabled: bool,
+    pub pull_requests: bool,
+    pub actions: bool,
+    pub issues: bool,
+    pub notifications: bool,
+    pub status_chips: bool,
+}
+
+impl Default for GithubSwitches {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            pull_requests: true,
+            actions: true,
+            issues: true,
+            notifications: true,
+            status_chips: true,
+        }
+    }
+}
+
+impl GithubSwitches {
+    /// Master switch plus the feature's own flag.
+    pub fn allows(self, feature: GithubFeature) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        match feature {
+            GithubFeature::PullRequests => self.pull_requests,
+            GithubFeature::Actions => self.actions,
+            GithubFeature::Issues => self.issues,
+            GithubFeature::Notifications => self.notifications,
+            GithubFeature::StatusChips => self.status_chips,
+        }
+    }
+
+    /// True when any surface is on (the machine probe is still allowed).
+    pub fn allows_any(self) -> bool {
+        self.allows(GithubFeature::PullRequests)
+            || self.allows(GithubFeature::Actions)
+            || self.allows(GithubFeature::Issues)
+            || self.allows(GithubFeature::Notifications)
+            || self.allows(GithubFeature::StatusChips)
+    }
+}
+
+/// Process-global gate read by every gh spawn. Settings live in the
+/// frontend's localStorage, so the frontend mirrors them here; this is the
+/// defense-in-depth line behind the IPC client's own gate.
+pub struct GithubGate {
+    enabled: AtomicBool,
+    pull_requests: AtomicBool,
+    actions: AtomicBool,
+    issues: AtomicBool,
+    notifications: AtomicBool,
+    status_chips: AtomicBool,
+}
+
+impl GithubGate {
+    /// All-on gate (tests and pre-sync startup).
+    pub const fn new() -> Self {
+        Self {
+            enabled: AtomicBool::new(true),
+            pull_requests: AtomicBool::new(true),
+            actions: AtomicBool::new(true),
+            issues: AtomicBool::new(true),
+            notifications: AtomicBool::new(true),
+            status_chips: AtomicBool::new(true),
+        }
+    }
+
+    /// Replaces every switch (one settings sync = one consistent snapshot).
+    pub fn store(&self, switches: GithubSwitches) {
+        self.enabled.store(switches.enabled, Ordering::Relaxed);
+        self.pull_requests
+            .store(switches.pull_requests, Ordering::Relaxed);
+        self.actions.store(switches.actions, Ordering::Relaxed);
+        self.issues.store(switches.issues, Ordering::Relaxed);
+        self.notifications
+            .store(switches.notifications, Ordering::Relaxed);
+        self.status_chips
+            .store(switches.status_chips, Ordering::Relaxed);
+    }
+
+    /// Reads the switches back (tests/diagnostics).
+    pub fn load(&self) -> GithubSwitches {
+        GithubSwitches {
+            enabled: self.enabled.load(Ordering::Relaxed),
+            pull_requests: self.pull_requests.load(Ordering::Relaxed),
+            actions: self.actions.load(Ordering::Relaxed),
+            issues: self.issues.load(Ordering::Relaxed),
+            notifications: self.notifications.load(Ordering::Relaxed),
+            status_chips: self.status_chips.load(Ordering::Relaxed),
+        }
+    }
+
+    /// True when `feature` may spawn gh.
+    pub fn allows(&self, feature: GithubFeature) -> bool {
+        self.load().allows(feature)
+    }
+
+    /// True when any GitHub surface may spawn gh.
+    pub fn allows_any(&self) -> bool {
+        self.load().allows_any()
+    }
+}
+
+impl Default for GithubGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Application-wide gate (permissive until the frontend syncs).
+pub static GITHUB_GATE: GithubGate = GithubGate::new();
+
+/// Mirrors the frontend switches into the process-global gate.
+pub fn configure_github(switches: GithubSwitches) {
+    GITHUB_GATE.store(switches);
+}
+
+/// True when `feature` may spawn gh.
+pub fn github_allows(feature: GithubFeature) -> bool {
+    GITHUB_GATE.allows(feature)
+}
+
+/// True when any GitHub surface may spawn gh.
+pub fn github_allows_any() -> bool {
+    GITHUB_GATE.allows_any()
+}
+
+/// The spawn-error text a gated gh call reports (also the FE's signal that
+/// the backend gate — not a missing binary — blocked it).
+pub const GITHUB_DISABLED_MESSAGE: &str = "GitHub integration is disabled in Settings";
+
+// ---------------------------------------------------------------------------
 // Process runner (generic so tests can target `ping`/`sleep`)
 // ---------------------------------------------------------------------------
 
@@ -635,6 +790,17 @@ impl ForgeRepo {
         stdin: Option<&[u8]>,
         timeout: Duration,
     ) -> ProcOutcome {
+        // Defense-in-depth: the frontend IPC gate rejects gated commands
+        // before invoke, so reaching here while everything is off means a
+        // call site bypassed it — refuse to spawn rather than leak a gh
+        // request. (Feature-specific gating stays at the call sites: the
+        // runner cannot know which toggle owns an arbitrary argv.)
+        if !github_allows_any() {
+            return ProcOutcome {
+                spawn_error: Some(GITHUB_DISABLED_MESSAGE.to_string()),
+                ..ProcOutcome::default()
+            };
+        }
         match &self.remote {
             None => run_program_with_stdin(GH, Some(&self.root), args, stdin, timeout),
             Some(remote) => run_remote_gh(&remote.session, &remote.root, args, stdin, timeout),
@@ -812,6 +978,9 @@ pub fn cache_authed_hosts(hosts: Vec<String>) {
 
 /// Refresh the host cache from `gh auth status` output (no-op on failure).
 fn refresh_hosts_from_auth() {
+    if !github_allows_any() {
+        return;
+    }
     let outcome = run_program(
         GH,
         None,
@@ -1365,6 +1534,14 @@ const OFFLINE_MARKERS: [&str; 6] = [
 /// markers win over the catch-all.
 pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
     if let Some(err) = spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return ForgeError {
+                kind: KIND_OTHER.to_string(),
+                message: GITHUB_DISABLED_MESSAGE.to_string(),
+                url: None,
+                ..ForgeError::default()
+            };
+        }
         return ForgeError {
             kind: KIND_NO_GH.to_string(),
             message: format!(
@@ -1475,6 +1652,9 @@ fn status_from_probes(probe: ProcOutcome, auth: ProcOutcome) -> ForgeStatus {
 /// A successful auth probe also refreshes the authed-host cache (plan §9.1:
 /// hosts refresh on auth-state change).
 pub fn status_sync() -> ForgeStatus {
+    if !github_allows_any() {
+        return ForgeStatus::default();
+    }
     let probe = run_program(GH, None, &["--version".to_string()], VERSION_TIMEOUT);
     if probe.spawn_error.is_some() {
         return ForgeStatus::default();
@@ -1493,6 +1673,9 @@ pub fn status_sync() -> ForgeStatus {
 /// the device's authed hosts merge into the same cache, so GHE remotes
 /// resolved from device repos parse like local ones).
 pub fn status_sync_remote(session: &Arc<DeviceSession>, root: &str) -> ForgeStatus {
+    if !github_allows_any() {
+        return ForgeStatus::default();
+    }
     let probe = run_remote_gh(
         session,
         root,
@@ -1806,6 +1989,9 @@ pub fn pr_list_sync(repo: &ForgeRepo, state: &str) -> Result<Vec<PrInfo>, String
     let args = pr_list_args(state)?;
     let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return Err(GITHUB_DISABLED_MESSAGE.to_string());
+        }
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
     if outcome.code == Some(0) && !outcome.timed_out {
@@ -2083,6 +2269,9 @@ pub fn pr_checks_sync(repo: &ForgeRepo, number: u64) -> Result<Vec<CheckInfo>, S
     let table_args = vec!["pr".to_string(), "checks".to_string(), number.to_string()];
     let outcome = repo.run_gh(&table_args, CHECKS_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return Err(GITHUB_DISABLED_MESSAGE.to_string());
+        }
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
     if outcome.code == Some(0) && !outcome.timed_out {
@@ -2185,6 +2374,9 @@ pub fn workflow_runs_args(
 fn read_gh(repo: &ForgeRepo, args: &[String], timeout: Duration) -> Result<String, String> {
     let outcome = repo.run_gh(args, timeout);
     if let Some(err) = &outcome.spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return Err(GITHUB_DISABLED_MESSAGE.to_string());
+        }
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
     if outcome.code == Some(0) && !outcome.timed_out {
@@ -3027,23 +3219,29 @@ pub fn forge_snapshot_sync(
         _ => None,
     };
     let slug = format!("{}/{}", resolved.owner, resolved.repo);
+    // Feature gates: turning pull requests off skips the branch-PR and
+    // check-run reads; turning Actions off skips the run read. The frontend
+    // usually never calls the snapshot when both are off, but a partial
+    // feature set must not leak the other feature's gh calls.
+    let allow_prs = github_allows(GithubFeature::PullRequests);
+    let allow_runs = github_allows(GithubFeature::Actions);
 
     // Phase 1 — three independent reads in parallel (branch PR, HEAD checks,
     // latest run). Phase 2 — PR-head checks, which depend on phase 1's PR
     // head sha; concurrent calls never exceed 4 (§9.3). ForgeRepo clones are
     // cheap (the remote backend rides an Arc).
     let (pr_part, head_checks_part, run_part) = std::thread::scope(|scope| {
-        let pr = branch.clone().map(|branch_name| {
+        let pr = branch.clone().filter(|_| allow_prs).map(|branch_name| {
             let repo = repo.clone();
             let slug = slug.clone();
             scope.spawn(move || snapshot_branch_pr_sync(&repo, &slug, &branch_name))
         });
-        let head_checks = head_sha.clone().map(|sha| {
+        let head_checks = head_sha.clone().filter(|_| allow_prs).map(|sha| {
             let repo = repo.clone();
             let slug = slug.clone();
             scope.spawn(move || commit_check_runs_sync(&repo, &slug, &sha))
         });
-        let run = branch.clone().map(|branch_name| {
+        let run = branch.clone().filter(|_| allow_runs).map(|branch_name| {
             let repo = repo.clone();
             let slug = slug.clone();
             scope.spawn(move || snapshot_branch_run_sync(&repo, &slug, &branch_name))
@@ -3099,7 +3297,7 @@ pub fn forge_snapshot_sync(
         .map(|pr| pr.head_ref_oid.clone())
         .filter(|sha| !sha.is_empty());
     let pr_head_checks: Option<Vec<CheckInfo>> = match (&pr_head_sha, &head_sha) {
-        (Some(pr_sha), Some(local_sha)) if pr_sha != local_sha => {
+        (Some(pr_sha), Some(local_sha)) if allow_prs && pr_sha != local_sha => {
             match commit_check_runs_sync(repo, &slug, pr_sha) {
                 Ok(checks) => Some(checks),
                 Err(err) => {
@@ -3148,6 +3346,9 @@ pub fn forge_pr_files_sync(repo: &ForgeRepo, number: u64) -> Result<Vec<ForgePrF
     let args = pr_files_args(&slug, number);
     let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return Err(GITHUB_DISABLED_MESSAGE.to_string());
+        }
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
     if outcome.code == Some(0) && !outcome.timed_out {
@@ -3168,6 +3369,9 @@ pub fn forge_pr_review_threads_sync(
     let args = review_threads_args(&slug, number);
     let outcome = repo.run_gh(&args, LIST_TIMEOUT);
     if let Some(err) = &outcome.spawn_error {
+        if err == GITHUB_DISABLED_MESSAGE {
+            return Err(GITHUB_DISABLED_MESSAGE.to_string());
+        }
         return Err(format!("gh CLI not found on PATH ({err})"));
     }
     if outcome.code == Some(0) && !outcome.timed_out {

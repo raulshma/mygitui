@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appSettings } from "$lib/state/appSettings.svelte";
 import { resetRepoEvictors } from "$lib/state/repoEvictors";
 import { PollScheduler, type Clock } from "$lib/stores/pollScheduler.svelte";
 import {
@@ -95,6 +96,10 @@ const coordinators: IssueSubscriptionCoordinator[] = [];
 afterEach(() => {
   for (const coordinator of coordinators.splice(0)) coordinator.stop();
   resetRepoEvictors();
+  appSettings.update({
+    githubEnabled: true,
+    githubIssues: true,
+  });
 });
 
 function setup(options: {
@@ -249,6 +254,28 @@ describe("Issues subscription coordinator", () => {
     context.setTabs([{ id: "repo-1", root: ROOT }]);
     context.coordinator.syncLanes();
     expect(context.coordinator.lane("repo-1")).toBeDefined();
+  });
+
+  it("drops all lanes and clears queue when GitHub or Issues are disabled", async () => {
+    const storage = new MemoryStorage();
+    writeIssueSyncState(storage, ROOT, enabled(), NOW);
+    const context = setup({ storage, tabs: [{ id: "repo-1", root: ROOT }] });
+    context.coordinator.start();
+    expect(context.coordinator.lane("repo-1")).toBeDefined();
+
+    // Disable Issues feature
+    appSettings.update({ githubIssues: false });
+    context.coordinator.syncLanes();
+    expect(context.coordinator.lane("repo-1")).toBeUndefined();
+
+    // Re-enable Issues, disable master switch
+    appSettings.update({ githubIssues: true });
+    context.coordinator.syncLanes();
+    expect(context.coordinator.lane("repo-1")).toBeDefined();
+
+    appSettings.update({ githubEnabled: false });
+    context.coordinator.syncLanes();
+    expect(context.coordinator.lane("repo-1")).toBeUndefined();
   });
 
   it("coalesces catch-up and starts with the active repository", async () => {

@@ -1446,3 +1446,68 @@ fn exec_outcome_maps_transport_failures_without_no_gh() {
     assert!(out.code != Some(0));
     assert!(out.stderr.contains("device:"));
 }
+
+#[test]
+fn github_switches_gate_features_and_any() {
+    use crate::forge::{GithubFeature, GithubSwitches};
+
+    let all = GithubSwitches::default();
+    assert!(all.allows(GithubFeature::PullRequests));
+    assert!(all.allows_any());
+
+    let master_off = GithubSwitches {
+        enabled: false,
+        ..all
+    };
+    assert!(!master_off.allows(GithubFeature::Issues));
+    assert!(!master_off.allows(GithubFeature::StatusChips));
+    assert!(!master_off.allows_any());
+
+    let issues_only = GithubSwitches {
+        pull_requests: false,
+        actions: false,
+        notifications: false,
+        status_chips: false,
+        ..all
+    };
+    assert!(!issues_only.allows(GithubFeature::PullRequests));
+    assert!(issues_only.allows(GithubFeature::Issues));
+    assert!(issues_only.allows_any());
+}
+
+#[test]
+fn github_gate_roundtrips_and_refuses_when_off() {
+    use crate::forge::{
+        configure_github, forge_failure, github_allows, github_allows_any, ForgeRepo,
+        GithubFeature, GithubSwitches, GITHUB_DISABLED_MESSAGE, GITHUB_GATE, KIND_OTHER,
+    };
+    use std::time::Duration;
+
+    let err = forge_failure(Some(GITHUB_DISABLED_MESSAGE), "");
+    assert_eq!(err.kind, KIND_OTHER);
+    assert_eq!(err.message, GITHUB_DISABLED_MESSAGE);
+
+    let previous = GITHUB_GATE.load();
+    configure_github(GithubSwitches {
+        enabled: false,
+        ..GithubSwitches::default()
+    });
+    assert!(!github_allows_any());
+    assert!(!github_allows(GithubFeature::PullRequests));
+    assert!(!GITHUB_GATE.load().enabled);
+
+    // ForgeRepo refuses to spawn gh while gate is off
+    let repo = ForgeRepo {
+        root: std::path::PathBuf::from("/nonexistent"),
+        remote: None,
+    };
+    let outcome = repo.run_gh_stdin(&["status".to_string()], None, Duration::from_secs(1));
+    assert_eq!(
+        outcome.spawn_error.as_deref(),
+        Some(GITHUB_DISABLED_MESSAGE)
+    );
+
+    configure_github(previous);
+    assert!(github_allows_any());
+    assert_eq!(GITHUB_GATE.load(), previous);
+}

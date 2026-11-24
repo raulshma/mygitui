@@ -10,6 +10,7 @@
 import { describeError } from "$lib/errors";
 import { registerRepoEvictor } from "$lib/state/repoEvictors";
 import type { StorageLike } from "$lib/state/persist";
+import { isGithubFeatureEnabled } from "$lib/state/githubGate";
 import { getActiveId, getTabs, repoRootFor } from "$lib/stores/tabs.svelte";
 import {
   PollScheduler,
@@ -277,6 +278,14 @@ export class IssueSubscriptionCoordinator {
   /** Reconciles open tabs, enablement, and active/inactive cadence. */
   syncLanes(): void {
     if (!this.#started) return;
+    // GitHub (Issues) turned off: drop every lane and queued work so no
+    // `issues_*` command is sent. The durable sync state is kept.
+    if (!isGithubFeatureEnabled("issues")) {
+      for (const repoId of [...this.#lanes.keys()]) this.#removeLane(repoId);
+      this.#queue.clear();
+      this.#manual.clear();
+      return;
+    }
     const desired = new Map<string, SubscriptionTab>();
     for (const tab of this.#tabs.list()) {
       if (desired.has(tab.id)) continue;

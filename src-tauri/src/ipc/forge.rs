@@ -14,12 +14,36 @@ use std::sync::Arc;
 
 use crate::engine::types::RepoId;
 use crate::forge::{
-    self, CheckInfo, ForgeContext, ForgeError, ForgeSnapshot, ForgeStatus, PrCreated, PrInfo,
-    WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
+    self, CheckInfo, ForgeContext, ForgeError, ForgeSnapshot, ForgeStatus, GithubSwitches,
+    PrCreated, PrInfo, WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
 };
 use crate::repo::RepoManager;
 
 use super::{enqueue_remote_read, finish_op, forge_repo_of, get_handle};
+
+/// Mirrors the frontend's GitHub feature switches into the process-global
+/// spawn gate. The IPC client already rejects gated commands before invoke;
+/// this is the backend's defense-in-depth line so a missed call site still
+/// cannot launch `gh`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn github_configure(
+    enabled: bool,
+    pull_requests: bool,
+    actions: bool,
+    issues: bool,
+    notifications: bool,
+    status_chips: bool,
+) -> Result<(), String> {
+    forge::configure_github(GithubSwitches {
+        enabled,
+        pull_requests,
+        actions,
+        issues,
+        notifications,
+        status_chips,
+    });
+    Ok(())
+}
 
 /// Detect `gh` and whether the user is authenticated. Without `repo_id`
 /// (and for local repos) the probe runs on this machine; a repo on a device

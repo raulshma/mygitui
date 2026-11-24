@@ -87,6 +87,7 @@
   import {
     activeSnapshotIntervalMs,
   } from "$lib/forge/chips.svelte";
+  import { isGithubFeatureEnabled } from "$lib/state/githubGate";
 
   const iconBranch = $derived(appIcon("account-tree")!);
   const iconSync = $derived(appIcon("sync")!);
@@ -125,6 +126,10 @@
     void tabStore.tabs;
     void tabStore.activeId;
     void appSettings.forgeSnapshotSeconds;
+    void appSettings.githubEnabled;
+    void appSettings.githubPullRequests;
+    void appSettings.githubActions;
+    void appSettings.githubStatusChips;
     forgeChips.syncLanes();
   });
   $effect(() => {
@@ -1231,10 +1236,11 @@
         {/if}
       </span>
     {/if}
-    {#if repoId !== null}
+    {#if repoId !== null && isGithubFeatureEnabled("statusChips")}
       <!-- E1 §9.2: the GitHub chips (PR → Checks → Runs), before the
            cadence icon. One popover at a time across the cluster via the
-           bindable open-chip state; <1024px collapses to the worst chip. -->
+           bindable open-chip state; <1024px collapses to the worst chip.
+           Hidden (and not polling) while the GitHub chips are off. -->
       <ForgeChips bind:open={openChip} />
       <!-- Workstream D §8.6: the cadence is icon + tooltip (the "auto 1m"
            text went away) and the click opens the cadence popover — the

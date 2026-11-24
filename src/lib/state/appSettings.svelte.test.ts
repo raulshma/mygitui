@@ -46,6 +46,12 @@ describe("parseAppSettings", () => {
       forgeSnapshotSeconds: 90,
       forgeFailureToasts: false,
       forgeActivityToasts: true,
+      githubEnabled: false,
+      githubPullRequests: false,
+      githubActions: false,
+      githubIssues: true,
+      githubNotifications: false,
+      githubStatusChips: false,
       rogue: true,
     });
     expect(out).toEqual({
@@ -62,7 +68,23 @@ describe("parseAppSettings", () => {
       forgeSnapshotSeconds: 90,
       forgeFailureToasts: false,
       forgeActivityToasts: true,
+      githubEnabled: false,
+      githubPullRequests: false,
+      githubActions: false,
+      githubIssues: true,
+      githubNotifications: false,
+      githubStatusChips: false,
     });
+  });
+
+  it("drops non-boolean GitHub switches and defaults them on", () => {
+    const out = parseAppSettings({ githubEnabled: "off", githubIssues: 1 });
+    expect(out.githubEnabled).toBe(true);
+    expect(out.githubIssues).toBe(true);
+    expect(out.githubPullRequests).toBe(true);
+    expect(out.githubActions).toBe(true);
+    expect(out.githubNotifications).toBe(true);
+    expect(out.githubStatusChips).toBe(true);
   });
 
   it("lifts a sub-floor GitHub snapshot cadence to the 30s floor (0 stays off)", () => {

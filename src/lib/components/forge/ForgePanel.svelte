@@ -102,6 +102,7 @@
   import { issueActivity } from "$lib/issues/activity.svelte";
   import { normalizeIssueRoot } from "$lib/issues/prefs";
   import { badgeCount } from "$lib/components/tabBadge";
+  import { isGithubFeatureEnabled } from "$lib/state/githubGate";
 
   let {
     repoId,
@@ -147,9 +148,31 @@
   type ForgeTab = "prs" | "notifications" | "actions";
   let tab = $state<ForgeTab>("prs");
 
+  // Feature switches (Settings → GitHub). Off tabs never mount their data
+  // effects, so a disabled surface cannot fetch, watch or poll.
+  const prsEnabled = $derived(isGithubFeatureEnabled("pullRequests"));
+  const actionsEnabled = $derived(isGithubFeatureEnabled("actions"));
+  const notificationsEnabled = $derived(isGithubFeatureEnabled("notifications"));
+  const issuesEnabled = $derived(isGithubFeatureEnabled("issues"));
+  const anyTabEnabled = $derived(prsEnabled || actionsEnabled || notificationsEnabled);
+
+  // Keep the selected tab on an enabled surface when settings change.
+  $effect(() => {
+    if (!anyTabEnabled) return;
+    if (tab === "prs" && !prsEnabled) {
+      selectTab(actionsEnabled ? "actions" : "notifications");
+    } else if (tab === "actions" && !actionsEnabled) {
+      selectTab(prsEnabled ? "prs" : "notifications");
+    } else if (tab === "notifications" && !notificationsEnabled) {
+      selectTab(prsEnabled ? "prs" : "actions");
+    }
+  });
+
   let dialogOpen = $state(false);
-  /** Ensure() runs once per repo (status flips would otherwise re-trigger). */
+  /** Ensure() runs once per repo/mask (status flips would otherwise re-trigger). */
   let ensuredRepo = $state<string | null>(null);
+  /** Which feature tabs were ensured for {@link ensuredRepo}. */
+  let ensuredMask = $state("");
   /** Currently expanded PR row (its checks/actions render inline). */
   let expandedNumber = $state<number | null>(null);
   /** PRs whose checks auto-refresh every 10 s (user-toggled). */
@@ -214,26 +237,40 @@
   const diffTracker = createWidthTracker();
 
   $effect(() => {
-    if (ensuredRepo === repoId) return;
+    const mask = `${+prsEnabled}${+actionsEnabled}${+notificationsEnabled}`;
+    const repoChanged = ensuredRepo !== repoId;
+    if (!repoChanged && ensuredMask === mask) return;
     ensuredRepo = repoId;
-    expandedNumber = null;
-    watching = [];
+    ensuredMask = mask;
+    if (repoChanged) {
+      expandedNumber = null;
+      watching = [];
+      filesNumber = null;
+      threadsNumber = null;
+      branchFilter = "";
+      statusFilter = "";
+      workflowFilter = "";
+      dispatchOpen = false;
+      checkoutOpen = false;
+      checkoutTarget = null;
+    }
+    // A re-enabled tab must re-ensure even for the same repo.
     runsEnsuredFor = null;
     notificationsEnsuredFor = null;
-    filesNumber = null;
-    threadsNumber = null;
-    branchFilter = "";
-    statusFilter = "";
-    workflowFilter = "";
-    dispatchOpen = false;
-    checkoutOpen = false;
-    checkoutTarget = null;
-    void forgeStore.ensure(repoId);
+    if (!anyTabEnabled) return;
+    // The PR bundle loads status + context + list; with PRs off the other
+    // tabs still need the status/context reads (a local git resolution).
+    if (prsEnabled) {
+      void forgeStore.ensure(repoId);
+    } else if (actionsEnabled || notificationsEnabled) {
+      if (forgeStore.statusFor(repoId) === null) void forgeStore.refreshStatus(repoId);
+      void forgeStore.ensureContext(repoId);
+    }
     const active = untrack(() => tab);
-    if (active === "actions") {
+    if (active === "actions" && actionsEnabled) {
       runsEnsuredFor = repoId;
       void forgeStore.ensureActions(repoId);
-    } else if (active === "notifications") {
+    } else if (active === "notifications" && notificationsEnabled) {
       notificationsEnsuredFor = repoId;
       void forgeStore.ensureNotifications(repoId);
     }
@@ -246,7 +283,7 @@
   $effect(() => {
     const numbers = watching;
     const targetRepo = repoId;
-    if (numbers.length === 0) return;
+    if (!prsEnabled || numbers.length === 0) return;
     const unsubscribes = numbers.map((number) =>
       pollScheduler.register(`forge:panel-checks:${targetRepo}:${number}`, {
         intervalMs: 10_000,
@@ -268,12 +305,12 @@
     const tabName = request?.tab;
     void request?.n;
     if (tabName === "issues") {
-      emitUiEvent("issues-open", { repoId });
-    } else if (
-      tabName === "prs" ||
-      tabName === "actions" ||
-      tabName === "notifications"
-    ) {
+      if (issuesEnabled) emitUiEvent("issues-open", { repoId });
+    } else if (tabName === "prs" && prsEnabled) {
+      selectTab(tabName);
+    } else if (tabName === "actions" && actionsEnabled) {
+      selectTab(tabName);
+    } else if (tabName === "notifications" && notificationsEnabled) {
       selectTab(tabName);
     }
   });
@@ -345,7 +382,7 @@
   // (`forge:panel-runs:<repo>`, 10 s, silent) — the toolbar must not flash
   // "Loading…" on a background tick, hidden windows pause for free.
   $effect(() => {
-    if (tab !== "actions" || activeRunCount === 0) return;
+    if (tab !== "actions" || activeRunCount === 0 || !actionsEnabled) return;
     const targetRepo = repoId;
     const filters = currentRunFilters();
     const unsubscribe = pollScheduler.register(`forge:panel-runs:${targetRepo}`, {
@@ -361,23 +398,22 @@
   // mounted the PR list (and the run list on the Actions tab) re-read on a
   // 60 s scheduler lane; on-open loading stays with the ensure() bundle.
   $effect(() => {
+    if (!prsEnabled && !actionsEnabled) return;
     const targetRepo = repoId;
     const unsubscribe = pollScheduler.register(`forge:panel-lists:${targetRepo}`, {
       intervalMs: 60_000,
       work: async () => {
         const onActions = untrack(() => tab === "actions");
-        if (onActions) {
-          await Promise.all([
+        const jobs: Promise<unknown>[] = [];
+        if (isGithubFeatureEnabled("pullRequests")) {
+          jobs.push(
             forgeStore.refreshPrs(targetRepo, untrack(() => forgeStore.filterFor(targetRepo))),
-            forgeStore.refreshRuns(
-              targetRepo,
-              untrack(() => currentRunFilters()),
-              true,
-            ),
-          ]);
-        } else {
-          await forgeStore.refreshPrs(targetRepo, untrack(() => forgeStore.filterFor(targetRepo)));
+          );
         }
+        if (onActions && isGithubFeatureEnabled("actions")) {
+          jobs.push(forgeStore.refreshRuns(targetRepo, untrack(() => currentRunFilters()), true));
+        }
+        await Promise.all(jobs);
       },
     });
     return unsubscribe;
@@ -393,7 +429,7 @@
   // refreshChecks spreads `checksLoading` while updating it, and tracking that
   // read here would make the effect depend on state it writes (infinite loop).
   $effect(() => {
-    if (!branchPr || !isPrOpen(branchPr.state)) return;
+    if (!prsEnabled || !branchPr || !isPrOpen(branchPr.state)) return;
     const number = branchPr.number;
     untrack(() => void forgeStore.refreshChecks(repoId, number));
   });
@@ -1331,43 +1367,49 @@
       role="tablist"
       aria-label="GitHub panels"
     >
-      <button
-        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "prs"
-          ? "bg-accent font-semibold text-accent-foreground"
-          : "text-muted-foreground"}"
-        class:active={tab === "prs"}
-        type="button"
-        role="tab"
-        aria-selected={tab === "prs"}
-        onclick={() => selectTab("prs")}
-      >
-        Pull requests
-      </button>
+      {#if prsEnabled}
+        <button
+          class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "prs"
+            ? "bg-accent font-semibold text-accent-foreground"
+            : "text-muted-foreground"}"
+          class:active={tab === "prs"}
+          type="button"
+          role="tab"
+          aria-selected={tab === "prs"}
+          onclick={() => selectTab("prs")}
+        >
+          Pull requests
+        </button>
+      {/if}
       <!-- Sidebar order: prs | actions | notifications. -->
-      <button
-        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "actions"
-          ? "bg-accent font-semibold text-accent-foreground"
-          : "text-muted-foreground"}"
-        class:active={tab === "actions"}
-        type="button"
-        role="tab"
-        aria-selected={tab === "actions"}
-        onclick={() => selectTab("actions")}
-      >
-        Actions
-      </button>
-      <button
-        class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "notifications"
-          ? "bg-accent font-semibold text-accent-foreground"
-          : "text-muted-foreground"}"
-        class:active={tab === "notifications"}
-        type="button"
-        role="tab"
-        aria-selected={tab === "notifications"}
-        onclick={() => selectTab("notifications")}
-      >
-        Notifications
-      </button>
+      {#if actionsEnabled}
+        <button
+          class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "actions"
+            ? "bg-accent font-semibold text-accent-foreground"
+            : "text-muted-foreground"}"
+          class:active={tab === "actions"}
+          type="button"
+          role="tab"
+          aria-selected={tab === "actions"}
+          onclick={() => selectTab("actions")}
+        >
+          Actions
+        </button>
+      {/if}
+      {#if notificationsEnabled}
+        <button
+          class="tab cursor-pointer rounded-full border-none bg-transparent px-2.5 py-0.5 text-ui-meta {tab === "notifications"
+            ? "bg-accent font-semibold text-accent-foreground"
+            : "text-muted-foreground"}"
+          class:active={tab === "notifications"}
+          type="button"
+          role="tab"
+          aria-selected={tab === "notifications"}
+          onclick={() => selectTab("notifications")}
+        >
+          Notifications
+        </button>
+      {/if}
     </div>
     {#if ghStatus?.available}
       <Hint label={ghStatus.authed ? "GitHub CLI version" : "GitHub CLI version (not authenticated)"}>
@@ -1377,22 +1419,24 @@
       </Hint>
     {/if}
     <span class="spacer ml-auto"></span>
-    <Button
-      class="{tb} border-primary/40 text-primary-ink"
-      variant="outline"
-      type="button"
-      aria-label="Issues"
-      title="Open Issues"
-      onclick={() => emitUiEvent("issues-open", { repoId })}
-    >
-      Issues
-      {#if issueUnread > 0}
-        <span
-          class="inline-flex min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] tabular-nums text-primary-ink"
-          aria-hidden="true"
-        >{badgeCount(issueUnread)}</span>
-      {/if}
-    </Button>
+    {#if issuesEnabled}
+      <Button
+        class="{tb} border-primary/40 text-primary-ink"
+        variant="outline"
+        type="button"
+        aria-label="Issues"
+        title="Open Issues"
+        onclick={() => emitUiEvent("issues-open", { repoId })}
+      >
+        Issues
+        {#if issueUnread > 0}
+          <span
+            class="inline-flex min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] tabular-nums text-primary-ink"
+            aria-hidden="true"
+          >{badgeCount(issueUnread)}</span>
+        {/if}
+      </Button>
+    {/if}
     {#if tab === "prs"}
       <select
         class="filter flex-none rounded-sm border border-border bg-background px-1 py-px text-ui-meta text-foreground"
@@ -1505,7 +1549,14 @@
     {/if}
   </div>
 
-  {#if banner.kind !== "ready"}
+  {#if !anyTabEnabled}
+    <div class="banner disabled mx-2 my-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2" role="status">
+      <p class="banner-text m-0 min-w-[12rem] flex-1 text-muted-foreground">
+        GitHub is turned off for this app. Enable the surfaces you want under
+        Settings → GitHub; while they are off, no gh requests are made.
+      </p>
+    </div>
+  {:else if banner.kind !== "ready"}
     <div class="banner {banner.kind} mx-2 my-1 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2" role="status">
       <p class="banner-text m-0 min-w-[12rem] flex-1 text-muted-foreground">{banner.text}</p>
       {#if banner.kind === "missing"}
@@ -1523,7 +1574,7 @@
         The gh flow is unavailable for this repository: {contextError}
       </p>
     </div>
-  {:else if tab === "actions"}
+  {:else if tab === "actions" && actionsEnabled}
     {#if context}
       <div class="section actions-section mx-2 mb-3 mt-2 flex flex-col gap-ui-35">
         <div class="actions-summary flex flex-wrap items-baseline gap-2">
@@ -1677,7 +1728,7 @@
         {/if}
       </div>
     {/if}
-  {:else if tab === "notifications"}
+  {:else if tab === "notifications" && notificationsEnabled}
     {#if context}
       <div class="section notifications-section mx-2 mb-3 mt-2">
         <h3 class="section-title mb-1 mt-0 text-ui-meta font-semibold uppercase tracking-[0.04em] text-muted-foreground">

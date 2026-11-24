@@ -30,6 +30,7 @@
   import { overlayStack } from "$lib/state/overlays.svelte";
   import { hideRecentRepos, openTab, tabStore } from "$lib/stores/tabs.svelte";
   import { forgeStore } from "$lib/stores/forge.svelte";
+  import { isGithubAnyFeatureEnabled } from "$lib/state/githubGate";
   import { toast } from "$lib/toast";
   import ThemeToggle from "$lib/components/ThemeToggle.svelte";
   import UpdateChip from "$lib/components/UpdateChip.svelte";
@@ -180,8 +181,11 @@
     });
 
     // The strip's gh banner: one probe per Overview session (the same
-    // forgeStore cache the workspace chips use).
-    if (forgeStore.statusFor() === null) void forgeStore.refreshStatus();
+    // forgeStore cache the workspace chips use). Skipped while GitHub is
+    // turned off — the banner would be a lie and the probe spawns gh.
+    if (isGithubAnyFeatureEnabled() && forgeStore.statusFor() === null) {
+      void forgeStore.refreshStatus();
+    }
 
     return () => {
       for (const unlisten of cleanups) unlisten();

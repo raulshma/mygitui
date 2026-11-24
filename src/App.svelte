@@ -30,6 +30,8 @@
   import { flushHistoryPrefs } from "$lib/stores/historyPrefs";
   import { flushWorkspaceSessions } from "$lib/stores/workspaceSession.svelte";
   import { issueSubscriptions } from "$lib/issues/subscriptions.svelte";
+  import { appSettings } from "$lib/state/appSettings.svelte";
+  import { syncGithubSettings } from "$lib/state/githubSync";
   import OverviewView from "$lib/overview/OverviewView.svelte";
   import OverviewToggle from "$lib/overview/OverviewToggle.svelte";
   import { overviewStore, wipeLegacyAgentKeys } from "$lib/overview/overviewStore.svelte";
@@ -380,11 +382,26 @@
     syncWindowTitle();
   });
 
+  // GitHub feature switches: mirrored into the backend spawn gate (the IPC
+  // client also rejects gated commands, this is defense-in-depth) and read
+  // by the issues lane effect below so turning Issues off drops its pollers.
+  $effect(() => {
+    void appSettings.githubEnabled;
+    void appSettings.githubPullRequests;
+    void appSettings.githubActions;
+    void appSettings.githubIssues;
+    void appSettings.githubNotifications;
+    void appSettings.githubStatusChips;
+    syncGithubSettings();
+  });
+
   // Issues polling has one application-owned coordinator. Track the open
   // repositories and focused tab so activation promotes one lane to 60 s;
   // the coordinator itself owns visibility/focus listeners and coalescing.
   $effect(() => {
     if (popout !== null) return;
+    void appSettings.githubEnabled;
+    void appSettings.githubIssues;
     const repoIds = tabStore.tabs.map((tab) => tab.id);
     const activeId = tabStore.activeId;
     untrack(() => {

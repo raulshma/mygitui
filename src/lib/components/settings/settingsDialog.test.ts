@@ -279,6 +279,34 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("Preferred Provider")).toBeTruthy();
   });
 
+  it("manages GitHub feature toggles and disables child rows when master switch is off", async () => {
+    render(SettingsDialog, { open: true, settings, apps });
+    await fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+
+    const masterSwitch = screen.getByLabelText("GitHub integration");
+    const prSwitch = screen.getByLabelText("Pull requests & checks");
+    const issuesSwitch = screen.getByLabelText("Issues");
+
+    expect(switchState(masterSwitch)).toBe(true);
+    expect(switchState(prSwitch)).toBe(true);
+    expect(switchState(issuesSwitch)).toBe(true);
+
+    // Toggle issues off
+    await fireEvent.click(issuesSwitch);
+    expect(settings.value.githubIssues).toBe(false);
+    expect(switchState(issuesSwitch)).toBe(false);
+
+    // Toggle master switch off
+    await fireEvent.click(masterSwitch);
+    expect(settings.value.githubEnabled).toBe(false);
+    expect(switchState(masterSwitch)).toBe(false);
+
+    // Child switches are disabled and clicking does nothing
+    expect(prSwitch.hasAttribute("disabled")).toBe(true);
+    await fireEvent.click(screen.getByText("Pull requests & checks"));
+    expect(settings.value.githubPullRequests).toBe(true);
+  });
+
   it("reflects and persists the updater switches", async () => {
     render(SettingsDialog, { open: true, settings, apps });
     await fireEvent.click(screen.getByRole("button", { name: "Updates" }));

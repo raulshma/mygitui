@@ -156,6 +156,8 @@
     description?: DynamicText;
     /** Extra search terms beyond title + description. */
     keywords?: string;
+    /** Renders the row dimmed and inert (e.g. a child of a master toggle). */
+    disabled?: () => boolean;
   }
 
   /** Boolean setting: a full-row-clickable card with a switch. */
@@ -343,6 +345,9 @@
    * the first probe lands — the Refresh button forces one).
    */
   function forgeStatusLine(): string | null {
+    if (!settings.githubEnabled) {
+      return "GitHub integration is off — no gh requests are made";
+    }
     const status = forgeStore.status;
     if (status === null) {
       return forgeStore.statusLoading ? "Checking for gh…" : null;
@@ -357,15 +362,18 @@
 
   /** Forces a fresh `forge_status` + host-cache refresh (manual refresh). */
   async function refreshForgeStatus(): Promise<void> {
+    if (!settings.githubEnabled) return;
     await Promise.all([
       forgeStore.refreshStatus(),
       forgeHosts().catch(() => null),
     ]);
   }
 
-  // Opening the GitHub section probes gh once when nothing is known yet.
+  // Opening the GitHub section probes gh once when nothing is known yet —
+  // never while the integration is off (that is the whole point of the
+  // master switch).
   $effect(() => {
-    if (active !== "forge") return;
+    if (active !== "forge" || !settings.githubEnabled) return;
     if (forgeStore.status !== null || forgeStore.statusLoading) return;
     untrack(() => void forgeStore.refreshStatus());
   });
@@ -1156,14 +1164,80 @@
       ],
     },
     {
-      // GitHub (E1, plan §9.1): auth state display, snapshot cadence and the
-      // toast toggles — deliberately minimal; deeper GitHub settings are a
-      // Phase-2 revisit.
+      // GitHub (E1, plan §9.1): a master switch plus one toggle per surface.
+      // Off never spawns `gh` — the IPC client rejects gated commands before
+      // invoke, pollers drop their lanes and the Rust runner refuses as a
+      // second line of defense.
       id: "forge",
       label: "GitHub",
       icon: "merge-type",
-      blurb: "gh CLI auth, footer-chip cadence and toasts.",
+      blurb: "Turn GitHub surfaces on or off, gh auth, footer cadence and toasts.",
       rows: [
+        {
+          kind: "toggle",
+          id: "github-enabled",
+          title: "GitHub integration",
+          description:
+            "Master switch for every GitHub feature. Off makes no requests to gh at all — chips, pull requests, Actions, Issues and notifications stop and their pollers unregister.",
+          keywords: "github integration enable disable master off gh network requests",
+          get: () => settings.githubEnabled,
+          set: (value) => settings.update({ githubEnabled: value }),
+        },
+        {
+          kind: "toggle",
+          id: "github-pull-requests",
+          title: "Pull requests & checks",
+          description:
+            "PR lists, the current branch's PR, CI checks, diffs, review threads and PR actions (merge/close/comment/review/checkout).",
+          keywords: "pull request pr checks review merge diffs",
+          get: () => settings.githubPullRequests,
+          set: (value) => settings.update({ githubPullRequests: value }),
+          disabled: () => !settings.githubEnabled,
+        },
+        {
+          kind: "toggle",
+          id: "github-actions",
+          title: "Actions runs",
+          description:
+            "GitHub Actions run lists, run logs, reruns, cancels and workflow dispatch.",
+          keywords: "actions workflow runs rerun logs dispatch ci",
+          get: () => settings.githubActions,
+          set: (value) => settings.update({ githubActions: value }),
+          disabled: () => !settings.githubEnabled,
+        },
+        {
+          kind: "toggle",
+          id: "github-issues",
+          title: "Issues",
+          description:
+            "The Issues workspace plus its background activity polling for new issues and comments.",
+          keywords: "issues issue browser activity polling",
+          get: () => settings.githubIssues,
+          set: (value) => settings.update({ githubIssues: value }),
+          disabled: () => !settings.githubEnabled,
+        },
+        {
+          kind: "toggle",
+          id: "github-notifications",
+          title: "Notifications",
+          description:
+            "The account-wide unread notification threads in the GitHub panel.",
+          keywords: "notifications unread threads inbox",
+          get: () => settings.githubNotifications,
+          set: (value) => settings.update({ githubNotifications: value }),
+          disabled: () => !settings.githubEnabled,
+        },
+        {
+          kind: "toggle",
+          id: "github-status-chips",
+          title: "Status-bar chips",
+          description:
+            "The footer PR/checks/run chips and their background snapshot polling.",
+          keywords: "status bar chips footer snapshot polling",
+          get: () => settings.githubStatusChips,
+          set: (value) => settings.update({ githubStatusChips: value }),
+          disabled: () => !settings.githubEnabled,
+        },
         {
           kind: "action",
           id: "forge-auth",
@@ -1176,6 +1250,7 @@
             {
               label: "Refresh",
               onclick: () => void refreshForgeStatus(),
+              disabled: () => !settings.githubEnabled,
             },
           ],
         },
@@ -1195,6 +1270,7 @@
             settings.update({
               forgeSnapshotSeconds: Number.isFinite(value) ? value : 0,
             }),
+          disabled: () => !settings.githubEnabled,
         },
         {
           kind: "toggle",
@@ -1205,6 +1281,7 @@
           keywords: "toast failure failing checks run notification",
           get: () => settings.forgeFailureToasts,
           set: (value) => settings.update({ forgeFailureToasts: value }),
+          disabled: () => !settings.githubEnabled,
         },
         {
           kind: "toggle",
@@ -1215,6 +1292,7 @@
           keywords: "toast activity pull request run started",
           get: () => settings.forgeActivityToasts,
           set: (value) => settings.update({ forgeActivityToasts: value }),
+          disabled: () => !settings.githubEnabled,
         },
       ],
     },
@@ -1544,8 +1622,13 @@
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="setting-row {ROW_CARD} cursor-pointer hover:border-ring/50 hover:bg-muted/40"
-        onclick={() => row.set(!row.get())}
+        class="setting-row {ROW_CARD} {row.disabled?.()
+          ? 'opacity-60'
+          : 'cursor-pointer hover:border-ring/50 hover:bg-muted/40'}"
+        onclick={() => {
+          if (row.disabled?.()) return;
+          row.set(!row.get());
+        }}
       >
         <span class={ROW_TEXT}>
           <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
@@ -1555,6 +1638,7 @@
           class="mt-0.5 flex-none"
           aria-labelledby={`settings-${row.id}-label`}
           checked={row.get()}
+          disabled={row.disabled?.() ?? false}
           onclick={(event) => event.stopPropagation()}
           onCheckedChange={(checked) => row.set(checked)}
         />
@@ -1588,7 +1672,7 @@
         </div>
       </div>
     {:else if row.kind === "number"}
-      <div class="setting-row {ROW_CARD}">
+      <div class="setting-row {ROW_CARD} {row.disabled?.() ? 'opacity-60' : ''}">
         <span class={ROW_TEXT}>
           <span id={`settings-${row.id}-label`} class={ROW_TITLE}>{row.title}</span>
           <span class={ROW_DESC}>{resolveText(row.description ?? "")}</span>
@@ -1603,6 +1687,7 @@
               step={1}
               aria-label={`${row.ariaLabel} slider`}
               value={row.get()}
+              disabled={row.disabled?.() ?? false}
               onValueChange={(next) => row.set(next)}
             />
           {/if}
@@ -1615,6 +1700,7 @@
               step={1}
               aria-label={row.ariaLabel}
               value={row.get()}
+              disabled={row.disabled?.() ?? false}
               onchange={(event) => {
                 const raw = Number((event.currentTarget as HTMLInputElement).value);
                 row.set(raw);

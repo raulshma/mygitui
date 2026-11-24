@@ -132,6 +132,12 @@ beforeEach(() => {
     forgeSnapshotSeconds: 60,
     forgeFailureToasts: true,
     forgeActivityToasts: false,
+    githubEnabled: true,
+    githubPullRequests: true,
+    githubActions: true,
+    githubIssues: true,
+    githubNotifications: true,
+    githubStatusChips: true,
   });
   tabStore.tabs = [];
   tabStore.activeId = null;
@@ -209,6 +215,29 @@ describe("snapshot lanes (syncLanes)", () => {
 
     expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeUndefined();
     expect(pollScheduler.intervalOf(snapshotLaneKey("r2"))).toBe(5 * 60_000);
+  });
+
+  it("drops all snapshot lanes when GitHub or status chips are disabled", () => {
+    tabStore.tabs = [tab({ id: "r1" }), tab({ id: "r2" })];
+    tabStore.activeId = "r1";
+    forgeChips.syncLanes();
+    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeDefined();
+    expect(pollScheduler.lanes[snapshotLaneKey("r2")]).toBeDefined();
+
+    // Status chips off -> drops all lanes
+    appSettings.update({ githubStatusChips: false });
+    forgeChips.syncLanes();
+    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeUndefined();
+    expect(pollScheduler.lanes[snapshotLaneKey("r2")]).toBeUndefined();
+
+    // Re-enable chips, disable master switch -> drops all lanes
+    appSettings.update({ githubStatusChips: true });
+    forgeChips.syncLanes();
+    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeDefined();
+
+    appSettings.update({ githubEnabled: false });
+    forgeChips.syncLanes();
+    expect(pollScheduler.lanes[snapshotLaneKey("r1")]).toBeUndefined();
   });
 
   it("remote tabs poll the same lanes (gh runs on the device)", () => {

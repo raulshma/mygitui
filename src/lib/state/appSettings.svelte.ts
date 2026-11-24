@@ -96,6 +96,22 @@ export interface AppSettingsData {
    * Default OFF (opt-in; §9.2 toasts default-on for failures only).
    */
   forgeActivityToasts: boolean;
+  /**
+   * Master switch for every GitHub feature. Off = no `gh` process is
+   * spawned anywhere (the frontend IPC gate rejects before invoking and the
+   * Rust runner refuses to launch gh as a second line of defense).
+   */
+  githubEnabled: boolean;
+  /** Pull requests, their checks, diffs, review threads and mutations. */
+  githubPullRequests: boolean;
+  /** GitHub Actions runs, logs, reruns and workflow dispatch. */
+  githubActions: boolean;
+  /** GitHub Issues list/detail/comments/activity polling. */
+  githubIssues: boolean;
+  /** GitHub notification threads. */
+  githubNotifications: boolean;
+  /** Footer PR/checks/run chips and their background snapshot polling. */
+  githubStatusChips: boolean;
 }
 
 export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
@@ -112,6 +128,12 @@ export const APP_SETTINGS_DEFAULTS: AppSettingsData = {
   forgeSnapshotSeconds: 60,
   forgeFailureToasts: true,
   forgeActivityToasts: false,
+  githubEnabled: true,
+  githubPullRequests: true,
+  githubActions: true,
+  githubIssues: true,
+  githubNotifications: true,
+  githubStatusChips: true,
 };
 
 /** Terminal font size bounds shared by the setting and the terminal store. */
@@ -202,6 +224,18 @@ export function parseAppSettings(data: unknown): AppSettingsData {
   if (typeof raw.forgeActivityToasts === "boolean") {
     out.forgeActivityToasts = raw.forgeActivityToasts;
   }
+  if (typeof raw.githubEnabled === "boolean") out.githubEnabled = raw.githubEnabled;
+  if (typeof raw.githubPullRequests === "boolean") {
+    out.githubPullRequests = raw.githubPullRequests;
+  }
+  if (typeof raw.githubActions === "boolean") out.githubActions = raw.githubActions;
+  if (typeof raw.githubIssues === "boolean") out.githubIssues = raw.githubIssues;
+  if (typeof raw.githubNotifications === "boolean") {
+    out.githubNotifications = raw.githubNotifications;
+  }
+  if (typeof raw.githubStatusChips === "boolean") {
+    out.githubStatusChips = raw.githubStatusChips;
+  }
   return out;
 }
 
@@ -287,6 +321,36 @@ export class AppSettingsStore {
   /** Toast on GitHub activity transitions (default off). */
   get forgeActivityToasts(): boolean {
     return this.#value.forgeActivityToasts;
+  }
+
+  /** Master switch for every GitHub feature (off = no gh requests). */
+  get githubEnabled(): boolean {
+    return this.#value.githubEnabled;
+  }
+
+  /** Pull requests, checks, diffs, review threads and mutations. */
+  get githubPullRequests(): boolean {
+    return this.#value.githubPullRequests;
+  }
+
+  /** GitHub Actions runs, logs, reruns and dispatch. */
+  get githubActions(): boolean {
+    return this.#value.githubActions;
+  }
+
+  /** GitHub Issues workspace and activity polling. */
+  get githubIssues(): boolean {
+    return this.#value.githubIssues;
+  }
+
+  /** GitHub notification threads. */
+  get githubNotifications(): boolean {
+    return this.#value.githubNotifications;
+  }
+
+  /** Footer GitHub chips and their background snapshot polling. */
+  get githubStatusChips(): boolean {
+    return this.#value.githubStatusChips;
   }
 
   /** Patch settings and persist (partial update, validated on write). */

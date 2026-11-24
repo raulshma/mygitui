@@ -25,6 +25,13 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import type { InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "$lib/entry/dragdrop";
+import {
+  githubSnapshotParts,
+  hasGithubSnapshotParts,
+  isGithubAnyFeatureEnabled,
+  isGithubFeatureEnabled,
+  type GithubFeature,
+} from "$lib/state/githubGate";
 import type {
   ActionOutputEvent,
   AuthRequest,
@@ -283,6 +290,100 @@ function toIpcError(command: string, err: unknown): IpcError {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub feature gate
+// ---------------------------------------------------------------------------
+
+/**
+ * `IpcError.code` on the local rejection when a GitHub command is gated off.
+ * Stores/pollers treat it as a silent no-op (the feature is off on purpose,
+ * not failing).
+ */
+export const GITHUB_DISABLED_CODE = "GithubDisabled";
+
+/** True when `err` is the local "GitHub integration is off" rejection. */
+export function isGithubDisabledError(err: unknown): boolean {
+  return err instanceof IpcError && err.code === GITHUB_DISABLED_CODE;
+}
+
+/** How one command is gated: one feature, any feature, or the snapshot mask. */
+type GithubCommandGate = GithubFeature | "any" | "snapshot";
+
+/**
+ * Every command that can spawn `gh`, mapped to the toggle that owns it.
+ * This is the single enforcement point on the frontend: `call` and
+ * `callForge` reject here before touching the transport, so turning a
+ * feature off makes it impossible to reach the backend (and therefore
+ * impossible to spawn `gh`) even if a component forgets its own guard.
+ */
+const GITHUB_COMMANDS: Record<string, GithubCommandGate> = {
+  // The machine probe / host cache feed every GitHub surface.
+  forge_status: "any",
+  forge_hosts: "any",
+  // Context is a local git read, not a gh call, but it only has a consumer
+  // while some GitHub surface is on.
+  forge_context: "any",
+  forge_snapshot: "snapshot",
+  forge_commit_checks: "pullRequests",
+  forge_pr_files: "pullRequests",
+  forge_pr_review_threads: "pullRequests",
+  pr_create: "pullRequests",
+  pr_list: "pullRequests",
+  pr_checks: "pullRequests",
+  pr_merge: "pullRequests",
+  pr_close: "pullRequests",
+  pr_reopen: "pullRequests",
+  pr_ready: "pullRequests",
+  pr_checkout: "pullRequests",
+  pr_comment: "pullRequests",
+  pr_review: "pullRequests",
+  pr_edit: "pullRequests",
+  pr_template: "pullRequests",
+  issues_identity: "issues",
+  issues_list: "issues",
+  issues_detail: "issues",
+  issues_comments: "issues",
+  issues_metadata: "issues",
+  issues_create: "issues",
+  issues_update: "issues",
+  issues_comment: "issues",
+  issues_set_state: "issues",
+  issues_activity_since: "issues",
+  notifications_list: "notifications",
+  notification_mark_read: "notifications",
+  notifications_mark_all_read: "notifications",
+  workflow_runs: "actions",
+  workflow_run_detail: "actions",
+  workflow_run_logs: "actions",
+  workflow_run_cancel: "actions",
+  workflow_run_rerun: "actions",
+  workflow_dispatch: "actions",
+  workflow_list: "actions",
+};
+
+/** True when `gate` is currently satisfied by the settings. */
+function githubCommandAllowed(gate: GithubCommandGate): boolean {
+  if (gate === "any") return isGithubAnyFeatureEnabled();
+  if (gate === "snapshot") {
+    return hasGithubSnapshotParts(githubSnapshotParts());
+  }
+  return isGithubFeatureEnabled(gate);
+}
+
+/**
+ * Rejects a GitHub command before the transport when its feature is off.
+ * Non-GitHub commands pass through untouched.
+ */
+function assertGithubAllowed(command: string): void {
+  const gate = GITHUB_COMMANDS[command];
+  if (gate === undefined || githubCommandAllowed(gate)) return;
+  throw new IpcError(
+    command,
+    "GitHub integration is turned off in Settings.",
+    GITHUB_DISABLED_CODE,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Injectable transport (command invocation)
 // ---------------------------------------------------------------------------
 
@@ -323,6 +424,7 @@ async function call<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
+  assertGithubAllowed(command);
   const transport = transportOverride ?? defaultTransport;
   try {
     return (await transport(command, args)) as T;
@@ -1880,6 +1982,7 @@ async function callForge<T>(
   command: string,
   args: Record<string, unknown>,
 ): Promise<T> {
+  assertGithubAllowed(command);
   const transport = transportOverride ?? defaultTransport;
   try {
     return (await transport(command, args)) as T;
@@ -1887,6 +1990,30 @@ async function callForge<T>(
     if (isForgeFailure(err)) throw new ForgeIpcError(command, err);
     throw toIpcError(command, err);
   }
+}
+
+/**
+ * Mirrors the GitHub feature switches into the backend's spawn gate (the
+ * frontend already blocks gated commands before `invoke`; this is the
+ * defense-in-depth line that keeps `gh` from spawning if a call site ever
+ * bypasses it). Safe to call when everything is off.
+ */
+export function githubConfigure(switches: {
+  enabled: boolean;
+  pullRequests: boolean;
+  actions: boolean;
+  issues: boolean;
+  notifications: boolean;
+  statusChips: boolean;
+}): Promise<void> {
+  return call<void>("github_configure", {
+    enabled: switches.enabled,
+    pull_requests: switches.pullRequests,
+    actions: switches.actions,
+    issues: switches.issues,
+    notifications: switches.notifications,
+    status_chips: switches.statusChips,
+  });
 }
 
 /**

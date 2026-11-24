@@ -26,6 +26,12 @@ import {
   FORGE_INACTIVE_SNAPSHOT_MS,
   FORGE_SNAPSHOT_SECONDS_MIN,
 } from "$lib/state/appSettings.svelte";
+import {
+  githubSnapshotParts,
+  hasGithubSnapshotParts,
+  isGithubAnyFeatureEnabled,
+  isGithubFeatureEnabled,
+} from "$lib/state/githubGate";
 import { registerRepoEvictor } from "$lib/state/repoEvictors";
 import { pollScheduler, type PollLaneState } from "$lib/stores/pollScheduler.svelte";
 import { forgeStore } from "$lib/stores/forge.svelte";
@@ -84,7 +90,11 @@ export class ForgeChipsStore {
     if (this.#statusStarted) return;
     this.#statusStarted = true;
     untrack(() => {
-      if (forgeStore.status === null && !forgeStore.statusLoading) {
+      if (
+        isGithubAnyFeatureEnabled() &&
+        forgeStore.status === null &&
+        !forgeStore.statusLoading
+      ) {
         void forgeStore.refreshStatus();
       }
     });
@@ -113,11 +123,17 @@ export class ForgeChipsStore {
     const activeIntervalMs = untrack(() =>
       activeSnapshotIntervalMs(appSettings.forgeSnapshotSeconds),
     );
+    // GitHub off (or the chips / every snapshot part off) = no gh calls:
+    // unregister every lane instead of polling into the IPC gate.
+    const chipsEnabled = untrack(() => isGithubFeatureEnabled("statusChips"));
+    const anyPart = untrack(() => hasGithubSnapshotParts(githubSnapshotParts()));
     const wanted = new Map<string, number>();
-    for (const tab of tabStore.tabs) {
-      const isActive = tab.id === tabStore.activeId;
-      const intervalMs = isActive ? activeIntervalMs : FORGE_INACTIVE_SNAPSHOT_MS;
-      if (intervalMs > 0) wanted.set(tab.id, intervalMs);
+    if (chipsEnabled && anyPart) {
+      for (const tab of tabStore.tabs) {
+        const isActive = tab.id === tabStore.activeId;
+        const intervalMs = isActive ? activeIntervalMs : FORGE_INACTIVE_SNAPSHOT_MS;
+        if (intervalMs > 0) wanted.set(tab.id, intervalMs);
+      }
     }
 
     // Re-register only when a lane's cadence actually changed (register
@@ -152,6 +168,7 @@ export class ForgeChipsStore {
    * carry the offline case until the device responds.
    */
   #probeDeviceStatuses(): void {
+    if (!isGithubFeatureEnabled("statusChips")) return;
     for (const tab of tabStore.tabs) {
       const deviceId = tab.deviceId;
       if (deviceId === null || this.#probingDevices.has(deviceId)) continue;

@@ -302,6 +302,7 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            ipc::forge::github_configure,
             ipc::forge::forge_status,
             ipc::forge::forge_hosts,
             ipc::forge::forge_context,
