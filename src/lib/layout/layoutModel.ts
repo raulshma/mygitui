@@ -528,13 +528,13 @@ export function removePanel(
 /** Where to place a panel relative to an existing node. */
 export type MoveTarget =
   /** New split with the panel left of `nodeId`. */
-  | { kind: "before"; nodeId: string }
+  | { kind: "before"; nodeId: string; asTabs?: boolean }
   /** New split with the panel right of `nodeId`. */
-  | { kind: "after"; nodeId: string }
+  | { kind: "after"; nodeId: string; asTabs?: boolean }
   /** Explicit side of `nodeId` (alias of before/after; spec parity). */
-  | { kind: "side"; nodeId: string; side: "left" | "right" }
+  | { kind: "side"; nodeId: string; side: "left" | "right"; asTabs?: boolean }
   /** Add into the tab group at `nodeId` (a leaf there becomes a group). */
-  | { kind: "tab"; nodeId: string };
+  | { kind: "tab"; nodeId: string; index?: number };
 
 /** Actions the tab-strip context menu can request (TabGroup → RepoView). */
 export type PanelGroupAction =
@@ -563,22 +563,33 @@ export function insertPanel(
   const targetNode = nodeById(tree, target.nodeId);
   if (!targetNode) return tree;
 
-  const leaf: LeafNode = { kind: "leaf", id: freshId(tree, "leaf"), panel };
+  const asTabs = "asTabs" in target && Boolean(target.asTabs);
+  const newNode: LayoutNode = asTabs
+    ? { kind: "tabs", id: freshId(tree, "tabs"), tabs: [panel], active: 0 }
+    : { kind: "leaf", id: freshId(tree, "leaf"), panel };
   const side =
     target.kind === "side" ? target.side : target.kind === "before" ? "left" : target.kind === "after" ? "right" : null;
 
   if (target.kind === "tab") {
     return replaceNode(tree, target.nodeId, (node) => {
       if (node.kind === "leaf") {
+        const nextTabs = target.index === 0 ? [panel, node.panel] : [node.panel, panel];
+        const active = target.index === 0 ? 0 : 1;
         return {
           kind: "tabs",
           id: node.id,
-          tabs: [node.panel, panel],
-          active: 1,
+          tabs: nextTabs,
+          active,
         };
       }
       if (node.kind === "tabs") {
-        return { ...node, tabs: [...node.tabs, panel], active: node.tabs.length };
+        const nextTabs = [...node.tabs];
+        const insertIdx =
+          target.index !== undefined && target.index >= 0 && target.index <= nextTabs.length
+            ? target.index
+            : nextTabs.length;
+        nextTabs.splice(insertIdx, 0, panel);
+        return { ...node, tabs: nextTabs, active: insertIdx };
       }
       return node;
     });
@@ -587,8 +598,8 @@ export function insertPanel(
   const id = freshId(tree, "split");
   const split: SplitNode =
     side === "left"
-      ? { kind: "split", id, ratio: 0.5, a: leaf, b: targetNode }
-      : { kind: "split", id, ratio: 0.5, a: targetNode, b: leaf };
+      ? { kind: "split", id, ratio: 0.5, a: newNode, b: targetNode }
+      : { kind: "split", id, ratio: 0.5, a: targetNode, b: newNode };
   return replaceNode(tree, target.nodeId, () => split);
 }
 
@@ -607,16 +618,27 @@ export function movePanel(
   const from = findPanelNode(tree, panel);
   if (!from) return tree;
   const targetNode = nodeById(tree, target.nodeId);
-  // Moving relative to a node that IS (or contains) the panel: no structural move.
+  // Moving relative to a node that IS (or contains) the panel:
   if (targetNode && nodeContains(targetNode, panel)) {
-    // Reordering inside the same tab group is the one useful self-move.
-    if (target.kind === "tab" && from.kind === "tabs" && from.id === target.nodeId) {
-      const removed = removePanel(tree, panel);
-      return removed
-        ? insertPanel(removed, panel, { kind: "tab", nodeId: target.nodeId })
-        : tree;
+    // If target is an ancestor (not from itself), or from only has 1 panel, no move possible.
+    if (target.nodeId !== from.id || from.kind === "leaf" || from.tabs.length <= 1) {
+      return tree;
     }
-    return tree;
+    // Reordering inside the same tab group:
+    if (target.kind === "tab") {
+      const oldIndex = from.tabs.indexOf(panel);
+      let targetIndex =
+        target.index !== undefined && target.index >= 0
+          ? Math.min(target.index, from.tabs.length - 1)
+          : from.tabs.length - 1;
+      const nextTabs = from.tabs.filter((t) => t !== panel);
+      nextTabs.splice(targetIndex, 0, panel);
+      if (oldIndex === targetIndex && from.active === targetIndex) return tree;
+      return replaceNode(tree, from.id, (node) =>
+        node.kind === "tabs" ? { ...node, tabs: nextTabs, active: targetIndex } : node,
+      );
+    }
+    // For before/after/side on from itself with >1 tabs: valid split to create a new group.
   }
   const removed = removePanel(tree, panel);
   if (removed === null) return tree;
@@ -647,6 +669,30 @@ export function wrapPanelRight(
     a: tree,
     b: { kind: "leaf", id: freshId(tree, "leaf"), panel },
   };
+}
+
+/** All content-holding panes (leaves and tab groups) in visual layout order (left-to-right). */
+export function getLayoutGroups(tree: LayoutNode): (LeafNode | TabsNode)[] {
+  if (tree.kind === "leaf" || tree.kind === "tabs") {
+    return [tree];
+  }
+  return [...getLayoutGroups(tree.a), ...getLayoutGroups(tree.b)];
+}
+
+/**
+ * Returns the adjacent content pane (leaf or tab group) to the left or right
+ * of `nodeId` in visual layout order, or `null` if none exists.
+ */
+export function adjacentGroup(
+  tree: LayoutNode,
+  nodeId: string,
+  side: "left" | "right",
+): LeafNode | TabsNode | null {
+  const groups = getLayoutGroups(tree);
+  const index = groups.findIndex((g) => g.id === nodeId);
+  if (index === -1) return null;
+  const targetIndex = side === "left" ? index - 1 : index + 1;
+  return groups[targetIndex] ?? null;
 }
 
 /** Result of moving a panel into an adjacent tab group. */
@@ -684,9 +730,9 @@ function moveToSiblingGroup(
 
 /**
  * "Move to right group": moves `panel` into the group immediately right of
- * the group currently holding it (the sibling child of the parent split).
+ * the group currently holding it.
  * Joining a leaf turns both into a tab group; joining a tab group appends.
- * Fails when the holder has no right sibling or the sibling is a split.
+ * Fails when the holder has no right adjacent group.
  */
 export function moveToRightGroup(
   tree: LayoutNode,
@@ -696,7 +742,7 @@ export function moveToRightGroup(
 }
 
 /**
- * "Move to left group": mirror of {@link moveToRightGroup} for the sibling
+ * "Move to left group": mirror of {@link moveToRightGroup} for the group
  * rendered left of the holder — the way back for a panel moved right.
  */
 export function moveToLeftGroup(

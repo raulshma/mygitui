@@ -45,6 +45,7 @@ import {
   RATIO_STEP,
   clampRatio,
   type LayoutNode,
+  type MoveTarget,
   type PanelGroupAction,
   type PanelId,
   type SplitNode,
@@ -74,6 +75,7 @@ import TabGroup from "./TabGroup.svelte";
     onActivateTab,
     onAddPanel,
     onPanelAction,
+    onMovePanel,
     /** Whether a collapsed-history rail sits at the right edge of the tree.
      *  Split bases on the right spine are widened by the rail width: the
      *  rail is a sibling of the whole tree, so without this every
@@ -124,6 +126,7 @@ import TabGroup from "./TabGroup.svelte";
     onActivateTab: (tabsId: string, index: number) => void;
     onAddPanel: (tabsId: string, panel: PanelId) => void;
     onPanelAction: (action: PanelGroupAction, tabsId: string, panel: PanelId) => void;
+    onMovePanel?: (panel: PanelId, target: MoveTarget) => void;
     /** True while the history rail occupies the right edge (see destructure). */
     rightRail?: boolean;
   } = $props();
@@ -228,6 +231,7 @@ import TabGroup from "./TabGroup.svelte";
         {onActivateTab}
         {onAddPanel}
         {onPanelAction}
+        {onMovePanel}
         rightRail={false}
       />
     </div>
@@ -282,6 +286,7 @@ import TabGroup from "./TabGroup.svelte";
         {onActivateTab}
         {onAddPanel}
         {onPanelAction}
+        {onMovePanel}
         {rightRail}
       />
     </div>
@@ -298,6 +303,7 @@ import TabGroup from "./TabGroup.svelte";
     onActivate={onActivateTab}
     onAdd={onAddPanel}
     onAction={onPanelAction}
+    {onMovePanel}
   />
 {:else}
   <div class="flex h-full w-full min-h-0 min-w-0 flex-col [&>*]:flex-1 [&>*]:min-h-0">
