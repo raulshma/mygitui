@@ -47,7 +47,11 @@ test("paginated log settles despite late final page and survives scrolling", asy
   await expect(page.locator(".history .row").first()).toBeVisible();
   const status = page.locator(".history .status[role='status']");
   await expect(status).not.toContainText("Streaming", { timeout: 10_000 });
-  expect((await mock.callsOf("repo_log_stream")).length).toBe(1);
+  const historyStreams = async () =>
+    (await mock.callsOf("repo_log_stream")).filter(
+      (args) => (args as { consumer_id?: string }).consumer_id !== "editor-overview-head",
+    );
+  expect((await historyStreams()).length).toBe(1);
 
   // Scroll to the bottom in jumps: each release boundary must hand over the
   // next buffered chunk without re-streaming the log.
@@ -66,7 +70,7 @@ test("paginated log settles despite late final page and survives scrolling", asy
 
   // Quiescence: no abort→restart loop after the walk exhausted.
   await page.waitForTimeout(1_500);
-  expect((await mock.callsOf("repo_log_stream")).length).toBe(1);
+  expect((await historyStreams()).length).toBe(1);
   await expect(status).not.toContainText("Streaming");
   expect(tracked.errors).toEqual([]);
 });

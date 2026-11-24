@@ -78,9 +78,14 @@ test("a mid-stream head_moved burst restarts the walk once and lands the fresh r
   await openRecentRepo(page);
   await expect(page.locator(".history .row").first()).toBeVisible();
 
+  const historyStreams = async () =>
+    (await mock.callsOf("repo_log_stream")).filter(
+      (args) => (args as { consumer_id?: string }).consumer_id !== "editor-overview-head",
+    );
+
   // The burst must hit MID-walk: the stream is still running when it lands.
   const status = page.locator(".history .status[role='status']");
-  const streamsBefore = (await mock.callsOf("repo_log_stream")).length;
+  const streamsBefore = (await historyStreams()).length;
   expect(streamsBefore).toBe(1);
   await expect(status).toContainText("Streaming");
 
@@ -94,7 +99,7 @@ test("a mid-stream head_moved burst restarts the walk once and lands the fresh r
   });
   await mock.emit("repo-changed", headMoved());
   await expect
-    .poll(async () => (await mock.callsOf("repo_log_stream")).length)
+    .poll(async () => (await historyStreams()).length)
     .toBe(streamsBefore + 1);
 
   // The fresh log replaces the old one — the aborted walk contributes
@@ -112,7 +117,7 @@ test("a mid-stream head_moved burst restarts the walk once and lands the fresh r
 
   // Quiescence: exactly one restart, no abort→restart loop afterwards.
   await page.waitForTimeout(1_500);
-  expect((await mock.callsOf("repo_log_stream")).length).toBe(streamsBefore + 1);
+  expect((await historyStreams()).length).toBe(streamsBefore + 1);
   expect(tracked.errors).toEqual([]);
 });
 
@@ -133,16 +138,21 @@ test("rows from the aborted walk stay rendered until the fresh walk's first page
   await openRecentRepo(page);
   await expect(page.locator(".history .row").first()).toBeVisible();
 
+  const historyStreams = async () =>
+    (await mock.callsOf("repo_log_stream")).filter(
+      (args) => (args as { consumer_id?: string }).consumer_id !== "editor-overview-head",
+    );
+
   // The restarted walk's first page is held back for 1.2s: the whole stale-
   // render window is observable from the test side.
   await mock.setCommand("repo_log_stream", {
     pages: logPages(fresh, 100, 2),
     pageGapMs: 1_200,
   });
-  const streamsBefore = (await mock.callsOf("repo_log_stream")).length;
+  const streamsBefore = (await historyStreams()).length;
   await mock.emit("repo-changed", headMoved());
   await expect
-    .poll(async () => (await mock.callsOf("repo_log_stream")).length)
+    .poll(async () => (await historyStreams()).length)
     .toBe(streamsBefore + 1);
 
   // Mid-restart: the list still shows the aborted walk's rows (never blanked
@@ -163,6 +173,6 @@ test("rows from the aborted walk stay rendered until the fresh walk's first page
   );
 
   await page.waitForTimeout(1_000);
-  expect((await mock.callsOf("repo_log_stream")).length).toBe(streamsBefore + 1);
+  expect((await historyStreams()).length).toBe(streamsBefore + 1);
   expect(tracked.errors).toEqual([]);
 });
