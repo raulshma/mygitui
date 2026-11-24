@@ -58,7 +58,7 @@
   import { commit, hooksList, readFile, signingInfo, streamLog } from "$lib/ipc/client";
   import type { GitSignature, HookInfo, LogFilter, RepoStatus, SigningInfo } from "$lib/ipc/types";
   import { describeError } from "$lib/errors";
-  import { pushCurrentBranch, syncSkipMessage } from "$lib/git/sync";
+  import { pullCurrentBranch, pushCurrentBranch, syncSkipMessage } from "$lib/git/sync";
   import { busy } from "$lib/stores/ops.svelte";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import { appSettings } from "$lib/state/appSettings.svelte";
@@ -107,6 +107,8 @@
   const iconFixup = $derived(appIcon("merge-type")!);
   const iconProgress = $derived(appIcon("progress-activity")!);
   const iconPush = $derived(appIcon("arrow-upward")!);
+  const iconPull = $derived(appIcon("arrow-downward")!);
+  const iconSync = $derived(appIcon("sync")!);
   const iconSigning = $derived(appIcon("verified")!);
   const iconHook = $derived(appIcon("bolt")!);
   const iconOptions = $derived(appIcon("tune")!);
@@ -843,6 +845,25 @@ ${m.body}` : m.subject;
             {/each}
           </span>
         {/if}
+
+        {#if activeStatus && (activeStatus.ahead > 0 || activeStatus.behind > 0)}
+          <Hint label={activeStatus.behind > 0 ? (activeStatus.ahead > 0 ? `${activeStatus.behind} to pull, ${activeStatus.ahead} to push` : `${activeStatus.behind} to pull`) : `${activeStatus.ahead} to push`}>
+            {#snippet child({ props })}
+              <span
+                {...props}
+                class="sync-status inline-flex items-center gap-ui-1 text-ui-micro font-medium tabular-nums text-muted-foreground ml-1 pl-1 border-l border-border"
+              >
+                <Icon icon={iconSync} size={12} />
+                {#if activeStatus.behind > 0}
+                  <span class="inline-flex items-center gap-0.5"><Icon icon={iconPull} size={10} />{activeStatus.behind}</span>
+                {/if}
+                {#if activeStatus.ahead > 0}
+                  <span class="inline-flex items-center gap-0.5"><Icon icon={iconPush} size={10} />{activeStatus.ahead}</span>
+                {/if}
+              </span>
+            {/snippet}
+          </Hint>
+        {/if}
       </div>
 
       <!-- The ONE primary action (§3.2): Commit with a split caret (plan
@@ -909,6 +930,39 @@ ${m.body}` : m.subject;
   {:else if showStagedHint}
     <p id="commit-staged-hint" class="staged-hint m-0 text-muted-foreground text-ui-micro leading-[1.3]" role="status">
       No staged changes yet — stage a file to commit.
+    </p>
+  {:else if activeStatus && activeStatus.entries.length === 0 && (activeStatus.ahead > 0 || activeStatus.behind > 0)}
+    <p id="commit-sync-hint" class="sync-hint m-0 flex items-center gap-1.5 text-muted-foreground text-ui-micro leading-[1.3]" role="status">
+      <Icon icon={iconSync} size={12} />
+      <span>
+        {#if activeStatus.behind > 0 && activeStatus.ahead > 0}
+          {activeStatus.behind} to pull, {activeStatus.ahead} to push
+        {:else if activeStatus.behind > 0}
+          {activeStatus.behind} {activeStatus.behind === 1 ? "commit" : "commits"} to pull
+        {:else}
+          {activeStatus.ahead} {activeStatus.ahead === 1 ? "commit" : "commits"} to push
+        {/if}
+      </span>
+      <Button
+        class="h-auto min-w-0 rounded-full px-1.5 py-px text-ui-micro leading-[1.4] text-primary-ink hover:bg-accent hover:text-accent-foreground"
+        variant="ghost"
+        type="button"
+        onclick={async () => {
+          if (!activeRepoId) return;
+          try {
+            if (activeStatus.behind > 0) {
+              await pullCurrentBranch(activeRepoId, activeStatus.branch);
+            } else {
+              await pushCurrentBranch(activeRepoId, activeStatus.branch);
+            }
+            onCommitted?.();
+          } catch (e) {
+            toast(`Sync failed: ${describeError(e)}`, { kind: "error" });
+          }
+        }}
+      >
+        Sync now
+      </Button>
     </p>
   {/if}
 

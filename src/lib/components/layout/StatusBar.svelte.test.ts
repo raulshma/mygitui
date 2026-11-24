@@ -240,6 +240,22 @@ describe("StatusBar", () => {
     expect(screen.getByText("2")).not.toBeNull(); // ahead
   });
 
+  it("shows both ahead and behind counts consistently even when one is zero", () => {
+    tabStore.tabs = [
+      tab({
+        status: status({
+          ahead: 3,
+          behind: 0,
+        }),
+      }),
+    ];
+    tabStore.activeId = "r1";
+    render(StatusBar);
+
+    expect(screen.getByText("0")).not.toBeNull(); // behind
+    expect(screen.getByText("3")).not.toBeNull(); // ahead
+  });
+
   it("branch and changes clicks emit the UI bus events", async () => {
     tabStore.tabs = [
       tab({ status: status({ entries: [entry("a.ts")] }) }),

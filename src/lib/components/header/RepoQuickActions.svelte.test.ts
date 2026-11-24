@@ -149,23 +149,28 @@ describe("RepoQuickActions header pins", () => {
     expect(verbs).toEqual(["fetch", "push"]);
   });
 
-  it("pinned pull/push segments expose their behind/ahead counts accessibly", () => {
-    // Workstream D §8.6: the header no longer renders count badges (the
-    // status bar's sync item owns the counts as text) — the waiting work
-    // stays discoverable through the segments' accessible names, which
-    // carry the idle titles with the counts spelled out.
+  it("pinned pull/push segments carry their behind/ahead counts", () => {
     headerPins.pin("fetch");
     headerPins.pin("pull");
     headerPins.pin("push");
     render(RepoQuickActions, { repoId: "r1", status: status() }); // 2 ahead, 1 behind
 
     const pull = pinButton("pull");
+    expect(pull.querySelector(".count.behind")?.textContent?.trim()).toBe("1");
     const push = pinButton("push");
-    // No count badges anywhere in the group anymore.
-    expect(document.querySelector(".count")).toBeNull();
+    expect(push.querySelector(".count.ahead")?.textContent?.trim()).toBe("2");
+    // Fetch has no count; its tooltip stays the plain fetch title.
+    expect(pinButton("fetch").querySelector(".count")).toBeNull();
     // Accessible names spell the counts out via the idle titles.
     expect(pull.getAttribute("aria-label")).toBe("Pull 1 commit into main");
     expect(push.getAttribute("aria-label")).toBe("Push 2 commits from main");
+  });
+
+  it("renders ahead and behind counts on the sync button", () => {
+    render(RepoQuickActions, { repoId: "r1", status: status({ ahead: 2, behind: 1 }) });
+    const mainBtn = screen.getByRole("button", { name: /Sync with remote/ });
+    expect(mainBtn.querySelector(".count.behind")?.textContent?.trim()).toBe("1");
+    expect(mainBtn.querySelector(".count.ahead")?.textContent?.trim()).toBe("2");
   });
 
   it("marks a pinned segment busy while its verb runs", async () => {

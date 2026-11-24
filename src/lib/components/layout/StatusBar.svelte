@@ -793,17 +793,17 @@
           >
             <Icon icon={iconSync} size={14} />
           </span>
-          {#if behind > 0 && runningVerb === null}
+          {#if (behind > 0 || ahead > 0) && runningVerb === null}
             <span
               class="count behind inline-flex flex-none items-center gap-ui-1 tabular-nums"
+              title={`${behind} behind`}
             >
               <Icon icon={iconPull} size={12} />
               {badgeCount(behind)}
             </span>
-          {/if}
-          {#if ahead > 0 && runningVerb === null}
             <span
               class="count ahead inline-flex flex-none items-center gap-ui-1 tabular-nums"
+              title={`${ahead} ahead`}
             >
               <Icon icon={iconPush} size={12} />
               {badgeCount(ahead)}

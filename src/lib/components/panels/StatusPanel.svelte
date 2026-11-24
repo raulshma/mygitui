@@ -97,6 +97,7 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
   import { openPanelPopout } from "$lib/layout/popout";
   import { visibleRange } from "$lib/components/graph/layout";
   import { appIcon } from "$lib/components/icons/library.svelte";
+  import { pullCurrentBranch, pushCurrentBranch } from "$lib/git/sync";
   import {
     buildStatusIndex,
     diffScopeForSection,
@@ -2060,6 +2061,35 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {/if}
       {/snippet}
       {#snippet trailing()}
+        {#if status && (status.ahead > 0 || status.behind > 0)}
+          <Hint label={status.behind > 0 ? (status.ahead > 0 ? `Sync: ${status.behind} to pull, ${status.ahead} to push` : `Pull ${status.behind} commit${status.behind === 1 ? "" : "s"}`) : `Push ${status.ahead} commit${status.ahead === 1 ? "" : "s"}`}>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                class="sync-pill inline-flex h-6 items-center gap-ui-1 rounded-full px-2 text-ui-micro font-medium tabular-nums text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                type="button"
+                aria-label={status.behind > 0 ? (status.ahead > 0 ? `${status.behind} to pull, ${status.ahead} to push` : `${status.behind} to pull`) : `${status.ahead} to push`}
+                onclick={async () => {
+                  if (!repoId) return;
+                  try {
+                    if (status.behind > 0) {
+                      await pullCurrentBranch(repoId, status.branch);
+                    } else if (status.ahead > 0) {
+                      await pushCurrentBranch(repoId, status.branch);
+                    }
+                    refreshAll();
+                  } catch (e) {
+                    toast(`Sync failed: ${describeError(e)}`, { kind: "error" });
+                  }
+                }}
+              >
+                <Icon icon={iconSync} size={13} />
+                <span class="inline-flex items-center gap-0.5"><Icon icon={iconBehind} size={11} />{status.behind}</span>
+                <span class="inline-flex items-center gap-0.5"><Icon icon={iconAhead} size={11} />{status.ahead}</span>
+              </button>
+            {/snippet}
+          </Hint>
+        {/if}
         <Hint label="Refresh changes">
           {#snippet child({ props })}
             <Button
@@ -2180,34 +2210,50 @@ import { fileIconPreferences } from "$lib/components/icons/fileIconPreferences.s
         {#if status.bisecting}<Badge variant="secondary" class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Bisect in progress</Badge>{/if}
         {#if status.detached}<Badge variant="secondary" class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-muted text-foreground">Detached HEAD</Badge>{/if}
         {#if status.ahead > 0}
-          <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}>
+          <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push — click to push`}>
             {#snippet child({ props })}
-              <Badge
+              <button
                 {...props}
-                variant="secondary"
-                class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary-ink tabular-nums"
-                role="img"
+                type="button"
+                class="gap-ui-2 inline-flex items-center rounded-full px-2 py-px h-auto text-ui-micro bg-primary/10 text-primary-ink tabular-nums cursor-pointer hover:bg-primary/20 transition-colors border-0"
                 aria-label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}
+                onclick={async () => {
+                  if (!repoId) return;
+                  try {
+                    await pushCurrentBranch(repoId, status.branch);
+                    refreshAll();
+                  } catch (e) {
+                    toast(`Push failed: ${describeError(e)}`, { kind: "error" });
+                  }
+                }}
               >
                 <Icon icon={iconAhead} size={12} />
                 {status.ahead} to push
-              </Badge>
+              </button>
             {/snippet}
           </Hint>
         {/if}
         {#if status.behind > 0}
-          <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}>
+          <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull — click to pull`}>
             {#snippet child({ props })}
-              <Badge
+              <button
                 {...props}
-                variant="secondary"
-                class="gap-ui-2 rounded-full px-2 py-px h-auto text-ui-micro bg-accent text-accent-foreground tabular-nums"
-                role="img"
+                type="button"
+                class="gap-ui-2 inline-flex items-center rounded-full px-2 py-px h-auto text-ui-micro bg-accent text-accent-foreground tabular-nums cursor-pointer hover:bg-accent/80 transition-colors border-0"
                 aria-label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}
+                onclick={async () => {
+                  if (!repoId) return;
+                  try {
+                    await pullCurrentBranch(repoId, status.branch);
+                    refreshAll();
+                  } catch (e) {
+                    toast(`Pull failed: ${describeError(e)}`, { kind: "error" });
+                  }
+                }}
               >
                 <Icon icon={iconBehind} size={12} />
                 {status.behind} to pull
-              </Badge>
+              </button>
             {/snippet}
           </Hint>
         {/if}
