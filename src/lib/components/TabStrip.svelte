@@ -54,8 +54,11 @@
     showRecentRepos,
     SSH_SCHEME,
     tabStore,
+    repoRootFor,
     type Tab,
   } from "$lib/stores/tabs.svelte";
+  import { issueActivity } from "$lib/issues/activity.svelte";
+  import { normalizeIssueRoot } from "$lib/issues/prefs";
   import { showMenuAt, type MenuEntry } from "$lib/components/menu/contextMenuStore.svelte";
   import { remoteDevices } from "$lib/stores/remoteDevices.svelte";
   import { favoriteRepos } from "$lib/stores/favoriteRepos.svelte";
@@ -123,22 +126,59 @@
 
   /**
    * Background repos with GitHub attention (failing/degraded/warning/
-   * unpushed chips) show a small badge on their tab; the tooltip discloses
-   * the state and its staleness ("as of Xm ago" — the last successful
-   * snapshot fetch). The ACTIVE repo shows its state in the footer chips,
-   * so its tab stays badge-free.
+   * unpushed chips) show a small badge on their tab; the active repo's forge
+   * state stays in the footer. Unread Issues activity is merged into that
+   * badge (and may badge the active repo too), without masking forge failures.
    */
   let forgeNow = $state(Date.now());
-  const attentionById: Record<string, TabAttention | null> = $derived.by(() => {
+  const issueUnreadByRoot = $derived(issueActivity.unreadCounts());
+  // Activity outboxes hydrate lazily; do that in an effect rather than inside
+  // the badge derivation/template, where the store's cache write is forbidden.
+  $effect(() => {
+    for (const tab of tabStore.tabs) {
+      issueActivity.entries(repoRootFor(tab.id) ?? tab.root);
+    }
+  });
+  const forgeAttentionById: Record<string, TabAttention | null> = $derived.by(() => {
     const map: Record<string, TabAttention | null> = {};
     for (const tab of tabStore.tabs) {
-      if (tab.id === tabStore.activeId) continue;
-      map[tab.id] = forgeChips.attentionFor(tab.id, forgeNow);
+      map[tab.id] = tab.id === tabStore.activeId
+        ? null
+        : forgeChips.attentionFor(tab.id, forgeNow);
+    }
+    return map;
+  });
+  type RepoAttentionBadge = { count: number; issues: number; title: string; destructive: boolean };
+  const attentionById: Record<string, RepoAttentionBadge | null> = $derived.by(() => {
+    const map: Record<string, RepoAttentionBadge | null> = {};
+    for (const tab of tabStore.tabs) {
+      const forge = forgeAttentionById[tab.id];
+      const issues = issueUnreadByRoot[normalizeIssueRoot(repoRootFor(tab.id) ?? tab.root)] ?? 0;
+      if (forge?.attention !== true && issues === 0) {
+        map[tab.id] = null;
+        continue;
+      }
+      const lines: string[] = [];
+      if (forge?.attention === true) {
+        const asOf = forge.fetchedAtMs === null
+          ? ""
+          : ` — as of ${formatRelativeTime(Math.floor(forge.fetchedAtMs / 1000), {
+              now: Math.floor(forgeNow / 1000),
+            })}`;
+        lines.push(`GitHub: ${forge.text}${asOf}`);
+      }
+      if (issues > 0) lines.push(`Issues: ${issues} unread`);
+      map[tab.id] = {
+        count: (forge?.attention === true ? forge.count : 0) + issues,
+        issues,
+        title: lines.join("\n"),
+        destructive: forge?.attention === true,
+      };
     }
     return map;
   });
   const hasAttentionBadges = $derived(
-    Object.values(attentionById).some((entry) => entry?.attention === true),
+    Object.values(attentionById).some((entry) => entry !== null),
   );
   /** 30s ticker — staleness labels only need minute resolution. */
   $effect(() => {
@@ -148,17 +188,9 @@
     return () => clearInterval(timer);
   });
 
-  /** Tooltip line of one attention badge: state + staleness. */
+  /** Tooltip line(s) of one merged attention badge. */
   function attentionTitle(tabId: string): string {
-    const attention = attentionById[tabId];
-    if (attention === null || !attention.attention) return "";
-    const asOf =
-      attention.fetchedAtMs === null
-        ? ""
-        : ` — as of ${formatRelativeTime(Math.floor(attention.fetchedAtMs / 1000), {
-            now: Math.floor(forgeNow / 1000),
-          })}`;
-    return `GitHub: ${attention.text}${asOf}`;
+    return attentionById[tabId]?.title ?? "";
   }
 
   // -- middle-click close ------------------------------------------------------
@@ -311,6 +343,20 @@
   }
 </script>
 
+{#snippet repoAttentionBadge(tabId: string)}
+  {@const attention = attentionById[tabId]}
+  {#if attention !== null && attention !== undefined}
+    <span
+      class="forge-attention ml-0.5 inline-flex flex-none items-center rounded-full px-1 text-[10px] leading-[1.5] font-medium tabular-nums {attention.destructive ? 'bg-destructive/15 text-destructive' : 'bg-primary/15 text-primary'}"
+      role="img"
+      aria-label={attentionTitle(tabId)}
+      title={attentionTitle(tabId)}
+    >
+      ●{badgeCount(attention.count)}
+    </span>
+  {/if}
+{/snippet}
+
 <div class="tabbar flex min-w-0 flex-1 items-stretch">
   <Hint label="Show the Overview (all repositories)" side="bottom">
     {#snippet child({ props })}
@@ -358,6 +404,7 @@
               aria-label={changedLabel(tabBadge(activeTab.status).changed)}
             ></span>
           {/if}
+          {@render repoAttentionBadge(activeTab.id)}
         {:else}
           <span class="name block min-w-0 truncate">Repositories</span>
         {/if}
@@ -390,6 +437,7 @@
                   aria-label={changedLabel(tabBadge(tab.status).changed)}
                 ></span>
               {/if}
+              {@render repoAttentionBadge(tab.id)}
             </span>
           </DropdownMenu.Item>
         {/each}
@@ -502,19 +550,7 @@
                   {#if badge.behind > 0}<span class="ab-behind">↓{badgeCount(badge.behind)}</span>{/if}
                 </span>
               {/if}
-              {#if attentionById[item.id]?.attention === true}
-                <!-- GitHub attention (E1): failing/degraded/warning/unpushed
-                     chips on a background repo — a dot + count; the state
-                     and its staleness ride in the tooltip. -->
-                <span
-                  class="forge-attention ml-0.5 inline-flex flex-none items-center rounded-full bg-destructive/15 px-1 text-[10px] leading-[1.5] font-medium text-destructive tabular-nums"
-                  role="img"
-                  aria-label={attentionTitle(item.id)}
-                  title={attentionTitle(item.id)}
-                >
-                  ●{badgeCount(attentionById[item.id]!.count)}
-                </span>
-              {/if}
+              {@render repoAttentionBadge(item.id)}
             </button>
           {/snippet}
         </Hint>

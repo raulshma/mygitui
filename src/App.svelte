@@ -6,7 +6,7 @@
    * repositories; clicking one (or dropping a folder / passing CLI paths)
    * opens it as a tab via the tab store.
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { initTheme } from "$lib/theme";
   import { appearance } from "$lib/theme/appearance.svelte";
@@ -29,6 +29,7 @@
   import { startWidthMode, stopWidthMode } from "$lib/layout/widthMode.svelte";
   import { flushHistoryPrefs } from "$lib/stores/historyPrefs";
   import { flushWorkspaceSessions } from "$lib/stores/workspaceSession.svelte";
+  import { issueSubscriptions } from "$lib/issues/subscriptions.svelte";
   import OverviewView from "$lib/overview/OverviewView.svelte";
   import OverviewToggle from "$lib/overview/OverviewToggle.svelte";
   import { overviewStore, wipeLegacyAgentKeys } from "$lib/overview/overviewStore.svelte";
@@ -379,6 +380,23 @@
     syncWindowTitle();
   });
 
+  // Issues polling has one application-owned coordinator. Track the open
+  // repositories and focused tab so activation promotes one lane to 60 s;
+  // the coordinator itself owns visibility/focus listeners and coalescing.
+  $effect(() => {
+    if (popout !== null) return;
+    const repoIds = tabStore.tabs.map((tab) => tab.id);
+    const activeId = tabStore.activeId;
+    untrack(() => {
+      void repoIds.length;
+      void activeId;
+      issueSubscriptions.syncLanes();
+      // Lanes created after startup (notably restored tabs) need an immediate
+      // visible catch-up rather than waiting for their first interval.
+      void issueSubscriptions.catchUp();
+    });
+  });
+
   // -- focus refresh ---------------------------------------------------------
   //
   // The backend FS watcher gives up permanently after 3 restart attempts;
@@ -549,6 +567,11 @@
         for (const unlisten of cleanups) unlisten();
       };
     }
+
+    // Main-window Issues subscriptions: the coordinator owns its visibility
+    // and focus listeners, while the effect above owns lane reconciliation.
+    issueSubscriptions.start();
+    cleanups.push(() => issueSubscriptions.stop());
 
     // M4 F2: global keyboard shortcuts (Ctrl/Cmd+K palette et al).
     cleanups.push(startKeybinds((commandId) => {

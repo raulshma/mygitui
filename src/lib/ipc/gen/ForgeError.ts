@@ -13,6 +13,24 @@ export type ForgeError = {
  */
 kind: "NoGh" | "NotAuthed" | "AlreadyExists" | "NotRepo" | "RateLimited" | "Offline" | "Other", message: string, 
 /**
- * For `AlreadyExists`: the existing PR's URL when parseable.
+ * For `AlreadyExists`: the existing PR's URL when parseable. Boxed along
+ * with the request id to keep command errors compact.
  */
-url: string | null, };
+url: string | null, 
+/**
+ * HTTP response status, when `gh api` received a response.
+ */
+http_status: number | null, 
+/**
+ * GitHub request correlation id (`X-GitHub-Request-Id`). Boxed to keep
+ * command `Result` error values below clippy's large-error threshold.
+ */
+request_id: string | null, 
+/**
+ * GitHub's `Retry-After` hint, in seconds.
+ */
+retry_after_seconds: number | null, 
+/**
+ * Unix timestamp from `X-RateLimit-Reset`, when present.
+ */
+rate_limit_reset_at: number | null, };

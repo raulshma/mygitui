@@ -786,6 +786,15 @@ export const COMMANDS: Command[] = [
     run: (ctx) => focusPanel(panel, ctx),
   })),
 
+  {
+    id: "issues.open",
+    title: "Open Issues",
+    section: "Panels",
+    keywords: ["github", "browse", "issue"],
+    when: (ctx) => ctx.repoId !== null,
+    run: (ctx) => emitUiEvent("issues-open", { repoId: ctx.repoId! }),
+  },
+
   // -- Files (workdir browser / viewer / editor) -----------------------------
   {
     id: "files.quick-open",

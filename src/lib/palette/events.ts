@@ -157,6 +157,13 @@ export interface UiEventMap {
    * Emitted by the actions panel when a run starts or is selected.
    */
   "action-run-open": { repoId: string; runId: string };
+  /** Open the repository's Issues center, optionally targeting an issue/comment. */
+  "issues-open": {
+    repoId: string;
+    issueNumber?: number;
+    commentId?: number;
+    requestNonce?: number;
+  };
   /**
    * Open a workdir file in the file workspace: `{ repoId, path }`
    * (workdir-relative, forward slashes). Emitted by the Files panel tree,

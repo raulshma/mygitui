@@ -12,6 +12,7 @@
 //! - [`branches`] — branches/tags/remotes/submodules
 //! - [`workspace`] — .gitignore quick-add
 //! - [`forge`] — gh-assisted GitHub flow
+//! - [`issues`] — GitHub Issues REST workspace
 //! - [`misc`] — CLI args, accent color, actions, project detection
 //!
 //! Engine calls run on the blocking pool (`tauri::async_runtime`) because
@@ -23,6 +24,7 @@ pub(crate) mod branches;
 pub(crate) mod diff;
 pub(crate) mod forge;
 pub(crate) mod health;
+pub(crate) mod issues;
 pub(crate) mod log;
 pub(crate) mod merge;
 pub(crate) mod misc;
@@ -39,8 +41,18 @@ use tokio::sync::oneshot;
 
 use crate::engine::git_engine::{CheckoutProgress, EngineError};
 use crate::engine::types::{IpcErrorEnvelope, RepoId};
+use crate::forge::ForgeRepo;
 use crate::ops::OpCtx;
 use crate::repo::{RepoHandle, RepoManager};
+
+/// Shared forge execution context. Local repositories run gh in their workdir;
+/// device repositories run gh and git on the device with its own auth.
+pub(crate) fn forge_repo_of(handle: &Arc<RepoHandle>) -> ForgeRepo {
+    ForgeRepo {
+        root: handle.root.clone(),
+        remote: handle.remote().map(Arc::clone),
+    }
+}
 
 /// Resolve an open repo's handle or fail the command with the standard
 /// "repo not open" error.

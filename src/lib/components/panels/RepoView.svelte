@@ -162,7 +162,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   } from "$lib/layout/layoutModel";
   import { layouts } from "$lib/layout/layout.svelte";
   // §10 responsive matrix: per-mode overlay drawers + the reactive mode.
-  import { widthMode } from "$lib/layout/widthMode.svelte";
+  import { widthMode, type WidthMode } from "$lib/layout/widthMode.svelte";
   import {
     drawerPanelLabel,
     isDrawerPanel,
@@ -262,7 +262,13 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     | { kind: "compare"; result: CompareResult }
     | { kind: "workflowRun"; runId: number }
     | { kind: "actionRun"; runId: string }
-    | { kind: "files" };
+    | { kind: "files" }
+    | {
+        kind: "issues";
+        selectedIssueNumber: number | null;
+        commentId?: number;
+        requestNonce?: number;
+      };
   const EMPTY_PANE: CenterPane = { kind: "empty" };
 
   /** The center editor's mode (see {@link CenterPane}). */
@@ -295,6 +301,19 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
   );
   const actionRunId = $derived(center.kind === "actionRun" ? center.runId : null);
   const filesMode = $derived(center.kind === "files");
+  const issuesPane = $derived(center.kind === "issues" ? center : null);
+  const issuesRepoId = $derived(issuesPane === null ? null : repoId);
+  const issuesRoot = $derived(issuesPane === null ? "" : root);
+  const issueNumber = $derived(issuesPane?.selectedIssueNumber ?? null);
+  const issueCommentId = $derived(issuesPane?.commentId);
+
+  /** Ephemeral return target; unlike the selected issue it is never persisted. */
+  let issuesReturnPane = $state<CenterPane | null>(null);
+  let issuesReturnDiffRepoId = $state<string | null>(null);
+  let issuesReturnDiffRoot = $state<string | null>(null);
+  let issuesReturnDiffRepoName = $state<string | null>(null);
+  /** Runtime outbox node ids predate the public numeric comment-id contract. */
+  let issuesRuntimeCommentId = $state<string | undefined>(undefined);
 
   // Diff-stream plumbing (output state of the working-copy diff stream —
   // only meaningful while `center` is in the "diff" mode).
@@ -383,7 +402,9 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           ? "diff"
           : center.kind === "commit"
             ? "commit"
-            : "empty";
+            : center.kind === "issues"
+              ? "issues"
+              : "empty";
     workspaceSession.patch(root, {
       openFiles: openFiles.map((f) => f.path),
       activeFile,
@@ -394,6 +415,7 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
           : [],
       activeDiffPath: center.kind === "diff" ? center.activePath : null,
       commitSha: center.kind === "commit" ? center.commit.sha : null,
+      issueNumber: center.kind === "issues" ? center.selectedIssueNumber : null,
     });
     workspaceSession.setCommit(
       root,
@@ -605,6 +627,16 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** The reactive width mode (mirrors `<html data-width-mode>`). */
   const currentWidthMode = $derived(widthMode.current);
+
+  let previousWidthMode = $state<WidthMode | undefined>(undefined);
+  $effect(() => {
+    const mode = currentWidthMode;
+    const previous = previousWidthMode;
+    previousWidthMode = mode;
+    if (mode === "stacked" && previous !== "stacked" && center.kind === "issues") {
+      workspaceStacked.setActive("diff");
+    }
+  });
 
   // --- §10 Stacked (<800): full-screen routes over the same hosts ----------
   //
@@ -1804,6 +1836,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         if (target !== repoId) return;
         openActionRun(runId);
       }),
+      onUiEvent("issues-open", ({ repoId: target, issueNumber: number, commentId: linkedComment, requestNonce }) => {
+        if (target !== repoId) return;
+        openIssues(number, linkedComment, requestNonce);
+      }),
       onUiEvent("open-conflicts", () => {
         if (opSource) conflictEditorOpen = true;
       }),
@@ -1890,6 +1926,11 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     historyActions = null;
     pendingHistorySha = null;
     conflictEditorOpen = false;
+    issuesReturnPane = null;
+    issuesReturnDiffRepoId = null;
+    issuesReturnDiffRoot = null;
+    issuesReturnDiffRepoName = null;
+    issuesRuntimeCommentId = undefined;
     // Status-derived flags are repo-scoped too: a stale `hasSubmodules`
     // from repo A would render repo A's submodule accordions against repo
     // B's state until the next status snapshot landed.
@@ -1957,6 +1998,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
         syncSession();
       }
       // Cold launch: leave the center empty; HistoryView's resolve owns it.
+    } else if (session.centerKind === "issues") {
+      center = { kind: "issues", selectedIssueNumber: session.issueNumber ?? null };
+      issuesRuntimeCommentId = undefined;
+      syncSession();
     }
   }
 
@@ -2053,7 +2098,112 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   // --- Center editor selection ------------------------------------------------
 
-  /** Opens a GitHub Actions run in the main editor (forge sidebar event). */
+  /** Opens the Issues center, retaining the current pane as an ephemeral return target. */
+  function openIssues(
+    selectedIssueNumber?: number,
+    commentId?: number | string,
+    requestNonce?: number,
+  ): void {
+    const incomingComment = commentId as number | string | undefined;
+    const numericComment =
+      typeof incomingComment === "number" &&
+      Number.isInteger(incomingComment) &&
+      incomingComment > 0
+        ? incomingComment
+        : undefined;
+    const issue =
+      typeof selectedIssueNumber === "number" &&
+      Number.isInteger(selectedIssueNumber) &&
+      selectedIssueNumber > 0
+        ? selectedIssueNumber
+        : null;
+
+    if (center.kind !== "issues") {
+      issuesReturnPane = center;
+      issuesReturnDiffRepoId = center.kind === "diff" ? diffRepoId : null;
+      issuesReturnDiffRoot = center.kind === "diff" ? diffRoot : null;
+      issuesReturnDiffRepoName = center.kind === "diff" ? diffRepoName : null;
+      diffToken++;
+      diffFiles = [];
+      diffLoading = false;
+      diffError = null;
+      diffRepoId = null;
+      diffRoot = null;
+      diffRepoName = null;
+      diffScrollSeed = null;
+      diffRowSeed = null;
+    }
+    issuesRuntimeCommentId =
+      numericComment === undefined && typeof incomingComment === "string"
+        ? incomingComment
+        : undefined;
+    center = {
+      kind: "issues",
+      selectedIssueNumber: issue,
+      commentId: numericComment,
+      requestNonce,
+    };
+    syncSession();
+    focusPanel("diff");
+  }
+
+  function selectIssue(issue: number): void {
+    if (center.kind !== "issues") return;
+    center = { kind: "issues", selectedIssueNumber: issue };
+    issuesRuntimeCommentId = undefined;
+    syncSession();
+  }
+
+  function backFromIssue(): void {
+    if (center.kind !== "issues") return;
+    center = { kind: "issues", selectedIssueNumber: null };
+    issuesRuntimeCommentId = undefined;
+    syncSession();
+  }
+
+  function closeIssues(): void {
+    if (center.kind !== "issues") return;
+    const returnPane = issuesReturnPane ?? EMPTY_PANE;
+    const returnRepoId = issuesReturnDiffRepoId;
+    const returnRoot = issuesReturnDiffRoot;
+    const returnRepoName = issuesReturnDiffRepoName;
+    issuesReturnPane = null;
+    issuesReturnDiffRepoId = null;
+    issuesReturnDiffRoot = null;
+    issuesReturnDiffRepoName = null;
+    issuesRuntimeCommentId = undefined;
+
+    if (returnPane.kind === "diff") {
+      const session = workspaceSession.get(root);
+      const scroll = session?.scrolls[diffScrollKey(returnPane.activePath)] ?? null;
+      const row = session?.scrolls[diffRowKey(returnPane.activePath)] ?? null;
+      void streamDiffTabs(
+        returnPane.tabs,
+        returnPane.activePath,
+        returnRepoId ?? undefined,
+        returnRoot ?? undefined,
+        returnRepoName ?? undefined,
+        scroll,
+        row,
+      );
+      focusPanel("diff");
+      return;
+    }
+
+    diffToken++;
+    diffFiles = [];
+    diffLoading = false;
+    diffError = null;
+    diffRepoId = null;
+    diffRoot = null;
+    diffRepoName = null;
+    diffScrollSeed = null;
+    diffRowSeed = null;
+    center = returnPane;
+    syncSession();
+    focusPanel("diff");
+  }
+
   function openWorkflowRun(runId: number): void {
     diffToken++;
     diffFiles = [];
@@ -2429,6 +2579,10 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
 
   /** Clears the center editor (close button or the empty-state reset). */
   function clearEditor(): void {
+    if (center.kind === "issues") {
+      closeIssues();
+      return;
+    }
     diffToken++;
     center = EMPTY_PANE;
     diffFiles = [];
@@ -2697,6 +2851,14 @@ const quickOpenImport = lazyImport(() => import("$lib/components/files/QuickOpen
     historyActions={historyActions}
     workflowRunId={workflowRunId}
     actionRunId={actionRunId}
+    {issuesRepoId}
+    issuesRoot={issuesRoot}
+    {issueNumber}
+    commentId={issuesRuntimeCommentId ?? issueCommentId}
+    requestNonce={issuesPane?.requestNonce}
+    onSelectIssue={selectIssue}
+    onBackIssues={backFromIssue}
+    onCloseIssues={closeIssues}
     entryIndex={diffEntry && diffRepoId === repoId
       ? changeEntries.findIndex((e) => e.path === diffEntry?.path)
       : null}

@@ -31,6 +31,8 @@ export class AsyncMap<T> {
   #seqs = new Map<string, number>();
   /** When each key last landed a ready result (`ensure`'s TTL clock). */
   #readyAt = new Map<string, number>();
+  /** Read-through requests shared by concurrent `ensure` callers. */
+  #ensuring = new Map<string, Promise<T | null>>();
 
   /** The entry for `key`, or idle when never fetched. */
   get(key: string): AsyncData<T> {
@@ -115,7 +117,15 @@ export class AsyncMap<T> {
       const readyAt = this.#readyAt.get(key);
       if (readyAt !== undefined && Date.now() - readyAt < ttlMs) return entry.data;
     }
-    return this.run(key, fn, { silent: entry.state === "loading", onError: opts?.onError });
+    const pending = this.#ensuring.get(key);
+    if (pending !== undefined) return pending;
+    const request = this.run(key, fn, { silent: entry.state === "loading", onError: opts?.onError });
+    this.#ensuring.set(key, request);
+    try {
+      return await request;
+    } finally {
+      if (this.#ensuring.get(key) === request) this.#ensuring.delete(key);
+    }
   }
 
   /**
@@ -125,6 +135,7 @@ export class AsyncMap<T> {
   reset(key: string): void {
     this.#seqs.set(key, (this.#seqs.get(key) ?? 0) + 1);
     this.#readyAt.delete(key);
+    this.#ensuring.delete(key);
     const entries = { ...this.#entries };
     delete entries[key];
     this.#entries = entries;
@@ -140,6 +151,7 @@ export class AsyncMap<T> {
     for (const key of Object.keys(entries)) {
       if (key.startsWith(prefix)) {
         this.#seqs.set(key, (this.#seqs.get(key) ?? 0) + 1);
+        this.#ensuring.delete(key);
         delete entries[key];
         changed = true;
       }

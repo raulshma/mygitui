@@ -56,6 +56,8 @@
     null;
   let workflowRunImport: Promise<typeof import("$lib/components/forge/WorkflowRunView.svelte")> | null =
     null;
+  let issuesCenterImport: Promise<typeof import("$lib/components/issues/IssuesCenter.svelte")> | null =
+    null;
   function loadFileWorkspace() {
     return (fileWorkspaceImport ??= import("$lib/components/files/FileWorkspace.svelte"));
   }
@@ -64,6 +66,9 @@
   }
   function loadWorkflowRun() {
     return (workflowRunImport ??= import("$lib/components/forge/WorkflowRunView.svelte"));
+  }
+  function loadIssuesCenter() {
+    return (issuesCenterImport ??= import("$lib/components/issues/IssuesCenter.svelte"));
   }
 
   let {
@@ -82,6 +87,14 @@
     historyActions = null,
     workflowRunId = null,
     actionRunId = null,
+    issuesRepoId = null,
+    issuesRoot = "",
+    issueNumber = null,
+    commentId = undefined,
+    requestNonce = undefined,
+    onSelectIssue = undefined,
+    onBackIssues = undefined,
+    onCloseIssues = undefined,
     entryIndex = null,
     entryCount = 0,
     files = null,
@@ -157,6 +170,15 @@
     actionRunId?: string | null;
     /** GitHub Actions run taking over the editor. */
     workflowRunId?: number | null;
+    /** Owning repository for the Issues center (never a diff/submodule target). */
+    issuesRepoId?: string | null;
+    issuesRoot?: string;
+    issueNumber?: number | null;
+    commentId?: number | string;
+    requestNonce?: number;
+    onSelectIssue?: (issueNumber: number) => void;
+    onBackIssues?: () => void;
+    onCloseIssues?: () => void;
     /** 0-based position of `entry` in the changed-file list (null = n/a). */
     entryIndex?: number | null;
     /** Total changed files (drives prev/next navigation availability). */
@@ -378,6 +400,31 @@
         onPopout={onPopoutWorkflowRun}
       />
     {/await}
+  {:else if issuesRepoId !== null}
+    {#key `${issuesRepoId}:${issuesRoot}`}
+      {#await loadIssuesCenter()}
+        <p
+          class="estate estate-loading m-auto inline-flex items-center gap-ui-4 text-ui-base text-muted-foreground"
+          role="status"
+        >
+          <Spinner class="size-4" role="presentation" aria-hidden="true" />
+          Loading issues…
+        </p>
+      {:then IssuesCenterModule}
+        <IssuesCenterModule.default
+          repoId={issuesRepoId}
+          root={issuesRoot}
+          selectedIssueNumber={issueNumber}
+          {commentId}
+          {requestNonce}
+          onSelectIssue={(number) => onSelectIssue?.(number)}
+          onBack={() => onBackIssues?.()}
+          onClose={() => onCloseIssues?.()}
+        />
+      {:catch err}
+        <p class="estate m-auto text-ui-base text-muted-foreground" role="alert">Failed to load Issues: {String(err)}</p>
+      {/await}
+    {/key}
   {:else if commit}
     <CommitDetail
       {repoId}

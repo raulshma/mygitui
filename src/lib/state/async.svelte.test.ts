@@ -69,6 +69,25 @@ describe("AsyncMap", () => {
     expect(map.get("k")).toEqual({ state: "ready", data: 3 });
   });
 
+  it("coalesces concurrent ensure calls into one in-flight request", async () => {
+    const map = new AsyncMap<number>();
+    let release!: (value: number) => void;
+    let calls = 0;
+    const first = map.ensure("k", () => {
+      calls += 1;
+      return new Promise<number>((resolve) => (release = resolve));
+    }, 1_000);
+    const second = map.ensure("k", () => {
+      calls += 1;
+      return Promise.resolve(8);
+    }, 1_000);
+    expect(calls).toBe(1);
+    release(7);
+    await expect(first).resolves.toBe(7);
+    await expect(second).resolves.toBe(7);
+    expect(map.get("k")).toEqual({ state: "ready", data: 7 });
+  });
+
   it("drops a superseded run: its result never lands and it resolves null", async () => {
     const map = new AsyncMap<number>();
     let releaseA!: (v: number) => void;

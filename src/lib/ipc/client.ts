@@ -61,15 +61,26 @@ import type {
   ForgeContext,
   ForgeFailure,
   ForgeFailureKind,
-  ForgeIssue,
-  ForgeIssueComment,
-  ForgeIssueDetail,
   ForgeNotification,
   ForgeStatus,
   GitignoreTemplate,
   HookInfo,
   HostKeyRequestEvent,
   IpcErrorEnvelope,
+  IssueActivityBatch,
+  IssueActivityComment,
+  IssueComment,
+  IssueCommentPage,
+  IssueDetail,
+  IssueIdentity,
+  IssueLabel,
+  IssueListPage,
+  IssueListQuery,
+  IssueMetadata,
+  IssueMilestone,
+  IssueSummary,
+  IssueType,
+  IssueUser,
   KnownHostKey,
   LfsLock,
   LfsStatus,
@@ -87,7 +98,6 @@ import type {
   OpencodeDetection,
   OpencodeServeState,
   PreviewInfo,
-  IssueCreated,
   PrCreated,
   PrInfo,
   ProjectInfo,
@@ -139,16 +149,26 @@ export type {
   ForgeContext,
   ForgeFailure,
   ForgeFailureKind,
-  ForgeIssue,
-  ForgeIssueComment,
-  ForgeIssueDetail,
   ForgeNotification,
   ForgePrFile,
   ForgeReviewThread,
   ForgeSnapshot,
   ForgeStatus,
   GitignoreTemplate,
-  IssueCreated,
+  IssueActivityBatch,
+  IssueActivityComment,
+  IssueComment,
+  IssueCommentPage,
+  IssueDetail,
+  IssueIdentity,
+  IssueLabel,
+  IssueListPage,
+  IssueListQuery,
+  IssueMetadata,
+  IssueMilestone,
+  IssueSummary,
+  IssueType,
+  IssueUser,
   PrCreated,
   PrInfo,
   ProjectInfo,
@@ -176,7 +196,12 @@ export class IpcError extends Error {
   /** Envelope pass-through context when the backend attached one. */
   readonly detail?: string;
 
-  constructor(command: string, message: string, code?: string, detail?: string) {
+  constructor(
+    command: string,
+    message: string,
+    code?: string,
+    detail?: string,
+  ) {
     super(message);
     this.name = "IpcError";
     this.command = command;
@@ -353,7 +378,8 @@ async function runStream<T>(
   emptyPage: T,
   onPage: (page: T) => void,
 ): Promise<void> {
-  const usingDefaults = transportOverride === null && channelFactoryOverride === null;
+  const usingDefaults =
+    transportOverride === null && channelFactoryOverride === null;
   if (usingDefaults && !isTauri()) {
     onPage(emptyPage);
     return;
@@ -390,7 +416,10 @@ export function closeRepo(repoId: RepoId): Promise<void> {
  * batch's changed paths) makes the backend rescan only those paths and
  * merge them into its cached status; omitted = full rescan.
  */
-export function repoStatus(repoId: RepoId, paths?: string[]): Promise<RepoStatus> {
+export function repoStatus(
+  repoId: RepoId,
+  paths?: string[],
+): Promise<RepoStatus> {
   const args: Record<string, unknown> = { repo_id: repoId };
   if (paths !== undefined) args.paths = paths;
   return call<RepoStatus>("repo_status", args);
@@ -415,7 +444,11 @@ export function repoRefs(repoId: RepoId): Promise<[string, string][]> {
  * Merge base of two commitishes — the three-dot compare's `A...B` anchor.
  * `null` when the histories are unrelated (git merge-base exits 1 there).
  */
-export function repoMergeBase(repoId: RepoId, a: string, b: string): Promise<string | null> {
+export function repoMergeBase(
+  repoId: RepoId,
+  a: string,
+  b: string,
+): Promise<string | null> {
   return call<string | null>("repo_merge_base", { repo_id: repoId, a, b });
 }
 
@@ -462,7 +495,11 @@ export function repoDiff(
   ignoreWs?: boolean,
 ): Promise<FileDiff[]> {
   // `new` is a reserved word, so it can only appear as a property key.
-  const args: Record<string, unknown> = { repo_id: repoId, old: oldSide, new: newSide };
+  const args: Record<string, unknown> = {
+    repo_id: repoId,
+    old: oldSide,
+    new: newSide,
+  };
   const query = diffQuery(paths, ignoreWs);
   if (query !== undefined) args.query = query;
   return call<FileDiff[]>("repo_diff", args);
@@ -482,16 +519,15 @@ export function streamDiff(
   consumerId?: string,
   ignoreWs?: boolean,
 ): Promise<void> {
-  const args: Record<string, unknown> = { repo_id: repoId, old: oldSide, new: newSide };
+  const args: Record<string, unknown> = {
+    repo_id: repoId,
+    old: oldSide,
+    new: newSide,
+  };
   const query = diffQuery(paths, ignoreWs);
   if (query !== undefined) args.query = query;
   if (consumerId !== undefined) args.consumer_id = consumerId;
-  return runStream<FileDiff[]>(
-    "repo_diff_stream",
-    args,
-    [],
-    onFilePage,
-  );
+  return runStream<FileDiff[]>("repo_diff_stream", args, [], onFilePage);
 }
 
 /**
@@ -521,12 +557,7 @@ export function streamFileHistory(
 ): Promise<void> {
   const args: Record<string, unknown> = { repo_id: repoId, path };
   if (consumerId !== undefined) args.consumer_id = consumerId;
-  return runStream<LogPage>(
-    "repo_file_history",
-    args,
-    EMPTY_LOG_PAGE,
-    onPage,
-  );
+  return runStream<LogPage>("repo_file_history", args, EMPTY_LOG_PAGE, onPage);
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +682,11 @@ export async function pickSaveFile(
   if (!isTauri()) return null;
   try {
     const dialog = await import("@tauri-apps/plugin-dialog");
-    const path = await dialog.save({ title, defaultPath: defaultName, filters });
+    const path = await dialog.save({
+      title,
+      defaultPath: defaultName,
+      filters,
+    });
     return typeof path === "string" && path !== "" ? path : null;
   } catch (err) {
     console.warn("[ipc] save picker failed:", err);
@@ -664,7 +699,10 @@ export async function pickSaveFile(
  * the same pickSaveFile-then-backend-write flow as the archive export).
  * Rejects with the backend's error text on failure.
  */
-export function exportText(destination: string, contents: string): Promise<void> {
+export function exportText(
+  destination: string,
+  contents: string,
+): Promise<void> {
   return invokeTauri("export_text", { destination, contents });
 }
 
@@ -774,7 +812,10 @@ export function stageAll(repoId: RepoId, unstage: boolean): Promise<void> {
 }
 
 /** Commits the index; resolves with the new commit sha. */
-export function commit(repoId: RepoId, options: CommitOptions): Promise<string> {
+export function commit(
+  repoId: RepoId,
+  options: CommitOptions,
+): Promise<string> {
   return call<string>("commit", { repo_id: repoId, options });
 }
 
@@ -1146,24 +1187,44 @@ export async function conflictResolve(
     resolution,
     // Same base64 wire format as `repo_write_file`'s `content_b64` — a
     // compact string over the JSON bridge instead of a ~7-8x number array.
-    custom_content_b64: customContent ? bytesToBase64(customContent) : undefined,
+    custom_content_b64: customContent
+      ? bytesToBase64(customContent)
+      : undefined,
   });
 }
 
-export async function cherryPick(repoId: string, shas: string[]): Promise<MergeResult> {
+export async function cherryPick(
+  repoId: string,
+  shas: string[],
+): Promise<MergeResult> {
   return invokeTauri("cherry_pick", { repo_id: repoId, shas });
 }
 
-export async function revertCommits(repoId: string, shas: string[]): Promise<MergeResult> {
+export async function revertCommits(
+  repoId: string,
+  shas: string[],
+): Promise<MergeResult> {
   return invokeTauri("revert", { repo_id: repoId, shas });
 }
 
-export async function resetRepo(repoId: string, kind: ResetKind, to: string): Promise<void> {
+export async function resetRepo(
+  repoId: string,
+  kind: ResetKind,
+  to: string,
+): Promise<void> {
   return invokeTauri("reset", { repo_id: repoId, kind, to });
 }
 
-export async function rebaseStart(repoId: string, plan: RebaseStep[], onto?: string): Promise<RebaseState> {
-  return invokeTauri("rebase_start", { repo_id: repoId, plan, onto: onto ?? undefined });
+export async function rebaseStart(
+  repoId: string,
+  plan: RebaseStep[],
+  onto?: string,
+): Promise<RebaseState> {
+  return invokeTauri("rebase_start", {
+    repo_id: repoId,
+    plan,
+    onto: onto ?? undefined,
+  });
 }
 
 export async function rebaseState(repoId: string): Promise<RebaseState> {
@@ -1211,7 +1272,10 @@ export async function stashPush(
 }
 
 /** File diffs of one stash entry (base commit vs stash commit). */
-export async function stashShow(repoId: string, index: number): Promise<FileDiff[]> {
+export async function stashShow(
+  repoId: string,
+  index: number,
+): Promise<FileDiff[]> {
   return invokeTauri("stash_show", { repo_id: repoId, index });
 }
 
@@ -1250,7 +1314,11 @@ export async function stashDrop(repoId: string, index: number): Promise<void> {
   return invokeTauri("stash_drop", { repo_id: repoId, index });
 }
 
-export async function stashBranch(repoId: string, name: string, index: number): Promise<void> {
+export async function stashBranch(
+  repoId: string,
+  name: string,
+  index: number,
+): Promise<void> {
   return invokeTauri("stash_branch", { repo_id: repoId, name, index });
 }
 
@@ -1288,19 +1356,32 @@ export async function worktreeLock(
 }
 
 /** `git worktree unlock <path|name>`. */
-export async function worktreeUnlock(repoId: string, path: string): Promise<void> {
+export async function worktreeUnlock(
+  repoId: string,
+  path: string,
+): Promise<void> {
   return invokeTauri("worktree_unlock", { repo_id: repoId, path });
 }
 
-export async function worktreeRemove(repoId: string, name: string, force = false): Promise<void> {
+export async function worktreeRemove(
+  repoId: string,
+  name: string,
+  force = false,
+): Promise<void> {
   return invokeTauri("worktree_remove", { repo_id: repoId, name, force });
 }
 
-export async function reflog(repoId: string, name?: string): Promise<ReflogEntry[]> {
+export async function reflog(
+  repoId: string,
+  name?: string,
+): Promise<ReflogEntry[]> {
   return invokeTauri("reflog", { repo_id: repoId, name: name ?? undefined });
 }
 
-export async function checkpointCreate(repoId: string, reason: string): Promise<CheckpointInfo> {
+export async function checkpointCreate(
+  repoId: string,
+  reason: string,
+): Promise<CheckpointInfo> {
   return invokeTauri("checkpoint_create", { repo_id: repoId, reason });
 }
 
@@ -1308,12 +1389,21 @@ export async function checkpoints(repoId: string): Promise<CheckpointInfo[]> {
   return invokeTauri("checkpoints", { repo_id: repoId });
 }
 
-export async function checkpointRestore(repoId: string, id: string): Promise<void> {
+export async function checkpointRestore(
+  repoId: string,
+  id: string,
+): Promise<void> {
   return invokeTauri("checkpoint_restore", { repo_id: repoId, id });
 }
 
-export async function checkpointGc(repoId: string, olderThanDays: number): Promise<number> {
-  return invokeTauri("checkpoint_gc", { repo_id: repoId, older_than_days: olderThanDays });
+export async function checkpointGc(
+  repoId: string,
+  olderThanDays: number,
+): Promise<number> {
+  return invokeTauri("checkpoint_gc", {
+    repo_id: repoId,
+    older_than_days: olderThanDays,
+  });
 }
 
 export async function opsPreview(
@@ -1324,7 +1414,10 @@ export async function opsPreview(
   return invokeTauri("ops_preview", { repo_id: repoId, kind, params });
 }
 
-export async function guardCheckpoint(repoId: string, reason: string): Promise<CheckpointInfo> {
+export async function guardCheckpoint(
+  repoId: string,
+  reason: string,
+): Promise<CheckpointInfo> {
   return invokeTauri("guard_checkpoint", { repo_id: repoId, reason });
 }
 
@@ -1341,7 +1434,10 @@ export async function guardCheckpoint(repoId: string, reason: string): Promise<C
  * transport hands back an `ArrayBuffer` — no JSON number array in between
  * (a 2 MB file would serialize to ~8 MB of JSON and a 2M-element array).
  */
-export async function readFile(repoId: string, path: string): Promise<Uint8Array<ArrayBuffer>> {
+export async function readFile(
+  repoId: string,
+  path: string,
+): Promise<Uint8Array<ArrayBuffer>> {
   const payload = await invokeTauri<ArrayBuffer | number[]>("repo_read_file", {
     repo_id: repoId,
     path,
@@ -1758,18 +1854,26 @@ export function isForgeFailure(err: unknown): err is ForgeFailure {
 export class ForgeIpcError extends IpcError {
   readonly kind: ForgeFailureKind;
   readonly url: string | null;
+  readonly http_status: number | null;
+  readonly request_id: string | null;
+  readonly retry_after_seconds: number | null;
+  readonly rate_limit_reset_at: number | null;
 
   constructor(command: string, failure: ForgeFailure) {
     super(command, failure.message);
     this.name = "ForgeIpcError";
     this.kind = failure.kind;
     this.url = failure.url;
+    this.http_status = failure.http_status ?? null;
+    this.request_id = failure.request_id ?? null;
+    this.retry_after_seconds = failure.retry_after_seconds ?? null;
+    this.rate_limit_reset_at = failure.rate_limit_reset_at ?? null;
   }
 }
 
 /**
  * `call` variant that preserves the structured `ForgeError` rejection of the
- * forge commands: a rejection shaped `{kind, message, url}` becomes a
+ * forge commands: a rejection shaped `{kind, message, url, …metadata}` becomes a
  * {@link ForgeIpcError}; anything else normalizes to a plain `IpcError`.
  */
 async function callForge<T>(
@@ -1809,7 +1913,10 @@ export function forgeHosts(): Promise<string[]> {
  * {@link ForgeIpcError} — kind `"NotRepo"` when the remote is missing or not
  * GitHub (the FE's degraded "off" chip shows the reason verbatim).
  */
-export function forgeContext(repoId: RepoId, remote?: string | null): Promise<ForgeContext> {
+export function forgeContext(
+  repoId: RepoId,
+  remote?: string | null,
+): Promise<ForgeContext> {
   return callForge<ForgeContext>("forge_context", {
     repo_id: repoId,
     remote: remote ?? null,
@@ -2001,69 +2108,168 @@ export function prTemplate(repoId: RepoId): Promise<string | null> {
   return call<string | null>("pr_template", { repo_id: repoId });
 }
 
-/** Issue-list state filter (issues have no `merged`; mirrors the backend). */
-export type IssueStateFilter = "open" | "closed" | "all";
-
-/** Issues of the repo (`gh issue list --state <state> --json … --limit 50`). */
-export function issueList(
+// GitHub Issues REST workspace.
+export function issuesIdentity(
   repoId: RepoId,
-  state: IssueStateFilter = "open",
-): Promise<ForgeIssue[]> {
-  return call<ForgeIssue[]>("issue_list", { repo_id: repoId, state_filter: state });
+  remote: string,
+): Promise<IssueIdentity> {
+  return callForge<IssueIdentity>("issues_identity", {
+    repo_id: repoId,
+    remote,
+  });
 }
 
-/** One issue with its body and comments (`gh issue view <n> --json …`). */
-export function issueView(
+export function issuesList(
   repoId: RepoId,
+  remote: string,
+  query: IssueListQuery,
+): Promise<IssueListPage> {
+  return callForge<IssueListPage>("issues_list", {
+    repo_id: repoId,
+    remote,
+    query,
+  });
+}
+
+export function issuesDetail(
+  repoId: RepoId,
+  remote: string,
   number: number,
-): Promise<ForgeIssueDetail> {
-  return call<ForgeIssueDetail>("issue_view", { repo_id: repoId, number });
+): Promise<IssueDetail> {
+  return callForge<IssueDetail>("issues_detail", {
+    repo_id: repoId,
+    remote,
+    number,
+  });
 }
 
-/**
- * Creates an issue via `gh issue create` (the body is optional). Rejects
- * with {@link ForgeIpcError} like `prCreate`.
- */
-export function issueCreate(
+export function issuesComments(
   repoId: RepoId,
+  remote: string,
+  number: number,
+  page: number | null,
+  perPage: number,
+): Promise<IssueCommentPage> {
+  return callForge<IssueCommentPage>("issues_comments", {
+    repo_id: repoId,
+    remote,
+    number,
+    page,
+    per_page: perPage,
+  });
+}
+
+export function issuesMetadata(
+  repoId: RepoId,
+  remote: string,
+): Promise<IssueMetadata> {
+  return callForge<IssueMetadata>("issues_metadata", {
+    repo_id: repoId,
+    remote,
+  });
+}
+
+export function issuesCreate(
+  repoId: RepoId,
+  remote: string,
   title: string,
   body: string,
-): Promise<IssueCreated> {
-  return callForge<IssueCreated>("issue_create", {
+  labels: string[],
+  assignees: string[],
+  milestone: number | null,
+): Promise<IssueDetail> {
+  return callForge<IssueDetail>("issues_create", {
     repo_id: repoId,
+    remote,
     title,
+    body,
+    labels,
+    assignees,
+    milestone,
+  });
+}
+
+export function issuesUpdate(
+  repoId: RepoId,
+  remote: string,
+  number: number,
+  title: string,
+  body: string,
+  labels: string[],
+  assignees: string[],
+  milestone: number | null,
+): Promise<IssueDetail> {
+  return callForge<IssueDetail>("issues_update", {
+    repo_id: repoId,
+    remote,
+    number,
+    title,
+    body,
+    labels,
+    assignees,
+    milestone,
+  });
+}
+
+export function issuesComment(
+  repoId: RepoId,
+  remote: string,
+  number: number,
+  body: string,
+): Promise<IssueComment> {
+  return callForge<IssueComment>("issues_comment", {
+    repo_id: repoId,
+    remote,
+    number,
     body,
   });
 }
 
-/** Close an issue, optionally leaving a comment. */
-export function issueClose(
+export function issuesSetState(
   repoId: RepoId,
+  remote: string,
   number: number,
+  state: string,
   comment: string | null = null,
-): Promise<string> {
-  return callForge<string>("issue_close", { repo_id: repoId, number, comment });
+): Promise<IssueDetail> {
+  return callForge<IssueDetail>("issues_set_state", {
+    repo_id: repoId,
+    remote,
+    number,
+    state,
+    comment,
+  });
 }
 
-/** Reopen a closed issue, optionally leaving a comment. */
-export function issueReopen(
+export function issuesActivitySince(
   repoId: RepoId,
-  number: number,
-  comment: string | null = null,
-): Promise<string> {
-  return callForge<string>("issue_reopen", { repo_id: repoId, number, comment });
+  remote: string,
+  issueSince: string | null,
+  commentSince: string | null,
+): Promise<IssueActivityBatch> {
+  return callForge<IssueActivityBatch>("issues_activity_since", {
+    repo_id: repoId,
+    remote,
+    issue_since: issueSince,
+    comment_since: commentSince,
+  });
 }
 
 /**
  * The user's unread GitHub notification threads for the repo
  * (`gh api notifications`; GitHub's default listing is the unread set).
  */
-export function notificationsList(repoId: RepoId): Promise<ForgeNotification[]> {
+export function notificationsList(
+  repoId: RepoId,
+): Promise<ForgeNotification[]> {
   return call<ForgeNotification[]>("notifications_list", { repo_id: repoId });
 }
 
 /** Mark one notification thread read (`gh api threads/<id> -X PATCH`). */
-export function notificationMarkRead(repoId: RepoId, id: number): Promise<void> {
+export function notificationMarkRead(
+  repoId: RepoId,
+  id: number,
+): Promise<void> {
   return callForge<void>("notification_mark_read", { repo_id: repoId, id });
 }
 
@@ -2264,7 +2470,10 @@ export function commitSignature(
  * that need the body fetch it here on demand. `null` when the commit is
  * unknown (pruned / abbreviated sha miss).
  */
-export function commitMessage(repoId: RepoId, sha: string): Promise<string | null> {
+export function commitMessage(
+  repoId: RepoId,
+  sha: string,
+): Promise<string | null> {
   return call<string | null>("repo_commit_message", { repo_id: repoId, sha });
 }
 
@@ -2391,7 +2600,8 @@ function withPasswordDefault(state: OpencodeServeState): OpencodeServeState {
 
 /** Probes for a local opencode CLI (PATH scan + `--version`). */
 export async function opencodeDetect(): Promise<OpencodeDetection> {
-  if (!isTauri()) return { installed: false, path: null, version: null, major: null };
+  if (!isTauri())
+    return { installed: false, path: null, version: null, major: null };
   return call<OpencodeDetection>("opencode_detect", {});
 }
 
@@ -2403,9 +2613,13 @@ export async function opencodeServeStatus(): Promise<OpencodeServeState> {
 }
 
 /** Starts (or returns the running) managed opencode server. */
-export async function opencodeServeStart(cwd?: string): Promise<OpencodeServeState> {
+export async function opencodeServeStart(
+  cwd?: string,
+): Promise<OpencodeServeState> {
   if (!isTauri()) return emptyServeState();
-  const state = await call<OpencodeServeState>("opencode_serve_start", { cwd: cwd ?? null });
+  const state = await call<OpencodeServeState>("opencode_serve_start", {
+    cwd: cwd ?? null,
+  });
   return withPasswordDefault(state);
 }
 
@@ -2722,7 +2936,8 @@ export function updaterCheck(): Promise<UpdateInfo | null> {
 export function updaterDownloadAndInstall(
   onProgress: (progress: UpdateProgress) => void,
 ): Promise<void> {
-  const usingDefaults = transportOverride === null && channelFactoryOverride === null;
+  const usingDefaults =
+    transportOverride === null && channelFactoryOverride === null;
   if (usingDefaults && !isTauri()) return Promise.resolve();
   const factory = channelFactoryOverride ?? defaultChannelFactory;
   const channel = factory<UpdateProgress>((progress) => onProgress(progress));

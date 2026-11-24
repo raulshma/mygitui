@@ -133,10 +133,6 @@ export type { PrCreated } from "./gen/PrCreated";
 export type { PrInfo } from "./gen/PrInfo";
 export type { CheckInfo } from "./gen/CheckInfo";
 export type { ForgeError as ForgeFailure } from "./gen/ForgeError";
-export type { ForgeIssue } from "./gen/ForgeIssue";
-export type { ForgeIssueComment } from "./gen/ForgeIssueComment";
-export type { ForgeIssueDetail } from "./gen/ForgeIssueDetail";
-export type { IssueCreated } from "./gen/IssueCreated";
 export type { ForgeNotification } from "./gen/ForgeNotification";
 export type { WorkflowRun } from "./gen/WorkflowRun";
 export type { WorkflowStep } from "./gen/WorkflowStep";
@@ -151,6 +147,22 @@ export type { ForgeSnapshotHashes } from "./gen/ForgeSnapshotHashes";
 export type { ForgePrFile } from "./gen/ForgePrFile";
 export type { ForgeReviewThread } from "./gen/ForgeReviewThread";
 export type { ForgeReviewComment } from "./gen/ForgeReviewComment";
+
+// GitHub Issues REST workspace (Rust: src-tauri/src/forge/issues.rs).
+export type { IssueUser } from "./gen/IssueUser";
+export type { IssueLabel } from "./gen/IssueLabel";
+export type { IssueMilestone } from "./gen/IssueMilestone";
+export type { IssueType } from "./gen/IssueType";
+export type { IssueSummary } from "./gen/IssueSummary";
+export type { IssueDetail } from "./gen/IssueDetail";
+export type { IssueComment } from "./gen/IssueComment";
+export type { IssueActivityComment } from "./gen/IssueActivityComment";
+export type { IssueListQuery } from "./gen/IssueListQuery";
+export type { IssueListPage } from "./gen/IssueListPage";
+export type { IssueCommentPage } from "./gen/IssueCommentPage";
+export type { IssueMetadata } from "./gen/IssueMetadata";
+export type { IssueIdentity } from "./gen/IssueIdentity";
+export type { IssueActivityBatch } from "./gen/IssueActivityBatch";
 
 // FE-only: alias of the generated `CheckInfo["state"]` string-literal union
 // (the canonical check states; see docs/contracts.md M6).

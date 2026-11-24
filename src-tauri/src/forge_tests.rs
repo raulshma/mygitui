@@ -8,14 +8,14 @@
 use std::time::{Duration, Instant};
 
 use crate::forge::{
-    cap_log, extract_issue_url, extract_pull_url, forge_failure, issue_list_args,
-    normalize_issue_state, normalize_pr_state, normalize_run_status, notification_kind,
-    parse_github_remote, parse_issue_list_json, parse_issue_view_json, parse_notifications_json,
-    parse_pr_checks_json, parse_pr_checks_table, parse_pr_list_json, parse_workflow_list_json,
+    cap_log, extract_pull_url, forge_failure, normalize_pr_state, normalize_run_status,
+    notification_kind, parse_github_remote, parse_notifications_json, parse_pr_checks_json,
+    parse_pr_checks_table, parse_pr_list_json, parse_workflow_list_json,
     parse_workflow_run_detail_json, parse_workflow_runs_json, pick_pr_template, pr_edit_args,
-    pr_list_args, pr_merge_args, pr_number_of, prefix_job_log, run_program, strip_log_bom,
-    version_from_output, workflow_dispatch_args, workflow_runs_args, ForgeError, WorkflowInput,
-    KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS, PR_TEMPLATE_PATHS,
+    pr_list_args, pr_merge_args, pr_number_of, prefix_job_log, run_program, run_program_with_stdin,
+    strip_log_bom, version_from_output, workflow_dispatch_args, workflow_runs_args, ForgeError,
+    WorkflowInput, KIND_ALREADY_EXISTS, KIND_NOT_AUTHED, KIND_NO_GH, KIND_OTHER, MAX_LOG_CHARS,
+    PR_TEMPLATE_PATHS,
 };
 
 // ---------------------------------------------------------------------------
@@ -334,130 +334,6 @@ fn pr_template_sync_reads_the_first_existing_file() {
     assert_eq!(crate::forge::pr_template_sync(&dir), None);
     assert_eq!(crate::forge::pr_template_sync(&dir.join("nope")), None);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-// ---------------------------------------------------------------------------
-// Issues (list/view parsing + args)
-// ---------------------------------------------------------------------------
-
-const ISSUE_LIST_FIXTURE: &str = r#"[
-  {
-    "number": 42,
-    "title": "Panel flickers on open",
-    "state": "open",
-    "author": { "login": "octocat" },
-    "updatedAt": "2026-11-01T12:00:00Z",
-    "labels": [{ "name": "bug", "color": "ff0000" }, { "name": "ui" }]
-  },
-  {
-    "number": 41,
-    "title": "Old one",
-    "state": "closed"
-  },
-  { "title": "no number — skipped" }
-]"#;
-
-#[test]
-fn issue_list_json_parses_fixture_tolerantly() {
-    let issues = parse_issue_list_json(ISSUE_LIST_FIXTURE);
-    assert_eq!(issues.len(), 2, "entries without a number are skipped");
-    assert_eq!(issues[0].number, 42);
-    assert_eq!(issues[0].title, "Panel flickers on open");
-    assert_eq!(issues[0].state, "open");
-    assert_eq!(issues[0].author, "octocat");
-    assert_eq!(
-        issues[0].updated_at.as_deref(),
-        Some("2026-11-01T12:00:00Z")
-    );
-    assert_eq!(issues[0].labels, vec!["bug", "ui"]);
-    // Missing fields default instead of failing the entry.
-    assert_eq!(issues[1].author, "");
-    assert_eq!(issues[1].updated_at, None);
-    assert_eq!(issues[1].labels, Vec::<String>::new());
-    assert_eq!(issues[1].state, "closed");
-}
-
-#[test]
-fn issue_list_json_garbage_and_empty_yield_empty() {
-    assert!(parse_issue_list_json("").is_empty());
-    assert!(parse_issue_list_json("not json at all").is_empty());
-    assert!(parse_issue_list_json("{}").is_empty());
-    assert!(parse_issue_list_json("[]").is_empty());
-}
-
-#[test]
-fn issue_state_filter_and_list_args_are_normalized() {
-    assert_eq!(normalize_issue_state("").unwrap(), "open");
-    assert_eq!(normalize_issue_state(" OPEN ").unwrap(), "open");
-    assert_eq!(normalize_issue_state("closed").unwrap(), "closed");
-    assert_eq!(normalize_issue_state("all").unwrap(), "all");
-    assert!(
-        normalize_issue_state("merged").is_err(),
-        "issues have no merged"
-    );
-
-    let args = issue_list_args("all").unwrap();
-    assert_eq!(&args[..4], ["issue", "list", "--state", "all"]);
-    assert!(args.iter().any(|arg| arg.contains("updatedAt")));
-    let limit = args.iter().position(|arg| arg == "--limit").unwrap();
-    assert_eq!(args[limit + 1], "50");
-}
-
-const ISSUE_VIEW_FIXTURE: &str = r#"{
-  "number": 42,
-  "title": "Panel flickers on open",
-  "state": "open",
-  "author": { "login": "octocat" },
-  "body": "Steps to reproduce:\n1. open the panel\n2. watch it flicker",
-  "labels": [{ "name": "bug" }],
-  "url": "https://github.com/acme/widget/issues/42",
-  "updatedAt": "2026-11-01T12:00:00Z",
-  "comments": [
-    {
-      "author": { "login": "helga" },
-      "body": "Reproduced on Linux.",
-      "createdAt": "2026-11-02T09:00:00Z"
-    },
-    { "body": "Comment without an author." },
-    "not an object — skipped"
-  ]
-}"#;
-
-#[test]
-fn issue_view_json_parses_fixture_tolerantly() {
-    let detail = parse_issue_view_json(ISSUE_VIEW_FIXTURE).expect("valid detail");
-    assert_eq!(detail.number, 42);
-    assert_eq!(detail.title, "Panel flickers on open");
-    assert_eq!(detail.state, "open");
-    assert_eq!(detail.author, "octocat");
-    assert!(detail.body.contains("Steps to reproduce"));
-    assert_eq!(detail.labels, vec!["bug"]);
-    assert_eq!(detail.url, "https://github.com/acme/widget/issues/42");
-    assert_eq!(detail.updated_at.as_deref(), Some("2026-11-01T12:00:00Z"));
-    assert_eq!(detail.comments.len(), 2, "non-object comments are skipped");
-    assert_eq!(detail.comments[0].author, "helga");
-    assert_eq!(detail.comments[0].body, "Reproduced on Linux.");
-    assert_eq!(
-        detail.comments[0].created_at.as_deref(),
-        Some("2026-11-02T09:00:00Z")
-    );
-    assert_eq!(detail.comments[1].author, "", "missing author tolerates");
-    assert_eq!(detail.comments[1].created_at, None);
-}
-
-#[test]
-fn issue_view_json_missing_fields_and_garbage() {
-    // Missing body/comments/labels tolerate to defaults.
-    let detail = parse_issue_view_json(r#"{"number": 7}"#).expect("minimal object");
-    assert_eq!(detail.number, 7);
-    assert_eq!(detail.title, "");
-    assert_eq!(detail.body, "");
-    assert!(detail.comments.is_empty());
-    assert!(detail.labels.is_empty());
-    // Non-object payloads reject.
-    assert!(parse_issue_view_json("").is_none());
-    assert!(parse_issue_view_json("[]").is_none());
-    assert!(parse_issue_view_json("garbage").is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -931,33 +807,6 @@ fn pr_number_parses_from_url() {
     assert_eq!(pr_number_of("https://github.com/a/b/tree/main"), None);
 }
 
-#[test]
-fn extract_issue_url_and_issue_number_mirror_the_pull_helpers() {
-    assert_eq!(
-        extract_issue_url("Creating issue:\nhttps://github.com/acme/widget/issues/42\n").as_deref(),
-        Some("https://github.com/acme/widget/issues/42")
-    );
-    // Pull URLs must not leak into the issue extractor (and vice versa).
-    assert_eq!(
-        extract_issue_url("https://github.com/acme/widget/pull/42"),
-        None
-    );
-    assert_eq!(extract_issue_url("no issue url here"), None);
-    assert_eq!(
-        crate::forge::issue_number_of("https://github.com/a/b/issues/9"),
-        Some(9)
-    );
-    assert_eq!(
-        crate::forge::issue_number_of("https://github.com/a/b/issues/"),
-        None
-    );
-    // An issue number must not parse out of a pull URL.
-    assert_eq!(
-        crate::forge::issue_number_of("https://github.com/a/b/pull/9"),
-        None
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Failure classification
 // ---------------------------------------------------------------------------
@@ -1105,6 +954,76 @@ fn run_program_reports_spawn_failure() {
     assert!(!outcome.timed_out);
 }
 
+fn stdin_echo_process() -> (&'static str, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "powershell.exe",
+            vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                "$text=[Console]::In.ReadToEnd(); [Console]::Out.Write($text); [Console]::Error.Write('err')".into(),
+            ],
+        )
+    } else {
+        ("sh", vec!["-c".into(), "cat; printf err >&2".into()])
+    }
+}
+
+#[test]
+fn stdin_runner_drains_large_input_and_output_concurrently() {
+    let payload = vec![b'x'; 1024 * 1024];
+    let (program, args) = stdin_echo_process();
+    let outcome = run_program_with_stdin(
+        program,
+        None,
+        &args,
+        Some(&payload),
+        Duration::from_secs(15),
+    );
+    assert_eq!(outcome.code, Some(0), "{outcome:?}");
+    assert!(!outcome.timed_out);
+    assert_eq!(outcome.stdout.as_bytes(), payload.as_slice());
+    assert_eq!(outcome.stderr, "err");
+}
+
+#[test]
+fn stdin_runner_ignores_broken_pipe_after_early_exit() {
+    let (program, args) = if cfg!(windows) {
+        (
+            "cmd.exe",
+            vec!["/D".into(), "/Q".into(), "/C".into(), "exit 7".into()],
+        )
+    } else {
+        ("sh", vec!["-c".into(), "exit 7".into()])
+    };
+    let payload = vec![b'y'; 4 * 1024 * 1024];
+    let outcome =
+        run_program_with_stdin(program, None, &args, Some(&payload), Duration::from_secs(5));
+    assert_eq!(outcome.code, Some(7), "{outcome:?}");
+    assert!(!outcome.timed_out);
+}
+
+#[test]
+fn stdin_runner_times_out_even_when_child_never_reads_stdin() {
+    let (program, args) = if cfg!(windows) {
+        ("ping", long_command())
+    } else {
+        ("sh", vec!["-c".into(), "sleep 30".into()])
+    };
+    let payload = vec![b'z'; 4 * 1024 * 1024];
+    let started = Instant::now();
+    let outcome = run_program_with_stdin(
+        program,
+        None,
+        &args,
+        Some(&payload),
+        Duration::from_millis(500),
+    );
+    assert!(outcome.timed_out, "{outcome:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
 /// Real `gh` probe — env-dependent (needs gh installed), hence ignored;
 /// run with `cargo test -- --ignored` on a provisioned machine.
 #[test]
@@ -1159,6 +1078,17 @@ fn github_remote_accepts_gh_authed_hosts() {
     assert_eq!(
         parse_github_remote_with_hosts("https://GHE.example.com/acme/widget.git", &hosts),
         Some(("acme".into(), "widget".into()))
+    );
+    assert_eq!(
+        crate::forge::parse_github_remote_location_with_hosts(
+            "https://GHE.example.com/acme/widget.git",
+            &hosts,
+        ),
+        Some(("ghe.example.com".into(), "acme".into(), "widget".into()))
+    );
+    assert_eq!(
+        crate::forge::parse_github_remote_location_with_hosts("https://github.com/a/b", &[],),
+        Some(("github.com".into(), "a".into(), "b".into()))
     );
     // github.com always matches, hosts or not.
     assert_eq!(
@@ -1336,26 +1266,31 @@ fn worst_part_error_picks_the_most_fundamental_failure() {
         kind: KIND_NO_GH.to_string(),
         message: "gh missing".to_string(),
         url: None,
+        ..ForgeError::default()
     };
     let unauthed = ForgeError {
         kind: KIND_NOT_AUTHED.to_string(),
         message: "unauthed".to_string(),
         url: None,
+        ..ForgeError::default()
     };
     let rate_limited = ForgeError {
         kind: KIND_RATE_LIMITED.to_string(),
         message: "rate limited".to_string(),
         url: None,
+        ..ForgeError::default()
     };
     let offline = ForgeError {
         kind: KIND_OFFLINE.to_string(),
         message: "offline".to_string(),
         url: None,
+        ..ForgeError::default()
     };
     let other = ForgeError {
         kind: KIND_OTHER.to_string(),
         message: "other".to_string(),
         url: None,
+        ..ForgeError::default()
     };
     // NoGh beats everything; the order in the input list never matters.
     assert_eq!(

@@ -14,22 +14,12 @@ use std::sync::Arc;
 
 use crate::engine::types::RepoId;
 use crate::forge::{
-    self, CheckInfo, ForgeContext, ForgeError, ForgeRepo, ForgeSnapshot, ForgeStatus, PrCreated,
-    PrInfo, WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
+    self, CheckInfo, ForgeContext, ForgeError, ForgeSnapshot, ForgeStatus, PrCreated, PrInfo,
+    WorkflowInfo, WorkflowInput, WorkflowRun, WorkflowRunDetail,
 };
-use crate::repo::{RepoHandle, RepoManager};
+use crate::repo::RepoManager;
 
-use super::{enqueue_remote_read, finish_op, get_handle};
-
-/// The forge execution context of one open repo: local repos run gh with
-/// the workdir as cwd; device repos run gh and git ON THE DEVICE (the
-/// device's own gh config and auth) through [`ForgeRepo`].
-fn forge_repo_of(handle: &Arc<RepoHandle>) -> ForgeRepo {
-    ForgeRepo {
-        root: handle.root.clone(),
-        remote: handle.remote().map(Arc::clone),
-    }
-}
+use super::{enqueue_remote_read, finish_op, forge_repo_of, get_handle};
 
 /// Detect `gh` and whether the user is authenticated. Without `repo_id`
 /// (and for local repos) the probe runs on this machine; a repo on a device
@@ -347,82 +337,6 @@ pub async fn pr_template(
     tauri::async_runtime::spawn_blocking(move || Ok(forge::pr_template_sync(&root)))
         .await
         .map_err(|e| format!("pr_template task failed: {e}"))?
-}
-
-// -- Issues ------------------------------------------------------------------
-
-/// Issues of the repo (`gh issue list --state <state> --json … --limit 50`).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn issue_list(
-    repo_id: RepoId,
-    state_filter: Option<String>,
-    state: State<'_, RepoManager>,
-) -> Result<Vec<forge::ForgeIssue>, String> {
-    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
-    let filter = state_filter.unwrap_or_else(|| "open".to_string());
-    tauri::async_runtime::spawn_blocking(move || forge::issue_list_sync(&repo, &filter))
-        .await
-        .map_err(|e| format!("issue_list task failed: {e}"))?
-}
-
-/// One issue with its body and comments (`gh issue view <n> --json …`).
-#[tauri::command(rename_all = "snake_case")]
-pub async fn issue_view(
-    repo_id: RepoId,
-    number: u64,
-    state: State<'_, RepoManager>,
-) -> Result<forge::ForgeIssueDetail, String> {
-    let repo = forge_repo_of(&get_handle(&state, &repo_id)?);
-    tauri::async_runtime::spawn_blocking(move || forge::issue_view_sync(&repo, number))
-        .await
-        .map_err(|e| format!("issue_view task failed: {e}"))?
-}
-
-/// Create an issue (`gh issue create --title <t> [--body-file <tmp>]`; the
-/// body is optional). Rejection is the structured [`ForgeError`].
-#[tauri::command(rename_all = "snake_case")]
-pub async fn issue_create(
-    repo_id: RepoId,
-    title: String,
-    body: String,
-    state: State<'_, RepoManager>,
-) -> Result<forge::IssueCreated, ForgeError> {
-    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
-    tauri::async_runtime::spawn_blocking(move || forge::issue_create_sync(&repo, &title, &body))
-        .await
-        .map_err(|e| ForgeError::other(format!("issue_create task failed: {e}")))?
-}
-
-/// Close an issue with an optional comment.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn issue_close(
-    repo_id: RepoId,
-    number: u64,
-    comment: Option<String>,
-    state: State<'_, RepoManager>,
-) -> Result<String, ForgeError> {
-    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
-    tauri::async_runtime::spawn_blocking(move || {
-        forge::issue_close_sync(&repo, number, comment.as_deref())
-    })
-    .await
-    .map_err(|e| ForgeError::other(format!("issue_close task failed: {e}")))?
-}
-
-/// Reopen a closed issue with an optional comment.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn issue_reopen(
-    repo_id: RepoId,
-    number: u64,
-    comment: Option<String>,
-    state: State<'_, RepoManager>,
-) -> Result<String, ForgeError> {
-    let repo = forge_repo_of(&get_handle(&state, &repo_id).map_err(ForgeError::other)?);
-    tauri::async_runtime::spawn_blocking(move || {
-        forge::issue_reopen_sync(&repo, number, comment.as_deref())
-    })
-    .await
-    .map_err(|e| ForgeError::other(format!("issue_reopen task failed: {e}")))?
 }
 
 // -- Notifications -----------------------------------------------------------

@@ -26,7 +26,7 @@
 //! (no op-queue membership: these are spec'd long ops with their own
 //! timeouts, no event stream needed).
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -37,6 +37,9 @@ use ts_rs::TS;
 
 use crate::remote::quoting::{shell_quote, shell_quote_all};
 use crate::remote::transport::DeviceSession;
+
+pub mod api;
+pub mod issues;
 
 /// The `gh` binary probed on PATH (production runner target).
 const GH: &str = "gh";
@@ -69,17 +72,6 @@ pub const PR_LIST_JSON_FIELDS: &str = "number,title,headRefName,baseRefName,stat
 
 /// How many PRs `pr_list` requests (`gh pr list --limit`).
 pub const PR_LIST_LIMIT: usize = 50;
-
-/// `--json` field list of `issue_list` (all optional fields parse
-/// tolerantly, so older gh versions still work).
-pub const ISSUE_LIST_JSON_FIELDS: &str = "number,title,state,author,updatedAt,labels";
-
-/// How many issues `issue_list` requests (`gh issue list --limit`).
-pub const ISSUE_LIST_LIMIT: usize = 50;
-
-/// `--json` field list of `issue_view` (`gh issue view`).
-pub const ISSUE_VIEW_JSON_FIELDS: &str =
-    "number,title,state,author,body,comments,labels,url,updatedAt";
 
 /// Candidate workdir paths of the pull-request template, tried in order
 /// (GitHub's `.github` discovery minus the `docs/` fallback mygitui does
@@ -308,60 +300,6 @@ pub struct WorkflowInput {
     pub value: String,
 }
 
-/// One issue of `issue_list`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[ts(export)]
-pub struct ForgeIssue {
-    pub number: u64,
-    pub title: String,
-    /// `open` | `closed` (verbatim gh value — issues have no `merged`).
-    pub state: String,
-    /// Author login (empty when gh omits it).
-    pub author: String,
-    /// ISO-8601 last-update timestamp (optional in tolerant parsing).
-    pub updated_at: Option<String>,
-    /// Label names, in gh order.
-    pub labels: Vec<String>,
-}
-
-/// One comment inside [`ForgeIssueDetail`].
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[ts(export)]
-pub struct ForgeIssueComment {
-    /// Comment author login (empty when gh omits it).
-    pub author: String,
-    /// Markdown body (may be empty when gh omits it).
-    pub body: String,
-    /// ISO-8601 creation timestamp (optional in tolerant parsing).
-    pub created_at: Option<String>,
-}
-
-/// `issue_view` payload: one issue plus its comments.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[ts(export)]
-pub struct ForgeIssueDetail {
-    pub number: u64,
-    pub title: String,
-    /// `open` | `closed` (verbatim gh value).
-    pub state: String,
-    pub author: String,
-    /// Markdown body (empty when gh omits it).
-    pub body: String,
-    pub labels: Vec<String>,
-    /// GitHub issue page URL (empty when gh omits it).
-    pub url: String,
-    pub updated_at: Option<String>,
-    pub comments: Vec<ForgeIssueComment>,
-}
-
-/// `issue_create` success payload.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[ts(export)]
-pub struct IssueCreated {
-    pub url: String,
-    pub number: u64,
-}
-
 /// One GitHub notification thread (`gh api notifications`; GitHub's default
 /// listing is the unread set).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
@@ -399,8 +337,32 @@ pub struct ForgeError {
     )]
     pub kind: String,
     pub message: String,
-    /// For `AlreadyExists`: the existing PR's URL when parseable.
-    pub url: Option<String>,
+    /// For `AlreadyExists`: the existing PR's URL when parseable. Boxed along
+    /// with the request id to keep command errors compact.
+    pub url: Option<Box<str>>,
+    /// HTTP response status, when `gh api` received a response.
+    pub http_status: Option<u16>,
+    /// GitHub request correlation id (`X-GitHub-Request-Id`). Boxed to keep
+    /// command `Result` error values below clippy's large-error threshold.
+    pub request_id: Option<Box<str>>,
+    /// GitHub's `Retry-After` hint, in seconds.
+    pub retry_after_seconds: Option<u64>,
+    /// Unix timestamp from `X-RateLimit-Reset`, when present.
+    pub rate_limit_reset_at: Option<u64>,
+}
+
+impl Default for ForgeError {
+    fn default() -> Self {
+        Self {
+            kind: KIND_OTHER.to_string(),
+            message: String::new(),
+            url: None,
+            http_status: None,
+            request_id: None,
+            retry_after_seconds: None,
+            rate_limit_reset_at: None,
+        }
+    }
 }
 
 /// `ForgeError.kind` values (contracts.md; E1 adds the degraded-chip kinds —
@@ -419,7 +381,7 @@ impl ForgeError {
         Self {
             kind: KIND_OTHER.to_string(),
             message: message.into(),
-            url: None,
+            ..Self::default()
         }
     }
 }
@@ -458,9 +420,27 @@ pub fn run_program(
     args: &[String],
     timeout: Duration,
 ) -> ProcOutcome {
+    run_program_with_stdin(program, cwd, args, None, timeout)
+}
+
+/// Run a program with an optional stdin payload. The writer and both pipe
+/// readers run concurrently, so neither a large request body nor chatty
+/// stdout/stderr can deadlock the child. A broken pipe is expected when a
+/// child rejects input and exits early; the child's real status still wins.
+pub fn run_program_with_stdin(
+    program: &str,
+    cwd: Option<&Path>,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> ProcOutcome {
     let mut cmd = crate::process::command(program);
     cmd.args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(dir) = cwd {
@@ -477,6 +457,17 @@ pub fn run_program(
     };
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
+
+    if let (Some(payload), Some(pipe)) = (stdin, child.stdin.take()) {
+        let payload = payload.to_vec();
+        let _ = std::thread::Builder::new()
+            .name("forge-stdin".into())
+            .spawn(move || {
+                let mut pipe = pipe;
+                let _ = pipe.write_all(&payload);
+                let _ = pipe.flush();
+            });
+    }
 
     // One reader per stream: read to EOF (draining so the child never
     // blocks on a full pipe) and hand the bytes over.
@@ -645,7 +636,7 @@ impl ForgeRepo {
         timeout: Duration,
     ) -> ProcOutcome {
         match &self.remote {
-            None => run_program(GH, Some(&self.root), args, timeout),
+            None => run_program_with_stdin(GH, Some(&self.root), args, stdin, timeout),
             Some(remote) => run_remote_gh(&remote.session, &remote.root, args, stdin, timeout),
         }
     }
@@ -696,6 +687,17 @@ pub fn parse_github_remote_with_hosts(
     url: &str,
     allowed_hosts: &[String],
 ) -> Option<(String, String)> {
+    parse_github_remote_location_with_hosts(url, allowed_hosts)
+        .map(|(_host, owner, repo)| (owner, repo))
+}
+
+/// Host-aware form of [`parse_github_remote_with_hosts`]. The normalized host
+/// is returned alongside owner/repo so `gh api --hostname` never silently
+/// targets github.com for an Enterprise remote.
+pub fn parse_github_remote_location_with_hosts(
+    url: &str,
+    allowed_hosts: &[String],
+) -> Option<(String, String, String)> {
     let url = url.trim();
     if url.is_empty() {
         return None;
@@ -735,7 +737,7 @@ pub fn parse_github_remote_with_hosts(
     if owner.is_empty() || repo.is_empty() || segments.next().is_some() {
         return None;
     }
-    Some((owner.to_owned(), repo.to_owned()))
+    Some((host, owner.to_owned(), repo.to_owned()))
 }
 
 /// Hosts `gh auth status` reported, parsed from its output ("✓ Logged in to
@@ -1133,64 +1135,6 @@ pub fn parse_workflow_list_json(payload: &str) -> Vec<WorkflowInfo> {
         .collect()
 }
 
-/// Parse `gh issue list --json …` output tolerantly: entries without a
-/// numeric `number` are skipped, missing strings default to `""`/`None`.
-pub fn parse_issue_list_json(payload: &str) -> Vec<ForgeIssue> {
-    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(payload) else {
-        return Vec::new();
-    };
-    items
-        .into_iter()
-        .filter_map(|item| {
-            let number = item.get("number")?.as_u64()?;
-            Some(ForgeIssue {
-                number,
-                title: json_string(&item, "title"),
-                state: json_string(&item, "state"),
-                author: json_author_login(&item),
-                updated_at: json_option_string(&item, "updatedAt"),
-                labels: json_label_names(&item),
-            })
-        })
-        .collect()
-}
-
-/// Parse `gh issue view <n> --json …` output; `None` when the payload is
-/// not an object. Comment entries that are not objects are skipped; the
-/// rest parse tolerantly (missing fields default to `""`/`None`).
-pub fn parse_issue_view_json(payload: &str) -> Option<ForgeIssueDetail> {
-    let item: serde_json::Value = serde_json::from_str(payload).ok()?;
-    if !item.is_object() {
-        return None;
-    }
-    let comments = item
-        .get("comments")
-        .and_then(serde_json::Value::as_array)
-        .map(|comments| {
-            comments
-                .iter()
-                .filter(|comment| comment.is_object())
-                .map(|comment| ForgeIssueComment {
-                    author: json_author_login(comment),
-                    body: json_string(comment, "body"),
-                    created_at: json_option_string(comment, "createdAt"),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    Some(ForgeIssueDetail {
-        number: json_u64(&item, "number"),
-        title: json_string(&item, "title"),
-        state: json_string(&item, "state"),
-        author: json_author_login(&item),
-        body: json_string(&item, "body"),
-        labels: json_label_names(&item),
-        url: json_string(&item, "url"),
-        updated_at: json_option_string(&item, "updatedAt"),
-        comments,
-    })
-}
-
 /// Notification kind for a subject URL (`/pull/`/`/pulls/` — html vs REST —
 /// → pull, `/issues/` → issue, `/commit`/`/commits` → commit, anything else
 /// → other). Pure.
@@ -1340,11 +1284,6 @@ pub fn pr_number_of(url: &str) -> Option<u64> {
     number_in_url(url, "/pull/")
 }
 
-/// Parse the issue number out of an `/issues/<digits>` URL.
-pub fn issue_number_of(url: &str) -> Option<u64> {
-    number_in_url(url, "/issues/")
-}
-
 /// Extract the first `github.com/<owner>/<repo><segment><digits>` URL from
 /// gh output (segment e.g. `/pull/` or `/issues/`; the create-success lines
 /// and the already-exists errors carry one). Occurrences are tried left to
@@ -1372,11 +1311,6 @@ fn extract_github_url(text: &str, segment: &str) -> Option<String> {
 /// Extract the first PR URL (`…/pull/<n>`) from gh output.
 pub fn extract_pull_url(text: &str) -> Option<String> {
     extract_github_url(text, "/pull/")
-}
-
-/// Extract the first issue URL (`…/issues/<n>`) from gh output.
-pub fn extract_issue_url(text: &str) -> Option<String> {
-    extract_github_url(text, "/issues/")
 }
 
 /// `github.com/o/r/issues/12` (with or without scheme prefix in the token)
@@ -1437,6 +1371,7 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
                 "gh CLI not found on PATH ({err}) — install it from https://cli.github.com/ and run `gh auth login`"
             ),
             url: None,
+            ..ForgeError::default()
         };
     }
     let lower = combined.to_ascii_lowercase();
@@ -1453,13 +1388,15 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
                 trim_message(combined)
             ),
             url: None,
+            ..ForgeError::default()
         };
     }
     if lower.contains("already exists") {
         return ForgeError {
             kind: KIND_ALREADY_EXISTS.to_string(),
             message: "a pull request for this branch already exists".to_string(),
-            url: extract_pull_url(combined),
+            url: extract_pull_url(combined).map(|url| url.into_boxed_str()),
+            ..ForgeError::default()
         };
     }
     if RATE_LIMIT_MARKERS
@@ -1470,6 +1407,7 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
             kind: KIND_RATE_LIMITED.to_string(),
             message: "GitHub API rate limit reached — retrying with backoff; `gh auth status` shows the account's quota".to_string(),
             url: None,
+            ..ForgeError::default()
         };
     }
     if AUTH_MARKERS.iter().any(|marker| lower.contains(marker)) {
@@ -1477,6 +1415,7 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
             kind: KIND_NOT_AUTHED.to_string(),
             message: "gh is not authenticated — run `gh auth login`".to_string(),
             url: None,
+            ..ForgeError::default()
         };
     }
     if OFFLINE_MARKERS.iter().any(|marker| lower.contains(marker)) {
@@ -1484,6 +1423,7 @@ pub fn forge_failure(spawn_error: Option<&str>, combined: &str) -> ForgeError {
             kind: KIND_OFFLINE.to_string(),
             message: "GitHub is unreachable — check the network connection".to_string(),
             url: None,
+            ..ForgeError::default()
         };
     }
     ForgeError::other(trim_message(combined))
@@ -1585,6 +1525,8 @@ pub fn status_sync_remote(session: &Arc<DeviceSession>, root: &str) -> ForgeStat
 pub struct ResolvedRemote {
     pub remote_name: String,
     pub remote_url: String,
+    /// Normalized API host (`github.com` or an authenticated Enterprise host).
+    pub host: String,
     pub owner: String,
     pub repo: String,
 }
@@ -1615,11 +1557,13 @@ pub fn resolve_remote(
                     "no `{remote_name}` remote configured — the GitHub flow needs one"
                 ),
                 url: None,
+                ..ForgeError::default()
             })?;
             remote.url().map(str::to_owned).map_err(|_| ForgeError {
                 kind: KIND_NOT_REPO.to_string(),
                 message: format!("`{remote_name}` has no URL"),
                 url: None,
+                ..ForgeError::default()
             })?
         }
         Some(_) => {
@@ -1641,26 +1585,29 @@ pub fn resolve_remote(
                         "no `{remote_name}` remote configured — the GitHub flow needs one"
                     ),
                     url: None,
+                    ..ForgeError::default()
                 })?;
             if url.is_empty() {
                 return Err(ForgeError {
                     kind: KIND_NOT_REPO.to_string(),
                     message: format!("`{remote_name}` has no URL"),
                     url: None,
+                    ..ForgeError::default()
                 });
             }
             url
         }
     };
-    let (owner, name) =
-        parse_github_remote_with_hosts(&remote_url, &cached_hosts()).ok_or_else(|| ForgeError {
+    let (host, owner, name) = parse_github_remote_location_with_hosts(&remote_url, &cached_hosts())
+        .ok_or_else(|| ForgeError {
             kind: KIND_NOT_REPO.to_string(),
             message: format!("`{remote_name}` is not a GitHub remote: {remote_url}"),
-            url: None,
+            ..ForgeError::default()
         })?;
     Ok(ResolvedRemote {
         remote_name,
         remote_url,
+        host,
         owner,
         repo: name,
     })
@@ -2143,141 +2090,6 @@ pub fn pr_checks_sync(repo: &ForgeRepo, number: u64) -> Result<Vec<CheckInfo>, S
     }
     let combined = format!("{}\n{}", outcome.stderr, outcome.stdout);
     Err(trim_message(&combined))
-}
-
-// ---------------------------------------------------------------------------
-// Issues (browse/close/reopen/create via the same gh patterns as PRs)
-// ---------------------------------------------------------------------------
-
-/// Normalize an issue-list state filter (`open`/`closed`/`all`); blank means
-/// `open` (issues have no `merged` state).
-pub fn normalize_issue_state(state: &str) -> Result<&'static str, String> {
-    match state.trim().to_ascii_lowercase().as_str() {
-        "" | "open" => Ok("open"),
-        "closed" => Ok("closed"),
-        "all" => Ok("all"),
-        other => Err(format!(
-            "invalid issue state filter {other:?} — use open, closed, or all"
-        )),
-    }
-}
-
-/// Arguments of `issue_list` (state filter normalized by the caller).
-pub fn issue_list_args(state: &str) -> Result<Vec<String>, String> {
-    let normalized = normalize_issue_state(state)?;
-    Ok(vec![
-        "issue".to_string(),
-        "list".to_string(),
-        "--state".to_string(),
-        normalized.to_string(),
-        "--json".to_string(),
-        ISSUE_LIST_JSON_FIELDS.to_string(),
-        "--limit".to_string(),
-        ISSUE_LIST_LIMIT.to_string(),
-    ])
-}
-
-/// Body of `issue_list`: `gh issue list --state <state> --json … --limit 50`.
-pub fn issue_list_sync(repo: &ForgeRepo, state: &str) -> Result<Vec<ForgeIssue>, String> {
-    let args = issue_list_args(state)?;
-    let output = read_gh(repo, &args, LIST_TIMEOUT)?;
-    Ok(parse_issue_list_json(&output))
-}
-
-/// Body of `issue_view`: one issue with its body and comments
-/// (`gh issue view <n> --json …`).
-pub fn issue_view_sync(repo: &ForgeRepo, number: u64) -> Result<ForgeIssueDetail, String> {
-    let args = vec![
-        "issue".to_string(),
-        "view".to_string(),
-        number.to_string(),
-        "--json".to_string(),
-        ISSUE_VIEW_JSON_FIELDS.to_string(),
-    ];
-    let output = read_gh(repo, &args, LIST_TIMEOUT)?;
-    parse_issue_view_json(&output)
-        .ok_or_else(|| "could not parse `gh issue view --json` output".to_string())
-}
-
-/// Shared tail of issue close/reopen: `gh issue <verb> <n> [--comment c]`.
-fn issue_state_change(
-    repo: &ForgeRepo,
-    verb: &str,
-    number: u64,
-    comment: Option<&str>,
-) -> Result<String, ForgeError> {
-    let mut args = vec!["issue".to_string(), verb.to_string(), number.to_string()];
-    if let Some(comment) = comment.map(str::trim).filter(|c| !c.is_empty()) {
-        args.push("--comment".to_string());
-        args.push(comment.to_string());
-    }
-    run_gh_mutating(repo, args, &format!("issue {verb}"))
-}
-
-/// Body of `issue_close`: close an issue, optionally leaving a comment.
-pub fn issue_close_sync(
-    repo: &ForgeRepo,
-    number: u64,
-    comment: Option<&str>,
-) -> Result<String, ForgeError> {
-    issue_state_change(repo, "close", number, comment)
-}
-
-/// Body of `issue_reopen`: reopen a closed issue, optionally leaving a
-/// comment.
-pub fn issue_reopen_sync(
-    repo: &ForgeRepo,
-    number: u64,
-    comment: Option<&str>,
-) -> Result<String, ForgeError> {
-    issue_state_change(repo, "reopen", number, comment)
-}
-
-/// Body of `issue_create`: `gh issue create --title <t> [--body-file
-/// <tmp|->]` (the body is optional; stdin on devices). Success is the issue
-/// URL line in the output; failures classify via [`forge_failure`].
-pub fn issue_create_sync(
-    repo: &ForgeRepo,
-    title: &str,
-    body: &str,
-) -> Result<IssueCreated, ForgeError> {
-    let title = title.trim();
-    if title.is_empty() {
-        return Err(ForgeError::other("title must not be empty"));
-    }
-    let (body_args, stdin, body_file) = body_file_args(repo, Some(body))?;
-    let mut args = vec![
-        "issue".to_string(),
-        "create".to_string(),
-        "--title".to_string(),
-        title.to_string(),
-    ];
-    args.extend(body_args);
-    let outcome = repo.run_gh_stdin(&args, stdin.as_deref(), CREATE_TIMEOUT);
-    if let Some(path) = body_file {
-        let _ = std::fs::remove_file(path);
-    }
-
-    if let Some(err) = &outcome.spawn_error {
-        return Err(forge_failure(Some(err), ""));
-    }
-    let combined = format!("{}\n{}", outcome.stdout, outcome.stderr);
-    if outcome.code == Some(0) && !outcome.timed_out {
-        if let Some(url) = extract_issue_url(&combined) {
-            let number = issue_number_of(&url).unwrap_or(0);
-            return Ok(IssueCreated { url, number });
-        }
-        return Err(ForgeError::other(format!(
-            "gh issue create succeeded but no issue URL was found in its output: {}",
-            trim_message(&combined)
-        )));
-    }
-    if outcome.timed_out {
-        return Err(ForgeError::other(
-            "gh issue create timed out after 120 s and was killed — check `gh issue list` before retrying",
-        ));
-    }
-    Err(forge_failure(None, &combined))
 }
 
 // ---------------------------------------------------------------------------

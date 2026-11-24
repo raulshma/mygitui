@@ -41,6 +41,26 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Page, TestInfo } from "@playwright/test";
+import type { ForgeError } from "../src/lib/ipc/gen/ForgeError";
+import type { IssueComment } from "../src/lib/ipc/gen/IssueComment";
+import type { IssueSummary } from "../src/lib/ipc/gen/IssueSummary";
+import type {
+  IssueBackendSnapshot,
+  IssuesCommand,
+  IssuesMockOptions,
+  NewMockComment,
+  NewMockIssue,
+} from "./issues-fixtures";
+
+declare global {
+  interface Window {
+    __TAURI_MOCK__: {
+      calls: Array<{ cmd: string; args: Record<string, unknown> }>;
+      commands: Record<string, CommandMock>;
+      emit(event: string, payload: unknown): void;
+    };
+  }
+}
 
 /** The shipping version, read once from package.json (never drifts). */
 const APP_VERSION: string = (
@@ -56,6 +76,11 @@ export interface TauriMockOptions {
   commands?: Record<string, CommandMock>;
   /** `plugin:app|version` reply (default: the real package.json version). */
   version?: string;
+  /**
+   * Optional stateful Issues backend. With no fixture, every `issues_*`
+   * command still returns its correct empty wire shape instead of `null`/`[]`.
+   */
+  issues?: IssuesMockOptions;
 }
 
 /**
@@ -99,7 +124,67 @@ export async function installTauriMock(
         { command, value },
       );
     },
+    addIssue(input: NewMockIssue): Promise<IssueSummary> {
+      return issueControl<NewMockIssue, IssueSummary>(page, "addIssue", input);
+    },
+    addComment(input: NewMockComment): Promise<IssueComment> {
+      return issueControl<NewMockComment, IssueComment>(page, "addComment", input);
+    },
+    addPullRequestComment(input: NewMockComment): Promise<IssueComment> {
+      return issueControl<NewMockComment, IssueComment>(
+        page,
+        "addPullRequestComment",
+        input,
+      );
+    },
+    editComment(nodeId: string, body: string): Promise<IssueComment> {
+      return issueControl<{ nodeId: string; body: string }, IssueComment>(
+        page,
+        "editComment",
+        { nodeId, body },
+      );
+    },
+    setIssueFailure(command: IssuesCommand, error: ForgeError | null): Promise<void> {
+      return issueControl<{ command: IssuesCommand; error: ForgeError | null }, void>(
+        page,
+        "setIssueFailure",
+        { command, error },
+      );
+    },
+    setIssueLatency(latencyMs: number | null): Promise<void> {
+      return issueControl<number | null, void>(page, "setIssueLatency", latencyMs);
+    },
+    issueSnapshot(): Promise<IssueBackendSnapshot> {
+      return issueControl<undefined, IssueBackendSnapshot>(page, "snapshot", undefined);
+    },
+    resetIssueState(): Promise<void> {
+      return issueControl<undefined, void>(page, "reset", undefined);
+    },
+    clearCalls(): Promise<void> {
+      return page.evaluate(() => {
+        window.__TAURI_MOCK__.calls.length = 0;
+      });
+    },
   };
+}
+
+async function issueControl<A, R>(
+  page: Page,
+  method: string,
+  argument: A,
+): Promise<R> {
+  return page.evaluate(
+    ({ method: name, argument: arg }) => {
+      const mock = window.__TAURI_MOCK__ as unknown as {
+        issues?: Record<string, (value?: unknown) => unknown>;
+      };
+      const control = mock.issues;
+      const run = control?.[name];
+      if (!run) throw new Error(`Issues mock control is unavailable: ${name}`);
+      return run(arg) as R;
+    },
+    { method, argument },
+  );
 }
 
 /** Test-side handle over the in-page mock (post-boot). */
@@ -117,6 +202,20 @@ export interface TauriMockHandle {
    * log stream serving a different page) go through here.
    */
   setCommand(command: string, value: CommandMock): Promise<void>;
+  /** Adds a server-side issue after the activity baseline has been taken. */
+  addIssue(input: NewMockIssue): Promise<IssueSummary>;
+  /** Adds a server-side issue comment after the activity baseline. */
+  addComment(input: NewMockComment): Promise<IssueComment>;
+  /** Adds a PR comment; issue commands/activity must never expose it. */
+  addPullRequestComment(input: NewMockComment): Promise<IssueComment>;
+  /** Changes updated_at without changing created_at (must not notify). */
+  editComment(nodeId: string, body: string): Promise<IssueComment>;
+  /** Overrides one Issues command with a structured ForgeError. */
+  setIssueFailure(command: IssuesCommand, error: ForgeError | null): Promise<void>;
+  setIssueLatency(latencyMs: number | null): Promise<void>;
+  issueSnapshot(): Promise<IssueBackendSnapshot>;
+  resetIssueState(): Promise<void>;
+  clearCalls(): Promise<void>;
 }
 
 /** Collects console errors + page errors; use with `expect(errors).toEqual([])`. */
@@ -377,6 +476,17 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   ]);
 
   const EMPTY_LOG_PAGE = { commits: [], rows: [], next_cursor: null, generation: 0 };
+
+  /** Preserve structured ForgeError objects; keep legacy string failures. */
+  function mockRejection(value: unknown): unknown {
+    const error =
+      value !== null && typeof value === "object" && "__error__" in value
+        ? (value as { __error__: unknown }).__error__
+        : value;
+    return typeof error === "string" || error === null || error === undefined
+      ? new Error(String(error))
+      : error;
+  }
 
   /**
    * Synthesizes one `repo_summary` reply for `path` (the Overview's scan
@@ -666,6 +776,546 @@ function BOOTSTRAP(options: TauriMockOptions): void {
     }
   }
 
+  // -- stateful GitHub Issues backend ---------------------------------------
+
+  const ISSUE_COMMANDS = new Set<string>([
+    "issues_identity",
+    "issues_list",
+    "issues_detail",
+    "issues_comments",
+    "issues_metadata",
+    "issues_create",
+    "issues_update",
+    "issues_comment",
+    "issues_set_state",
+    "issues_activity_since",
+  ]);
+  const ISSUE_STATE_KEY = "e2e-issues-backend";
+
+  function cloneWire<T>(value: T): T {
+    // Real IPC serializes values. Cloning here prevents the SPA from mutating
+    // the fake server's stored rows by retaining an object reference.
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function forgeFailure(
+    kind: "NoGh" | "NotAuthed" | "AlreadyExists" | "NotRepo" | "RateLimited" | "Offline" | "Other",
+    message: string,
+    httpStatus: number | null = null,
+  ): ForgeError {
+    return {
+      kind,
+      message,
+      url: null,
+      http_status: httpStatus,
+      request_id: `e2e-${kind.toLowerCase()}`,
+      retry_after_seconds: null,
+      rate_limit_reset_at: null,
+    };
+  }
+
+  const defaultIssueIdentity = {
+    executor: "local",
+    device_id: null,
+    github_host: "github.com",
+    owner: "acme",
+    repo: "repo",
+    remote: "git@github.com:acme/repo.git",
+    user: { node_id: "U_SELF", login: "octocat" },
+  };
+  const issueIdentity = cloneWire(options.issues?.identity ?? defaultIssueIdentity);
+  const issueMetadata = cloneWire(
+    options.issues?.metadata ?? { labels: [], assignees: [], milestones: [] },
+  );
+  const initialIssueState = {
+    issues: cloneWire(options.issues?.issues ?? []),
+    details: cloneWire(options.issues?.details ?? {}),
+    comments: cloneWire(options.issues?.comments ?? []),
+    pullRequestComments: cloneWire(options.issues?.pullRequestComments ?? []),
+  };
+  let issueState = cloneWire(initialIssueState);
+  let issueLatency = Math.max(0, options.issues?.latencyMs ?? 0);
+  const activityPageSize =
+    options.issues?.activityPageSize === undefined
+      ? null
+      : Math.min(100, Math.max(1, Math.floor(options.issues.activityPageSize)));
+  let issueFailures: Partial<Record<IssuesCommand, ForgeError>> = {
+    ...(options.issues?.errors ?? {}),
+  };
+  let injectedCommentId = 0;
+
+  try {
+    const persisted = sessionStorage.getItem(ISSUE_STATE_KEY);
+    if (persisted !== null) {
+      const parsed = JSON.parse(persisted) as typeof issueState;
+      if (
+        Array.isArray(parsed.issues) &&
+        parsed.details !== null &&
+        typeof parsed.details === "object" &&
+        Array.isArray(parsed.comments) &&
+        Array.isArray(parsed.pullRequestComments)
+      ) {
+        issueState = parsed;
+      }
+    }
+  } catch {
+    // Storage can be unavailable in hardened webviews; the in-memory backend
+    // remains fully functional and only restart persistence is lost.
+  }
+
+  function persistIssueState(): void {
+    try {
+      sessionStorage.setItem(ISSUE_STATE_KEY, JSON.stringify(issueState));
+    } catch {
+      // Best effort (the production feature has its own storage fallback).
+    }
+  }
+
+  type MockIssue = (typeof issueState.issues)[number];
+  type MockDetail = (typeof issueState.details)[number];
+  type MockComment = (typeof issueState.comments)[number];
+
+  function mockUser(login: string): { node_id: string; login: string } {
+    return (
+      issueMetadata.assignees.find((entry) => entry.login === login) ?? {
+        node_id: `U_${login.toUpperCase()}`,
+        login,
+      }
+    );
+  }
+
+  function issueByNumber(number: number): MockIssue | undefined {
+    return issueState.issues.find((issue) => issue.number === number);
+  }
+
+  function detailByNumber(number: number): MockDetail | undefined {
+    return issueState.details[number];
+  }
+
+  function touchIssue(issue: MockIssue, at: string): void {
+    issue.updated_at = at;
+    const detail = detailByNumber(issue.number);
+    if (detail) detail.updated_at = at;
+  }
+
+  function stringArray(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }
+
+  function activityCursor(cursor: unknown): { page: number; since: number } {
+    if (typeof cursor !== "string") return { page: 1, since: 0 };
+    if (cursor.startsWith("/")) {
+      const params = new URLSearchParams(cursor.split("?")[1] ?? "");
+      const since = Date.parse(params.get("since") ?? "");
+      return {
+        page: Math.max(1, Math.floor(Number(params.get("page")) || 1)),
+        since: Number.isFinite(since) ? since : 0,
+      };
+    }
+    const since = Date.parse(cursor);
+    return { page: 1, since: Number.isFinite(since) ? since : 0 };
+  }
+
+  function activityLink(
+    endpoint: "issues" | "issues/comments",
+    page: number,
+    cursor: unknown,
+  ): string {
+    const params = new URLSearchParams({
+      page: String(page),
+      per_page: String(activityPageSize),
+    });
+    if (typeof cursor === "string" && !cursor.startsWith("/")) params.set("since", cursor);
+    return `/repos/${issueIdentity.owner}/${issueIdentity.repo}/${endpoint}?${params}`;
+  }
+
+  function resolveLabels(names: string[]): Array<(typeof issueMetadata.labels)[number]> {
+    return names
+      .map((name) => issueMetadata.labels.find((label) => label.name === name))
+      .filter((label): label is (typeof issueMetadata.labels)[number] => label !== undefined);
+  }
+
+  function resolveAssignees(logins: string[]): Array<(typeof issueMetadata.assignees)[number]> {
+    return logins.map(mockUser);
+  }
+
+  function resolveMilestone(value: number | string | null | undefined) {
+    if (value === null || value === undefined || value === "") return null;
+    return (
+      issueMetadata.milestones.find(
+        (milestone) =>
+          milestone.number === Number(value) || milestone.title === String(value),
+      ) ?? null
+    );
+  }
+
+  function appendIssueComment(
+    issue: MockIssue,
+    body: string,
+    authorLogin: string,
+    createdAt: string,
+  ): MockComment {
+    injectedCommentId += 1;
+    const comment: MockComment = {
+      node_id: `C_E2E_${Date.now()}_${injectedCommentId}`,
+      issue_number: issue.number,
+      author: mockUser(authorLogin),
+      body,
+      created_at: createdAt,
+      updated_at: createdAt,
+      url: `https://github.com/${issueIdentity.owner}/${issueIdentity.repo}/issues/${issue.number}#issuecomment-C_E2E_${Date.now()}_${injectedCommentId}`,
+    };
+    issueState.comments.push(comment);
+    issue.comment_count += 1;
+    const detail = detailByNumber(issue.number);
+    if (detail) detail.comment_count += 1;
+    touchIssue(issue, createdAt);
+    return comment;
+  }
+
+  function makeIssue(input: NewMockIssue): MockIssue {
+    const now = new Date().toISOString();
+    const createdAt = input.createdAt ?? now;
+    const updatedAt = input.updatedAt ?? createdAt;
+    const number = Math.max(0, ...issueState.issues.map((issue) => issue.number)) + 1;
+    const milestone = resolveMilestone(input.milestone);
+    const issue: MockIssue = {
+      node_id: input.nodeId ?? `I_E2E_${number}`,
+      number,
+      title: input.title,
+      state: input.state ?? "open",
+      author: mockUser(input.author ?? issueIdentity.user.login),
+      created_at: createdAt,
+      updated_at: updatedAt,
+      closed_at: input.state === "closed" ? updatedAt : null,
+      url: `https://github.com/${issueIdentity.owner}/${issueIdentity.repo}/issues/${number}`,
+      labels: resolveLabels(input.labels ?? []),
+      assignees: resolveAssignees(input.assignees ?? []),
+      milestone,
+      comment_count: 0,
+      locked: false,
+      state_reason: input.state === "closed" ? "completed" : null,
+    };
+    issueState.issues.push(issue);
+    issueState.details[number] = {
+      ...cloneWire(issue),
+      body: input.body ?? "",
+      issue_type: {
+        name: issue.labels.some((label) => label.name === "bug") ? "Bug" : "Task",
+      },
+    };
+    persistIssueState();
+    return issue;
+  }
+
+  function makeComment(input: NewMockComment, pullRequest = false): MockComment {
+    const issue = issueByNumber(input.issueNumber);
+    if (!pullRequest && !issue) {
+      throw forgeFailure("NotRepo", `Issue #${input.issueNumber} was not found`, 404);
+    }
+    const now = new Date().toISOString();
+    const createdAt = input.createdAt ?? now;
+    const updatedAt = input.updatedAt ?? createdAt;
+    const nodeId = input.nodeId ?? `C_E2E_${Date.now()}_${++injectedCommentId}`;
+    const number = pullRequest ? input.issueNumber : issue!.number;
+    const comment: MockComment = {
+      node_id: nodeId,
+      issue_number: number,
+      author: mockUser(input.author ?? "alice"),
+      body: input.body,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      url: `https://github.com/${issueIdentity.owner}/${issueIdentity.repo}/issues/${number}#issuecomment-${nodeId}`,
+    };
+    if (pullRequest) {
+      issueState.pullRequestComments.push(comment);
+    } else {
+      issue!.comment_count += 1;
+      const detail = detailByNumber(number);
+      if (detail) detail.comment_count += 1;
+      touchIssue(issue!, updatedAt);
+      issueState.comments.push(comment);
+    }
+    persistIssueState();
+    return comment;
+  }
+
+  function configuredIssueFailure(
+    command: IssuesCommand,
+    args: Record<string, unknown>,
+  ): ForgeError | null {
+    const direct = issueFailures[command];
+    if (direct) return direct;
+    if (command === "issues_list") {
+      const query = args.query as { search?: unknown } | undefined;
+      const search = typeof query?.search === "string" ? query.search.trim().toLowerCase() : "";
+      return options.issues?.searchErrors?.[search] ?? null;
+    }
+    return null;
+  }
+
+  function applyIssues(cmd: string, args: Record<string, unknown>): unknown {
+    const command = cmd as IssuesCommand;
+    const failure = configuredIssueFailure(command, args);
+    if (failure) throw failure;
+
+    switch (command) {
+      case "issues_identity":
+        return issueIdentity;
+      case "issues_metadata":
+        return issueMetadata;
+      case "issues_list": {
+        const query = (args.query ?? {}) as {
+          state?: unknown;
+          search?: unknown;
+          labels?: unknown;
+          assignees?: unknown;
+          milestone?: unknown;
+          sort?: unknown;
+          direction?: unknown;
+          per_page?: unknown;
+          page?: unknown;
+        };
+        const state = typeof query.state === "string" ? query.state : "open";
+        const search = typeof query.search === "string" ? query.search.trim().toLowerCase() : "";
+        const labels = stringArray(query.labels).map((label) => label.toLowerCase());
+        const assignees = stringArray(query.assignees);
+        const milestone = typeof query.milestone === "string" ? query.milestone : "";
+        const sort = typeof query.sort === "string" ? query.sort : "updated";
+        const direction = query.direction === "asc" ? 1 : -1;
+        const perPage = Math.min(100, Math.max(1, Number(query.per_page) || 30));
+        const page = Math.max(1, Math.floor(Number(query.page) || 1));
+        let items = issueState.issues.filter((issue) => {
+          if (state !== "all" && issue.state !== state) return false;
+          if (!labels.every((label) => issue.labels.some((entry) => entry.name.toLowerCase() === label))) {
+            return false;
+          }
+          if (assignees.length > 0 && !assignees.some((assignee) => issue.assignees.some((entry) => entry.login === assignee))) {
+            return false;
+          }
+          if (
+            milestone !== "" &&
+            issue.milestone?.title !== milestone &&
+            String(issue.milestone?.number ?? "") !== milestone
+          ) {
+            return false;
+          }
+          if (search !== "") {
+            const haystack = `${issue.number} ${issue.title} ${detailByNumber(issue.number)?.body ?? ""}`.toLowerCase();
+            if (!haystack.includes(search)) return false;
+          }
+          return true;
+        });
+        items = [...items].sort((left, right) => {
+          let compared = 0;
+          if (sort === "created") {
+            compared = Date.parse(left.created_at) - Date.parse(right.created_at);
+          } else if (sort === "comments") {
+            compared = left.comment_count - right.comment_count;
+          } else if (sort === "number") {
+            compared = left.number - right.number;
+          } else {
+            compared = Date.parse(left.updated_at) - Date.parse(right.updated_at);
+          }
+          if (compared === 0) compared = left.number - right.number;
+          return compared * direction;
+        });
+        const total = items.length;
+        const start = (page - 1) * perPage;
+        return {
+          items: items.slice(start, start + perPage),
+          page,
+          per_page: perPage,
+          has_next: start + perPage < total,
+          has_prev: page > 1 && start < total,
+          total_count: search === "" ? total : null,
+          incomplete_results:
+            search !== "" &&
+            (options.issues?.incompleteSearches ?? []).some((entry) => entry.toLowerCase() === search),
+        };
+      }
+      case "issues_detail": {
+        const number = Number(args.number);
+        const detail = detailByNumber(number);
+        if (!detail) throw forgeFailure("NotRepo", `Issue #${number} was not found`, 404);
+        return detail;
+      }
+      case "issues_comments": {
+        const number = Number(args.number);
+        if (!issueByNumber(number)) {
+          throw forgeFailure("NotRepo", `Issue #${number} was not found`, 404);
+        }
+        const perPage = Math.min(100, Math.max(1, Number(args.per_page) || 30));
+        const comments = issueState.comments
+          .filter((comment) => comment.issue_number === number)
+          .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at));
+        const total = comments.length;
+        const page =
+          args.page === null || args.page === undefined
+            ? Math.max(1, Math.ceil(total / perPage))
+            : Math.min(Math.max(1, Math.floor(Number(args.page) || 1)), Math.max(1, Math.ceil(total / perPage)));
+        const start = (page - 1) * perPage;
+        return {
+          items: comments.slice(start, start + perPage),
+          page,
+          per_page: perPage,
+          has_next: start + perPage < total,
+          has_prev: page > 1 && start < total,
+          total_count: total,
+        };
+      }
+      case "issues_create": {
+        const title = String(args.title ?? "").trim();
+        if (title === "") throw forgeFailure("Other", "Validation Failed: title cannot be blank", 422);
+        const issue = makeIssue({
+          title,
+          body: String(args.body ?? ""),
+          labels: stringArray(args.labels),
+          assignees: stringArray(args.assignees),
+          milestone: typeof args.milestone === "number" ? args.milestone : null,
+        });
+        return detailByNumber(issue.number)!;
+      }
+      case "issues_update": {
+        const number = Number(args.number);
+        const issue = issueByNumber(number);
+        const detail = detailByNumber(number);
+        if (!issue || !detail) throw forgeFailure("NotRepo", `Issue #${number} was not found`, 404);
+        const title = String(args.title ?? "").trim();
+        if (title === "") throw forgeFailure("Other", "Validation Failed: title cannot be blank", 422);
+        const now = new Date().toISOString();
+        issue.title = title;
+        issue.labels = resolveLabels(stringArray(args.labels));
+        issue.assignees = resolveAssignees(stringArray(args.assignees));
+        issue.milestone = resolveMilestone(typeof args.milestone === "number" ? args.milestone : null);
+        detail.title = title;
+        detail.body = String(args.body ?? "");
+        detail.labels = cloneWire(issue.labels);
+        detail.assignees = cloneWire(issue.assignees);
+        detail.milestone = cloneWire(issue.milestone);
+        touchIssue(issue, now);
+        persistIssueState();
+        return detail;
+      }
+      case "issues_comment": {
+        const number = Number(args.number);
+        const issue = issueByNumber(number);
+        if (!issue) throw forgeFailure("NotRepo", `Issue #${number} was not found`, 404);
+        const body = String(args.body ?? "").trim();
+        if (body === "") throw forgeFailure("Other", "Validation Failed: body cannot be blank", 422);
+        return appendIssueComment(issue, body, issueIdentity.user.login, new Date().toISOString());
+      }
+      case "issues_set_state": {
+        const number = Number(args.number);
+        const issue = issueByNumber(number);
+        const detail = detailByNumber(number);
+        if (!issue || !detail) throw forgeFailure("NotRepo", `Issue #${number} was not found`, 404);
+        if (args.state !== "open" && args.state !== "closed") {
+          throw forgeFailure("Other", "Issue state must be open or closed", 422);
+        }
+        const now = new Date().toISOString();
+        issue.state = args.state;
+        detail.state = args.state;
+        issue.state_reason = args.state === "closed" ? "completed" : null;
+        detail.state_reason = issue.state_reason;
+        issue.closed_at = args.state === "closed" ? now : null;
+        detail.closed_at = issue.closed_at;
+        const comment = typeof args.comment === "string" ? args.comment.trim() : "";
+        if (comment !== "") appendIssueComment(issue, comment, issueIdentity.user.login, now);
+        touchIssue(issue, now);
+        persistIssueState();
+        return detail;
+      }
+      case "issues_activity_since": {
+        const issueWindow = activityCursor(args.issue_since);
+        const commentWindow = activityCursor(args.comment_since);
+        const allIssues = issueState.issues
+          .filter((issue) => Date.parse(issue.updated_at) >= issueWindow.since)
+          .sort((left, right) => Date.parse(left.updated_at) - Date.parse(right.updated_at));
+        const allComments = issueState.comments
+          .filter((comment) => Date.parse(comment.updated_at) >= commentWindow.since)
+          .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at))
+          .map((comment) => ({
+            ...comment,
+            // The Rust fallback resolves this title when the issue is absent
+            // from the independently paginated issue lane.
+            issue_title: issueByNumber(comment.issue_number)?.title ?? `Issue #${comment.issue_number}`,
+          }));
+        const issueStart = (issueWindow.page - 1) * (activityPageSize ?? allIssues.length);
+        const commentStart = (commentWindow.page - 1) * (activityPageSize ?? allComments.length);
+        const issues = allIssues.slice(issueStart, issueStart + (activityPageSize ?? allIssues.length));
+        const comments = allComments.slice(
+          commentStart,
+          commentStart + (activityPageSize ?? allComments.length),
+        );
+        const nextIssueCursor =
+          activityPageSize !== null && issueStart + activityPageSize < allIssues.length
+            ? activityLink("issues", issueWindow.page + 1, args.issue_since)
+            : null;
+        const nextCommentCursor =
+          activityPageSize !== null && commentStart + activityPageSize < allComments.length
+            ? activityLink("issues/comments", commentWindow.page + 1, args.comment_since)
+            : null;
+        // pullRequestComments deliberately never enter this response: the real
+        // Rust gh query excludes PR rows before the JS normalization layer.
+        return {
+          issues,
+          comments,
+          next_issue_cursor: nextIssueCursor,
+          next_comment_cursor: nextCommentCursor,
+          complete: nextIssueCursor === null && nextCommentCursor === null,
+        };
+      }
+      default:
+        return null;
+    }
+  }
+
+  const issueControls = {
+    addIssue(input: NewMockIssue): MockIssue {
+      return cloneWire(makeIssue(input));
+    },
+    addComment(input: NewMockComment): MockComment {
+      return cloneWire(makeComment(input));
+    },
+    addPullRequestComment(input: NewMockComment): MockComment {
+      return cloneWire(makeComment(input, true));
+    },
+    editComment(input: { nodeId: string; body: string }): MockComment {
+      const comment = [...issueState.comments, ...issueState.pullRequestComments].find(
+        (entry) => entry.node_id === input.nodeId,
+      );
+      if (!comment) throw forgeFailure("NotRepo", `Comment ${input.nodeId} was not found`, 404);
+      comment.body = input.body;
+      comment.updated_at = new Date().toISOString();
+      persistIssueState();
+      return cloneWire(comment);
+    },
+    setIssueFailure(input: { command: IssuesCommand; error: ForgeError | null }): void {
+      if (input.error === null) delete issueFailures[input.command];
+      else issueFailures[input.command] = input.error;
+    },
+    setIssueLatency(latencyMs: number | null): void {
+      issueLatency = Math.max(0, latencyMs ?? 0);
+    },
+    snapshot(): typeof issueState {
+      return cloneWire(issueState);
+    },
+    reset(): void {
+      issueState = cloneWire(initialIssueState);
+      issueFailures = { ...(options.issues?.errors ?? {}) };
+      issueLatency = Math.max(0, options.issues?.latencyMs ?? 0);
+      injectedCommentId = 0;
+      try {
+        sessionStorage.removeItem(ISSUE_STATE_KEY);
+      } catch {
+        // Best effort.
+      }
+    },
+  };
+
   const callbacks = new Map<number, (raw: unknown) => void>();
   const channelIndex = new Map<number, number>();
   const listeners = new Map<number, { event: string; handler: number }>();
@@ -814,9 +1464,7 @@ function BOOTSTRAP(options: TauriMockOptions): void {
           typeof value === "object" &&
           "__error__" in (value as Record<string, unknown>)
         ) {
-          return Promise.reject(
-            new Error(String((value as { __error__: unknown }).__error__)),
-          );
+          return Promise.reject(mockRejection(value));
         }
         return Promise.resolve(value);
       }
@@ -851,12 +1499,27 @@ function BOOTSTRAP(options: TauriMockOptions): void {
           typeof value === "object" &&
           "__error__" in (value as Record<string, unknown>)
         ) {
-          return Promise.reject(
-            new Error(String((value as { __error__: unknown }).__error__)),
-          );
+          return Promise.reject(mockRejection(value));
         }
         return Promise.resolve(value === undefined ? null : value);
       }
+
+      if (ISSUE_COMMANDS.has(cmd)) {
+        let value: unknown;
+        try {
+          value = applyIssues(cmd, args ?? {});
+        } catch (error) {
+          if (issueLatency === 0) return Promise.reject(error);
+          return new Promise((_resolve, reject) => {
+            setTimeout(() => reject(error), issueLatency);
+          });
+        }
+        if (issueLatency === 0) return Promise.resolve(cloneWire(value));
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(cloneWire(value)), issueLatency);
+        });
+      }
+
       if (LIST_COMMANDS.has(cmd)) return Promise.resolve([]);
       // Generic fallback: null (callers treat it as "nothing").
       return Promise.resolve(null);
@@ -872,6 +1535,7 @@ function BOOTSTRAP(options: TauriMockOptions): void {
   (window as unknown as Record<string, unknown>).__TAURI_MOCK__ = {
     calls,
     commands: commandMocks,
+    issues: issueControls,
     emit(event: string, payload: unknown): void {
       for (const { event: name, handler } of [...listeners.values()]) {
         if (name !== event) continue;

@@ -37,7 +37,7 @@ export const WORKSPACE_SESSION_KEY_PREFIX = "mygitui.workspace.";
 export const WORKSPACE_SESSION_DEBOUNCE_MS = 150;
 
 /** Center modes that persist (compare / run views are transient → "empty"). */
-export type SessionCenterKind = "empty" | "files" | "diff" | "commit";
+export type SessionCenterKind = "empty" | "files" | "diff" | "commit" | "issues";
 
 /** One open working-copy diff (list shape — only one is open today). */
 export interface StoredDiffRef {
@@ -59,6 +59,8 @@ export interface StoredWorkspaceSession {
   activeDiffPath: string | null;
   /** The commit detail's sha (matches the in-memory commit when present). */
   commitSha: string | null;
+  /** Selected issue in the Issues center; null keeps the list visible. Optional for legacy session objects. */
+  issueNumber?: number | null;
   /** Scroll positions, keys prefixed `file:<path>` / `diff:<path>`. */
   scrolls: Record<string, number>;
 }
@@ -101,6 +103,7 @@ const CENTER_KINDS: readonly SessionCenterKind[] = [
   "files",
   "diff",
   "commit",
+  "issues",
 ];
 
 function isSessionCenterKind(value: unknown): value is SessionCenterKind {
@@ -152,7 +155,7 @@ export function parseStoredWorkspaceSession(
   }
   const nullableString = (x: unknown): string | null =>
     typeof x === "string" ? x : null;
-  return {
+  const session: StoredWorkspaceSession = {
     openFiles: v.openFiles as string[],
     activeFile: nullableString(v.activeFile),
     centerKind: v.centerKind,
@@ -161,6 +164,14 @@ export function parseStoredWorkspaceSession(
     commitSha: nullableString(v.commitSha),
     scrolls,
   };
+  // Preserve the legacy object shape when the field is absent. New Issues
+  // sessions carry a positive issue number (or null for the list view).
+  if (typeof v.issueNumber === "number" && Number.isInteger(v.issueNumber) && v.issueNumber > 0) {
+    session.issueNumber = v.issueNumber;
+  } else if (v.issueNumber === null) {
+    session.issueNumber = null;
+  }
+  return session;
 }
 
 function defaultStorage(): StorageLike | null {
