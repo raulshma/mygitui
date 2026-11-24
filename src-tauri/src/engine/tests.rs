@@ -2031,11 +2031,11 @@ fn log_keeps_merged_branch_line_under_its_merge() {
 // internal refs (checkpoints / trash / stash) stay out of history
 // ---------------------------------------------------------------------------
 
-/// Writes `refs/mygitui/*` + `refs/stash` fixtures: a checkpoint snapshot
+/// Writes `refs/mygitui/*` + `refs/stash` + `refs/sessions/*` fixtures: a checkpoint snapshot
 /// commit and a trash tip, both parented on HEAD (HEAD itself does not
-/// move — the app's undo model), plus a stash commit. Every hidden commit
-/// is reachable only from its hidden ref.
-fn plant_internal_refs(temp: &TempRepo) -> (String, String) {
+/// move — the app's undo model), a stash commit, and an internal agent session commit.
+/// Every hidden commit is reachable only from its hidden ref.
+fn plant_internal_refs(temp: &TempRepo) -> (String, String, String) {
     let repo: &Repository = temp;
     let sig = repo.signature().expect("signature");
     let head = repo
@@ -2079,7 +2079,33 @@ fn plant_internal_refs(temp: &TempRepo) -> (String, String) {
     repo.reference("refs/stash", stash, true, "test: stash ref")
         .expect("stash ref");
 
-    (cp.to_string(), stash.to_string())
+    // Agent host session: internal agent commits must stay out of the commit graph.
+    let session = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "Agent host session e43a8348-... - turn 1",
+            &tree,
+            &[&head],
+        )
+        .expect("session commit");
+    repo.reference(
+        "refs/sessions/e43a8348",
+        session,
+        true,
+        "test: session ref",
+    )
+    .expect("session ref");
+    repo.reference(
+        "refs/antigravity/session-1",
+        session,
+        true,
+        "test: antigravity ref",
+    )
+    .expect("antigravity ref");
+
+    (cp.to_string(), stash.to_string(), session.to_string())
 }
 
 #[test]
@@ -2089,7 +2115,7 @@ fn log_excludes_internal_refs_from_walk_and_decorations() {
     temp.add_all_and_commit("base");
     temp.write("a.txt", "two\n");
     temp.add_all_and_commit("second");
-    let (cp_sha, stash_sha) = plant_internal_refs(&temp);
+    let (cp_sha, stash_sha, session_sha) = plant_internal_refs(&temp);
 
     let (page, next) = ENGINE
         .log(&temp, &LogFilter::default(), 50, None)
@@ -2103,9 +2129,13 @@ fn log_excludes_internal_refs_from_walk_and_decorations() {
     for commit in &page {
         assert_ne!(commit.sha, cp_sha, "checkpoint commit leaked into the log");
         assert_ne!(commit.sha, stash_sha, "stash commit leaked into the log");
+        assert_ne!(commit.sha, session_sha, "agent session commit leaked into the log");
         for r in &commit.refs {
             assert!(
-                !r.starts_with("mygitui/") && *r != "stash",
+                !r.starts_with("mygitui/")
+                    && *r != "stash"
+                    && !r.starts_with("sessions/")
+                    && !r.starts_with("antigravity/"),
                 "internal decoration chip leaked: {r}"
             );
         }
@@ -2121,7 +2151,7 @@ fn branch_reachable_checkpoint_commit_stays_visible() {
     temp.add_all_and_commit("base");
     temp.write("a.txt", "two\n");
     temp.add_all_and_commit("second");
-    let (cp_sha, _stash_sha) = plant_internal_refs(&temp);
+    let (cp_sha, _stash_sha, _session_sha) = plant_internal_refs(&temp);
 
     let cp_commit = temp
         .revparse_single(&cp_sha)
