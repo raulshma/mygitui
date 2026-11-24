@@ -463,15 +463,52 @@ const REMOTE_SSH_EDITORS: [&str; 5] = [
 /// `ssh-remote+<label>`; the Remote-SSH extension parses `[user@]host[:port]`
 /// and dials `ssh [user@]host -p port`).
 fn ssh_host_label(username: &str, host: &str, port: u16) -> String {
-    let host = host.trim();
-    let base = match username.trim() {
+    let host = host.trim().trim_start_matches("ssh://");
+    let user = username.trim();
+    let base = match user {
         "" => host.to_string(),
-        user => format!("{user}@{host}"),
+        u => {
+            if let Some(rest) = host.strip_prefix(&format!("{u}@")) {
+                format!("{u}@{rest}")
+            } else if host.contains('@') {
+                host.to_string()
+            } else {
+                format!("{u}@{host}")
+            }
+        }
     };
     if port == 0 || port == 22 {
         base
     } else {
         format!("{base}:{port}")
+    }
+}
+
+/// Extracts the remote filesystem path from a path or `ssh://<deviceId>/...` URI.
+/// For remote repos, the frontend root is an SSH URI (`ssh://<deviceId>/remote/path`).
+/// Editors require the clean remote filesystem path (e.g. `/remote/path`).
+fn clean_remote_path(root: &str) -> &str {
+    if let Some(rest) = root.strip_prefix("ssh://") {
+        if let Some(slash_idx) = rest.find('/') {
+            return &rest[slash_idx..];
+        }
+    }
+    root
+}
+
+/// Parses an `ssh://<deviceId>/<path>` root URI into `(deviceId, remote_path)`.
+fn parse_ssh_root(root: &str) -> Option<(&str, &str)> {
+    let rest = root.strip_prefix("ssh://")?;
+    let slash = rest.find('/')?;
+    if slash == 0 {
+        return None;
+    }
+    let device_id = &rest[..slash];
+    let path = &rest[slash..];
+    if device_id.is_empty() || path.is_empty() {
+        None
+    } else {
+        Some((device_id, path))
     }
 }
 
@@ -481,7 +518,7 @@ fn remote_launch_args(root: &str, host_label: &str) -> Vec<String> {
     vec![
         "--remote".to_string(),
         format!("ssh-remote+{host_label}"),
-        root.to_string(),
+        clean_remote_path(root).to_string(),
     ]
 }
 
@@ -582,14 +619,21 @@ pub async fn open_with(
             .into_iter()
             .find(|a| a.id == app_id)
             .ok_or_else(|| format!("app {app_id:?} is not available"))?;
-        match device_id {
-            None => open_path_with(&app_entry, Path::new(&repo_root)),
-            Some(device_id) => {
+        let (resolved_device_id, resolved_path) = match &device_id {
+            Some(did) => (Some(did.as_str()), clean_remote_path(&repo_root)),
+            None => match parse_ssh_root(&repo_root) {
+                Some((did, path)) => (Some(did), path),
+                None => (None, repo_root.as_str()),
+            },
+        };
+        match resolved_device_id {
+            None => open_path_with(&app_entry, Path::new(resolved_path)),
+            Some(dev_id) => {
                 let profile = crate::remote::commands::device_store(&app)
-                    .get(&device_id)
-                    .ok_or_else(|| format!("unknown device: {device_id}"))?;
+                    .get(dev_id)
+                    .ok_or_else(|| format!("unknown device: {dev_id}"))?;
                 let host_label = ssh_host_label(&profile.username, &profile.host, profile.port);
-                open_remote_with(&app_entry, &profile.name, &repo_root, &host_label)
+                open_remote_with(&app_entry, &profile.name, resolved_path, &host_label)
             }
         }
     })
@@ -895,7 +939,54 @@ mod tests {
             super::ssh_host_label("", "dev.example.com", 22),
             "dev.example.com"
         );
+        assert_eq!(
+            super::ssh_host_label("", "192.168.1.201", 22),
+            "192.168.1.201"
+        );
+        assert_eq!(
+            super::ssh_host_label("root", "192.168.1.201", 22),
+            "root@192.168.1.201"
+        );
+        assert_eq!(
+            super::ssh_host_label("root", "ssh://192.168.1.201", 2222),
+            "root@192.168.1.201:2222"
+        );
+        assert_eq!(
+            super::ssh_host_label("root", "root@192.168.1.201", 22),
+            "root@192.168.1.201"
+        );
         assert_eq!(super::ssh_host_label("  ", "h", 0), "h", "port 0 = unset");
+    }
+
+    #[test]
+    fn clean_remote_path_strips_ssh_scheme_and_device() {
+        assert_eq!(
+            super::clean_remote_path("ssh://dev-1/remote/path/to/repo"),
+            "/remote/path/to/repo"
+        );
+        assert_eq!(
+            super::clean_remote_path("/remote/path/to/repo"),
+            "/remote/path/to/repo"
+        );
+        assert_eq!(
+            super::clean_remote_path("ssh://192.168.1.201/var/www/site"),
+            "/var/www/site"
+        );
+    }
+
+    #[test]
+    fn parse_ssh_root_extracts_device_and_path() {
+        assert_eq!(
+            super::parse_ssh_root("ssh://dev-1/remote/path/to/repo"),
+            Some(("dev-1", "/remote/path/to/repo"))
+        );
+        assert_eq!(
+            super::parse_ssh_root("ssh://my-device/var/www"),
+            Some(("my-device", "/var/www"))
+        );
+        assert_eq!(super::parse_ssh_root("/local/path"), None);
+        assert_eq!(super::parse_ssh_root("ssh://"), None);
+        assert_eq!(super::parse_ssh_root("ssh://dev-only"), None);
     }
 
     /// Remote launch argv: the VS Code family gets `--remote ssh-remote+<label>`
@@ -906,6 +997,14 @@ mod tests {
         let args = super::remote_launch_args("/home/u/repo", "u@dev:2222");
         assert_eq!(
             args,
+            vec!["--remote", "ssh-remote+u@dev:2222", "/home/u/repo"]
+        );
+
+        // SSH URI passed directly is cleaned to remote filesystem path
+        let args_from_uri =
+            super::remote_launch_args("ssh://dev-1/home/u/repo", "u@dev:2222");
+        assert_eq!(
+            args_from_uri,
             vec!["--remote", "ssh-remote+u@dev:2222", "/home/u/repo"]
         );
 
