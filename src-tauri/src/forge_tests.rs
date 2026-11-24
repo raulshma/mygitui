@@ -2,8 +2,8 @@
 //! URLs, gh JSON/table output, PR-URL extraction, failure classification,
 //! version strings) plus real process-runner behavior (timeout kill on a
 //! long-lived `ping`/`sleep`, spawn failure on a missing binary). Nothing
-//! here touches the network; the one test that shells out to a real `gh`
-//! is `#[ignore]`d like the CLI-integration tests elsewhere.
+//! here touches the network; the tests that shell out to a real `gh` are
+//! `#[ignore]`d like the CLI-integration tests elsewhere.
 
 use std::time::{Duration, Instant};
 
@@ -1033,6 +1033,121 @@ fn status_sync_against_real_gh() {
     if status.available {
         assert!(!status.version.is_empty(), "version parsed: {status:?}");
     }
+}
+
+/// Real `gh api` probe for the Issues REST reads. Only the real binary can
+/// prove the argv is accepted (gh rejects any flag it does not define) and
+/// that `--include` output parses — neither is covered by the mock-IPC e2e
+/// suite. Read-only GETs against a public repository — env-dependent, hence
+/// ignored; run with `cargo test -- --ignored` on a provisioned machine
+/// with a gh login.
+#[test]
+#[ignore = "shells out to real gh (needs gh, network, and a gh login)"]
+fn issues_rest_reads_against_real_gh() {
+    use crate::forge::issues::{
+        issue_activity_sync, issue_comments_sync, issue_detail_sync, issue_identity_sync,
+        issue_list_sync, issue_metadata_sync, IssueListQuery,
+    };
+    use crate::forge::ForgeRepo;
+
+    let dir = std::env::temp_dir().join(format!(
+        "mygitui-forge-issues-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        let outcome = run_program("git", Some(&dir), &args, Duration::from_secs(15));
+        assert_eq!(
+            outcome.code,
+            Some(0),
+            "git {args:?}: {} {}",
+            outcome.stdout,
+            outcome.stderr
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["remote", "add", "origin", "https://github.com/cli/cli"]);
+    let repo = ForgeRepo::local(&dir);
+
+    // List filters ride `--raw-field` onto the query string.
+    let page = issue_list_sync(
+        &repo,
+        None,
+        IssueListQuery {
+            state: "all".to_string(),
+            per_page: 5,
+            ..IssueListQuery::default()
+        },
+    )
+    .expect("issue list");
+    assert!(!page.items.is_empty(), "{page:?}");
+    let issue = &page.items[0];
+    assert!(issue.number > 0 && !issue.title.is_empty() && !issue.node_id.is_empty());
+
+    let labelled = issue_list_sync(
+        &repo,
+        None,
+        IssueListQuery {
+            state: "all".to_string(),
+            labels: vec!["bug".to_string()],
+            per_page: 5,
+            ..IssueListQuery::default()
+        },
+    )
+    .expect("filtered issue list");
+    assert!(
+        !labelled.items.is_empty()
+            && labelled
+                .items
+                .iter()
+                .all(|item| item.labels.iter().any(|label| label.name == "bug")),
+        "label filter did not reach GitHub: {labelled:?}"
+    );
+
+    // Search switches endpoints and URL-encodes the free-text qualifier.
+    let search = issue_list_sync(
+        &repo,
+        None,
+        IssueListQuery {
+            state: "all".to_string(),
+            search: "crash & (hang)".to_string(),
+            per_page: 5,
+            ..IssueListQuery::default()
+        },
+    )
+    .expect("issue search");
+    assert!(search.total_count.is_some(), "{search:?}");
+
+    let detail = issue_detail_sync(&repo, None, issue.number).expect("issue detail");
+    assert_eq!(detail.summary.number, issue.number);
+
+    let comments =
+        issue_comments_sync(&repo, None, issue.number, Some(1), 10).expect("issue comments");
+    assert_eq!((comments.page, comments.per_page), (1, 10));
+
+    let metadata = issue_metadata_sync(&repo, None).expect("issue metadata");
+    assert!(!metadata.labels.is_empty(), "{metadata:?}");
+
+    let identity = issue_identity_sync(&repo, None).expect("issue identity");
+    assert_eq!(
+        (identity.owner.as_str(), identity.repo.as_str()),
+        ("cli", "cli")
+    );
+    assert!(!identity.user.login.is_empty());
+
+    let activity = issue_activity_sync(&repo, None, None, None).expect("issue activity");
+    assert!(
+        !activity.issues.is_empty() || !activity.comments.is_empty(),
+        "{activity:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------

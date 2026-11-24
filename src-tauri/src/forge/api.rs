@@ -255,7 +255,10 @@ pub fn api_args(
         if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
             return Err(ForgeError::other("invalid GitHub API query parameter"));
         }
-        args.push("--param".to_string());
+        // `--raw-field` keeps the value literal (no `-F` type, `@file`, or
+        // `{owner}` coercion); under an explicit GET method gh puts the pairs
+        // on the query string, not in a form body.
+        args.push("--raw-field".to_string());
         args.push(format!("{name}={value}"));
     }
     if body.is_some() {
@@ -491,16 +494,65 @@ mod tests {
             Some(&json!({"title": "a; echo nope", "body": "x\ny"})),
         )
         .unwrap();
-        assert_eq!(args[0], "api");
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--include", "--hostname"]));
-        assert!(args.contains(&"--input".to_string()));
-        assert!(args.contains(&"-".to_string()));
-        assert!(args.contains(&"labels=bug,help wanted".to_string()));
-        assert!(!args.contains(&"a; echo nope".to_string()));
+        // Exact argv: the body stays on stdin and every token stays separate.
+        assert_eq!(
+            args,
+            vec![
+                "api",
+                "--include",
+                "--hostname",
+                "ghe.example.com",
+                "--method",
+                "POST",
+                "--raw-field",
+                "labels=bug,help wanted",
+                "--input",
+                "-",
+                "/repos/a/b/issues",
+            ]
+        );
         assert!(api_args("", "GET", "/x", &[], None).is_err());
         assert!(api_args("github.com", "GET", "-x", &[], None).is_err());
+        assert!(api_args("github.com", "FETCH", "/x", &[], None).is_err());
+    }
+
+    #[test]
+    fn builds_get_queries_with_raw_fields() {
+        // The production read path: gh rejects any flag it does not define,
+        // so pin the full argv instead of matching loose `contains`.
+        let args = api_args(
+            "github.com",
+            "GET",
+            "/repos/a/b/issues",
+            &[
+                ("state", "open"),
+                ("labels", "bug,help wanted"),
+                ("q", "a&b c=d"),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "api",
+                "--include",
+                "--hostname",
+                "github.com",
+                "--method",
+                "GET",
+                "--raw-field",
+                "state=open",
+                "--raw-field",
+                "labels=bug,help wanted",
+                "--raw-field",
+                "q=a&b c=d",
+                "/repos/a/b/issues",
+            ]
+        );
+        for params in [[("", "1")], [("a=b", "1")], [("a", "1\0")]] {
+            assert!(api_args("github.com", "GET", "/x", &params, None).is_err());
+        }
     }
 
     #[test]
