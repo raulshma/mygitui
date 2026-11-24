@@ -34,14 +34,13 @@
   import EmptyState from "../layout/EmptyState.svelte";
   import UnifiedTabStrip from "$lib/components/layout/UnifiedTabStrip.svelte";
   import OverflowMenu from "$lib/components/layout/OverflowMenu.svelte";
+  import EditorEmptyOverview from "$lib/components/panels/EditorEmptyOverview.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
   import { Hint } from "$lib/components/ui/tooltip/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import { Kbd } from "$lib/components/ui/kbd/index.js";
   import { appIcon } from "$lib/components/icons/library.svelte";
 
-  const iconTree = $derived(appIcon("account-tree")!);
   const iconPrev = $derived(appIcon("arrow-upward")!);
   const iconNext = $derived(appIcon("arrow-downward")!);
   const iconClose = $derived(appIcon("close")!);
@@ -241,13 +240,6 @@
     onDiffScroll?: (scrollTop: number, firstVisibleRow: number) => void;
   } = $props();
 
-  /** Welcome summary: unique changed paths + upstream position. */
-  const changeCount = $derived(
-    status ? new Set(status.entries.map((e) => e.path)).size : 0,
-  );
-  const branchLabel = $derived(
-    status ? (status.branch ?? (status.detached ? "detached HEAD" : "unknown")) : "",
-  );
 
   /**
    * Hunk actions mirror the shown scope (see {@link diffHunkActions}): the
@@ -769,99 +761,14 @@
       </div>
     </div>
   {:else}
-    <div
-      class="welcome flex min-h-0 flex-1 select-none flex-col items-center justify-center gap-ui-4 p-8 text-center text-muted-foreground"
-    >
-      <span
-        class="wicon inline-flex size-11 items-center justify-center rounded-full border border-border bg-card text-primary-ink"
-        aria-hidden="true"
-      ><Icon icon={iconTree} size={22} /></span>
-      <p class="wtitle m-0 text-sm font-medium text-foreground">Nothing open</p>
-      {#if status}
-        <div
-          class="wsummary mt-ui-15 flex flex-wrap items-center justify-center gap-ui-35"
-          aria-label="Repository summary"
-        >
-          <span
-            class="wchip wbranch inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-primary/35 px-2 py-px font-mono text-ui-micro leading-[1.4] tabular-nums text-primary-ink"
-          >{branchLabel}</span>
-          <span
-            class="wchip inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-border px-2 py-px text-ui-micro leading-[1.4] tabular-nums"
-          >
-            {changeCount === 0
-              ? "Clean working tree"
-              : `${changeCount} changed ${changeCount === 1 ? "file" : "files"}`}
-          </span>
-          {#if status.ahead > 0}
-            <Hint label={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}>
-              {#snippet child({ props })}
-                <span
-                  class="wchip wahead inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-transparent bg-accent px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-accent-foreground"
-                  {...props}
-                >
-                  ↑ {status.ahead} to push
-                </span>
-              {/snippet}
-            </Hint>
-          {/if}
-          {#if status.behind > 0}
-            <Hint label={`${status.behind} ${status.behind === 1 ? "commit" : "commits"} to pull`}>
-              {#snippet child({ props })}
-                <span
-                  class="wchip wbehind inline-flex items-center gap-ui-2 whitespace-nowrap rounded-full border border-transparent bg-muted px-2 py-px text-ui-micro leading-[1.4] tabular-nums text-muted-foreground"
-                  {...props}
-                >
-                  ↓ {status.behind} to pull
-                </span>
-              {/snippet}
-            </Hint>
-          {/if}
-        </div>
-      {:else}
-        <p
-          class="wloading mt-ui-15 inline-flex items-center gap-ui-4 text-ui-micro"
-          role="status"
-        >
-          <Spinner class="size-3" role="presentation" aria-hidden="true" />
-          Reading repository…
-        </p>
-      {/if}
-      <p class="wtext m-0 max-w-[22rem] text-xs leading-[1.45]">
-        Select a change in the source-control sidebar to see its diff, or pick
-        a commit in history to inspect it.
-      </p>
-      {#if (changeCount > 0 && onOpenFirstChange) || onBrowseHistory}
-        <div class="wactions mt-2 flex flex-wrap justify-center gap-2">
-          {#if changeCount > 0 && onOpenFirstChange}
-            <Button
-              class="h-auto rounded-full px-[0.9rem] py-1 text-ui-base"
-              type="button"
-              onclick={onOpenFirstChange}
-            >
-              Open first change
-            </Button>
-          {/if}
-          {#if onBrowseHistory}
-            <Button
-              class="h-auto rounded-full px-[0.9rem] py-1 text-ui-base"
-              variant="outline"
-              type="button"
-              onclick={onBrowseHistory}
-            >
-              Browse history
-            </Button>
-          {/if}
-        </div>
-      {/if}
-      <ul
-        class="whints mt-[0.9rem] flex list-none flex-wrap justify-center gap-x-[1.1rem] gap-y-[0.4rem] border-t border-border pt-[0.7rem] text-ui-micro text-muted-foreground"
-        aria-label="Keyboard shortcuts"
-      >
-        <li class="inline-flex items-center gap-ui-15"><Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd><span class="ml-ui-4">Command palette</span></li>
-        <li class="inline-flex items-center gap-ui-15"><Kbd>F5</Kbd><span class="ml-ui-4">Refresh repository</span></li>
-        <li class="inline-flex items-center gap-ui-15"><Kbd>Ctrl</Kbd>+<Kbd>1</Kbd><span class="ml-ui-4">Focus source control</span></li>
-      </ul>
-    </div>
+    <EditorEmptyOverview
+      {repoId}
+      {root}
+      {repoName}
+      {status}
+      {onOpenFirstChange}
+      {onBrowseHistory}
+    />
   {/if}
   {/if}
 </div>
