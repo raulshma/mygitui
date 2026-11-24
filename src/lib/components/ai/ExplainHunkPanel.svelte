@@ -30,6 +30,7 @@
 
   let {
     repoId,
+    root: rootPath = undefined,
     path,
     hunkText,
     /** One-line header for the panel (the hunk's @@ header). */
@@ -39,6 +40,7 @@
     onClose,
   }: {
     repoId: string;
+    root?: string | undefined;
     path: string;
     /** Unified-diff text of the hunk (features.formatHunkText). */
     hunkText: string;
@@ -148,7 +150,7 @@
             class="mini whitespace-nowrap rounded-full text-ui-meta"
             type="button"
             onclick={() => {
-              ai.setOptIn(repoId, true);
+              ai.setOptIn(repoId, true, rootPath);
               retry();
             }}
           >

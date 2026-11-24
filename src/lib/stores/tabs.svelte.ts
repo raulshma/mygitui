@@ -228,6 +228,11 @@ export class TabStore {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? null;
   }
 
+  /** Canonical root for a tab id (`undefined` when not open). */
+  rootFor(id: string): string | undefined {
+    return this.tabs.find((tab) => tab.id === id)?.root;
+  }
+
   /** Writes the current open-tab roots + focused root to storage. */
   #persistSession(): void {
     if (!this.#sessionStorage) return;
@@ -711,6 +716,11 @@ export function getTabs(): Tab[] {
 
 export function getActiveId(): string | null {
   return tabStore.activeId;
+}
+
+/** Resolves a tab id to its canonical root path (`undefined` when not open). */
+export function repoRootFor(repoId: string): string | undefined {
+  return tabStore.rootFor(repoId);
 }
 
 export function openTab(path: string, options: OpenTabOptions = {}): Promise<Tab> {

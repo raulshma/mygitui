@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { tabStore, resetTabStore } from "$lib/stores/tabs.svelte";
 import { MODEL_CHOICE_KEY, ModelChoiceStore, parseModelChoice, recentModels } from "./modelChoice.svelte";
 import type { AiJobRecord } from "./jobs.svelte";
 
@@ -84,6 +85,50 @@ describe("ModelChoiceStore", () => {
     expect(raw.data.byRepo["repo-1"]).toBe("openai/gpt-5");
     const second = new ModelChoiceStore(storage);
     expect(second.overrideFor("repo-1")).toBe("openai/gpt-5");
+  });
+
+  it("persists model override across restarts for the same repo root even when ephemeral repoId changes", () => {
+    const storage = memStorage();
+    const firstStore = new ModelChoiceStore(storage);
+
+    tabStore.tabs = [
+      {
+        id: "sess-1",
+        name: "my-repo",
+        root: "/path/to/my-repo",
+        status: null,
+        statusError: null,
+        generation: 0,
+        deviceId: null,
+        openError: null,
+      },
+    ];
+
+    firstStore.setOverride("sess-1", "openai/gpt-5");
+    expect(firstStore.overrideFor("sess-1")).toBe("openai/gpt-5");
+
+    // Session 2: new ephemeral ID for same root
+    resetTabStore();
+    tabStore.tabs = [
+      {
+        id: "sess-2",
+        name: "my-repo",
+        root: "/path/to/my-repo",
+        status: null,
+        statusError: null,
+        generation: 0,
+        deviceId: null,
+        openError: null,
+      },
+    ];
+
+    const secondStore = new ModelChoiceStore(storage);
+    expect(secondStore.overrideFor("sess-2")).toBe("openai/gpt-5");
+
+    secondStore.setOverride("sess-2", null);
+    expect(secondStore.overrideFor("sess-2")).toBeNull();
+
+    resetTabStore();
   });
 
   it("drops junk rows on load (parse-and-drop)", () => {

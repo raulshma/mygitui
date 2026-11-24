@@ -44,6 +44,7 @@
 
   let {
     repoId,
+    root: rootPath = undefined,
     kind = undefined,
     label,
     title = undefined,
@@ -65,6 +66,7 @@
     rootClass = undefined,
   }: {
     repoId: string;
+    root?: string | undefined;
     /**
      * The feature this button serves (M13): when set, the button also
      * disappears while that feature is switched off in AI settings, and
@@ -172,7 +174,7 @@
     if (disabled || busy) return;
     if (!ai.isEnabled() || (kind !== undefined && !ai.isFeatureEnabled(kind))) return;
     error = null;
-    if (ai.isOptedIn(repoId)) {
+    if (ai.isOptedIn(repoId, rootPath)) {
       void doRun();
     } else {
       confirmOpen = !confirmOpen;
@@ -181,7 +183,7 @@
 
   async function allowAndRun(always: boolean): Promise<void> {
     confirmOpen = false;
-    if (always) ai.setOptIn(repoId, true);
+    if (always) ai.setOptIn(repoId, true, rootPath);
     await doRun();
   }
 
@@ -193,8 +195,8 @@
       // merged with the "Just once" consent into the run options the
       // caller forwards to ai.run.
       const opts: AiRunOptions = {
-        ...ai.runOptsFor(repoId),
-        model: modelChoice.overrideFor(repoId) ?? undefined,
+        ...ai.runOptsFor(repoId, rootPath),
+        model: modelChoice.overrideFor(repoId, rootPath) ?? undefined,
       };
       // Chunk 6: a retry the caller marked as "without tools" runs the
       // alternative closure (the diagnose views force single-shot there);
@@ -218,7 +220,7 @@
   }
 </script>
 
-{#if ai.isEnabled() && (kind === undefined || ai.isFeatureEnabled(kind)) && (!gateVisibility || ai.isOptedIn(repoId))}
+{#if ai.isEnabled() && (kind === undefined || ai.isFeatureEnabled(kind)) && (!gateVisibility || ai.isOptedIn(repoId, rootPath))}
   <span class="ai-feature relative inline-flex {rootClass ?? ''}" bind:this={root}>
     {#if modelPicker && !busy}
       <!-- Per-run model choice (item 55): compact, hidden while the run

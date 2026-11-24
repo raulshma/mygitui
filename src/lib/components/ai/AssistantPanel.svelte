@@ -68,7 +68,7 @@
   // --- gates -------------------------------------------------------------------
 
   const enabled = $derived(ai.isEnabled());
-  const optedIn = $derived(ai.isOptedIn(repoId));
+  const optedIn = $derived(ai.isOptedIn(repoId, root));
   /** Per-feature chat mode "off" hides the panel's affordances (chunk 5). */
   const chatModeOff = $derived(ai.featureMode("chat") === "off");
 
@@ -368,7 +368,7 @@
           <Button
             class="h-auto whitespace-nowrap rounded-sm px-2 py-px text-ui-meta font-normal"
             type="button"
-            onclick={() => ai.setOptIn(repoId, true)}
+            onclick={() => ai.setOptIn(repoId, true, root)}
           >
             Enable AI for this repository
           </Button>

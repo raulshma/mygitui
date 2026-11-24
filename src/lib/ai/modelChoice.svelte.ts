@@ -25,6 +25,7 @@
 
 import { loadVersioned, writeEnvelope } from "$lib/state/persist";
 import type { StorageLike } from "$lib/state/persist";
+import { tabStore } from "$lib/stores/tabs.svelte";
 import type { AiBackend } from "./types";
 import type { AiJobRecord } from "./jobs.svelte";
 
@@ -59,6 +60,12 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
+function repoKey(idOrRoot: string, rootFallback?: string): string {
+  if (!idOrRoot) return rootFallback ?? idOrRoot;
+  const tabRoot = tabStore.rootFor(idOrRoot);
+  return tabRoot || rootFallback || idOrRoot;
+}
+
 /**
  * The per-repo model override store — construct for tests; the app uses
  * the module-level {@link modelChoice} singleton.
@@ -78,8 +85,9 @@ export class ModelChoiceStore {
   }
 
   /** The manual override for `repoId` (`null` = run on the default). */
-  overrideFor(repoId: string): string | null {
-    return this.#data.byRepo[repoId] ?? null;
+  overrideFor(repoId: string, rootFallback?: string): string | null {
+    const key = repoKey(repoId, rootFallback);
+    return this.#data.byRepo[key] ?? this.#data.byRepo[repoId] ?? null;
   }
 
   /**
@@ -87,12 +95,19 @@ export class ModelChoiceStore {
    * default). Persisted on every change; storage failures keep the
    * in-memory choice usable for the session.
    */
-  setOverride(repoId: string, model: string | null | undefined): void {
+  setOverride(
+    repoId: string,
+    model: string | null | undefined,
+    rootFallback?: string,
+  ): void {
+    const key = repoKey(repoId, rootFallback);
     const next = { byRepo: { ...this.#data.byRepo } };
     const trimmed = model?.trim();
     if (trimmed !== undefined && trimmed.length > 0 && repoId.length > 0) {
-      next.byRepo[repoId] = trimmed;
+      next.byRepo[key] = trimmed;
+      if (key !== repoId) next.byRepo[repoId] = trimmed;
     } else {
+      delete next.byRepo[key];
       delete next.byRepo[repoId];
     }
     this.#data = next;

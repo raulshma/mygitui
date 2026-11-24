@@ -603,15 +603,36 @@ export class AiStore {
 
   // -- per-repo opt-in -----------------------------------------------------------
 
-  /** True when AI features are allowed for `repoId` (default: no). */
-  isOptedIn(repoId: string): boolean {
-    return this.config.repoOptIn[repoId] === true;
+  /**
+   * Resolves a repoId (or already-resolved root) to the canonical root path
+   * when known via `tabStore.tabs` or an optional fallback. The backend's
+   * `repo_id` is per-session (timestamp-pid-counter), while the root path
+   * identifies the repository across restarts.
+   */
+  #repoKey(idOrRoot: string, rootFallback?: string): string {
+    if (!idOrRoot) return rootFallback ?? idOrRoot;
+    const tabRoot = tabStore.rootFor(idOrRoot);
+    return tabRoot || rootFallback || idOrRoot;
   }
 
-  /** Allows or revokes AI features for `repoId` (persisted). */
-  setOptIn(repoId: string, allow: boolean): void {
-    if (allow) this.config.repoOptIn[repoId] = true;
-    else delete this.config.repoOptIn[repoId];
+  /** True when AI features are allowed for `repoId` or root (default: no). */
+  isOptedIn(repoId: string, rootFallback?: string): boolean {
+    const key = this.#repoKey(repoId, rootFallback);
+    return this.config.repoOptIn[key] === true || this.config.repoOptIn[repoId] === true;
+  }
+
+  /** Allows or revokes AI features for `repoId` or root (persisted). */
+  setOptIn(repoId: string, allow: boolean, rootFallback?: string): void {
+    const key = this.#repoKey(repoId, rootFallback);
+    if (allow) {
+      this.config.repoOptIn[key] = true;
+      if (key !== repoId) {
+        this.config.repoOptIn[repoId] = true;
+      }
+    } else {
+      delete this.config.repoOptIn[key];
+      delete this.config.repoOptIn[repoId];
+    }
     this.#persist();
   }
 
@@ -620,8 +641,8 @@ export class AiStore {
    * (`{ oneShot: true }`) when the repo is not persisted-opted-in — only
    * possible right after the dialog's consent — else `undefined`.
    */
-  runOptsFor(repoId: string): AiRunOptions | undefined {
-    return this.isOptedIn(repoId) ? undefined : { oneShot: true };
+  runOptsFor(repoId: string, rootFallback?: string): AiRunOptions | undefined {
+    return this.isOptedIn(repoId, rootFallback) ? undefined : { oneShot: true };
   }
 
   // -- agentic runs (M13 chunk 2) ------------------------------------------------
