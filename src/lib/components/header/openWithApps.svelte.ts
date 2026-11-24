@@ -20,6 +20,7 @@ import { detectEditors, openWith, openWithCustom } from "$lib/ipc/client";
 import type { EditorApp } from "$lib/ipc/types";
 import { describeError } from "$lib/errors";
 import { toast } from "$lib/toast";
+import { parseSshUri } from "$lib/stores/tabs.svelte";
 import {
   CUSTOM_ID_PREFIX,
   customApps,
@@ -140,9 +141,13 @@ export async function openWithEntry(
   deviceId?: string | null,
 ): Promise<void> {
   persistLast(entry.id);
+  const parsed = parseSshUri(root);
+  const effectiveDeviceId =
+    deviceId !== undefined ? deviceId : (parsed?.deviceId ?? undefined);
+  const effectivePath = parsed ? parsed.path : root;
   const pending = entry.custom
-    ? openWithCustom(root, entry.custom)
-    : openWith(root, entry.id, deviceId);
+    ? openWithCustom(effectivePath, entry.custom)
+    : openWith(effectivePath, entry.id, effectiveDeviceId);
   try {
     await pending;
   } catch (err: unknown) {

@@ -150,6 +150,41 @@ describe("openWithApps openWithEntry (launch + persistence)", () => {
       ),
     );
   });
+
+  it("normalizes ssh uri root to clean remote filesystem path and extracts deviceId", async () => {
+    mocks.openWith.mockResolvedValue(undefined);
+
+    await openWithEntry("ssh://dev-1/var/www/my-repo", {
+      id: "vscode",
+      name: "VS Code",
+    });
+
+    await vi.waitFor(() =>
+      expect(mocks.openWith).toHaveBeenCalledWith(
+        "/var/www/my-repo",
+        "vscode",
+        "dev-1",
+      ),
+    );
+  });
+
+  it("preserves explicit deviceId while normalizing ssh uri root", async () => {
+    mocks.openWith.mockResolvedValue(undefined);
+
+    await openWithEntry(
+      "ssh://dev-1/var/www/my-repo",
+      { id: "vscode", name: "VS Code" },
+      "dev-1",
+    );
+
+    await vi.waitFor(() =>
+      expect(mocks.openWith).toHaveBeenCalledWith(
+        "/var/www/my-repo",
+        "vscode",
+        "dev-1",
+      ),
+    );
+  });
 });
 
 describe("openWithApps refreshApps (detection)", () => {

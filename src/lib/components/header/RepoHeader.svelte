@@ -57,7 +57,7 @@
     type OpenEntry,
   } from "./openWithApps.svelte";
   import { appIcons } from "./appIcons";
-  import { tabStore } from "$lib/stores/tabs.svelte";
+  import { parseSshUri, tabStore } from "$lib/stores/tabs.svelte";
 
   let {
     repoId,
@@ -191,7 +191,13 @@
   const openWithCustoms = $derived(customEntries());
   /** The device tab strip entry (a device repo opens through SSH remote). */
   const openWithDeviceId = $derived(
-    tabStore.tabs.find((tab) => tab.id === repoId)?.deviceId ?? null,
+    tabStore.tabs.find((tab) => tab.id === repoId)?.deviceId ??
+      parseSshUri(root)?.deviceId ??
+      null,
+  );
+  /** The filesystem path passed to the editor (device-side path for remote repos). */
+  const openWithPath = $derived(
+    openWithDeviceId !== null ? (parseSshUri(root)?.path ?? root) : root,
   );
   /**
    * Detected apps that cannot open a device-side folder (no SSH-remote
@@ -237,7 +243,7 @@
     // finally: a synchronous ipc failure must not wedge `launching` true —
     // every later open-with click would silently no-op.
     try {
-      await openWithEntry(root, entry, openWithDeviceId);
+      await openWithEntry(openWithPath, entry, openWithDeviceId);
     } finally {
       launching = false;
     }
