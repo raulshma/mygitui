@@ -78,6 +78,7 @@
   import DeviceBrowser from "$lib/components/DeviceBrowser.svelte";
   import type { DeviceProfile } from "$lib/ipc/types";
   import { closedDialog, openDialog, type DialogState } from "$lib/state/dialog";
+  import type { SectionId } from "$lib/components/settings/SettingsDialog.svelte";
   import { describeError } from "$lib/errors";
 
   /**
@@ -133,7 +134,6 @@
     () => import("$lib/components/menu/ContextMenu.svelte"),
   );
   const cloneOverlay = lazyOverlay(() => import("$lib/components/CloneDialog.svelte"));
-  const aiSettingsOverlay = lazyOverlay(() => import("$lib/components/ai/AiSettings.svelte"));
   const addDeviceOverlay = lazyOverlay(() => import("$lib/components/AddDeviceDialog.svelte"));
   const hostKeyOverlay = lazyOverlay(() => import("$lib/components/HostKeyDialog.svelte"));
   const deviceAuthOverlay = lazyOverlay(() => import("$lib/components/DeviceAuthDialog.svelte"));
@@ -157,7 +157,6 @@
     paletteOverlay.chunk,
     contextMenuOverlay.chunk,
     cloneOverlay.chunk,
-    aiSettingsOverlay.chunk,
     addDeviceOverlay.chunk,
     hostKeyOverlay.chunk,
     deviceAuthOverlay.chunk,
@@ -203,11 +202,7 @@
   /** Clone-dialog visibility (Overview's "Clone repository…" button). */
   let cloneOpen = $state(false);
 
-  /** AI settings dialog (opened by the AiHealthChip, M12). */
-  let aiSettingsOpen = $state(false);
-
-  /**
-   * Shared AI result dialog (M13, `ai-show-result`): headless AI runs
+  /** Shared AI result dialog (M13, `ai-show-result`): headless AI runs
    * (palette commands, context-menu features without a home panel) present
    * their output here.
    */
@@ -217,8 +212,9 @@
   /** Appearance customizer (opened by the palette / ThemeToggle menu). */
   let appearanceOpen = $state(false);
 
-  /** Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma). */
+  /** Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma / AI shortcuts). */
   let settingsOpen = $state(false);
+  let settingsSection = $state<SectionId>("general");
 
   // --- Remote devices (SSH) -------------------------------------------------
 
@@ -603,10 +599,11 @@
     // path as the cli-args listener above (guarded against double-opens).
     void initDeepLinks((path) => openRepoTab(path));
 
-    // M12: the AI health chip opens the settings dialog.
+    // M12: the AI health chip and AI configure buttons open settings in the AI section.
     cleanups.push(
       onUiEvent("open-ai-settings", () => {
-        aiSettingsOpen = true;
+        settingsSection = "ai";
+        settingsOpen = true;
       }),
     );
 
@@ -626,6 +623,7 @@
 
     cleanups.push(
       onUiEvent("open-settings", () => {
+        settingsSection = "general";
         settingsOpen = true;
       }),
     );
@@ -651,7 +649,7 @@
         <UpdateChip compact />
         <AiHealthChip compact />
         <OverviewToggle />
-        <AppBarMenu onOpenSettings={() => (settingsOpen = true)} />
+        <AppBarMenu onOpenSettings={() => { settingsSection = "general"; settingsOpen = true; }} />
       {/snippet}
     </TabStrip>
   {/snippet}
@@ -814,7 +812,7 @@
            devices section rides along as the children snippet). -->
       <main class="overview-host flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <OverviewView
-          onOpenSettings={() => (settingsOpen = true)}
+          onOpenSettings={() => { settingsSection = "general"; settingsOpen = true; }}
           onClone={() => (cloneOpen = true)}
         >
           <!-- Remote devices (SSH): list + detail (browser + settings). -->
@@ -1191,13 +1189,6 @@
   {/await}
 {/if}
 
-<!-- M12: AI settings dialog (opened by the AI health chip / palette). -->
-{#if aiSettingsOpen || aiSettingsOverlay.landed}
-  {#await aiSettingsOverlay.chunk() then AiSettingsModule}
-    <AiSettingsModule.default bind:open={aiSettingsOpen} />
-  {/await}
-{/if}
-
 <!-- M13: shared AI result dialog (headless runs land here). -->
 {#if aiResultOpen || aiResultOverlay.landed}
   {#await aiResultOverlay.chunk() then AiResultDialogModule}
@@ -1217,10 +1208,13 @@
   {/await}
 {/if}
 
-<!-- Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma). -->
+<!-- Settings hub (opened by the palette / TabStrip gear / Ctrl+Comma / AI shortcuts). -->
 {#if settingsOpen || settingsOverlay.landed}
   {#await settingsOverlay.chunk() then SettingsDialogModule}
-    <SettingsDialogModule.default bind:open={settingsOpen} />
+    <SettingsDialogModule.default
+      bind:open={settingsOpen}
+      initialSection={settingsSection}
+    />
   {/await}
 {/if}
 

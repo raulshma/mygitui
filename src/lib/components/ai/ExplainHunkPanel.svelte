@@ -7,15 +7,15 @@
    *
    * Docked to the viewer's bottom edge (NOT anchored to the row) so the
    * 60fps virtualization slices — which clip at their bucket bounds —
-   * never cut the panel off. Owns an <AiSettings> instance for the
-   * "Configure…" action when the backend needs setup.
+   * never cut the panel off. Dispatches the "open-ai-settings" event for
+   * the "Configure…" action when the backend needs setup.
    */
   import { ai } from "$lib/ai/ai.svelte";
   import { isAiError } from "$lib/ai/types";
   import type { FeatureCtx, FeatureOutcome } from "$lib/ai/features";
   import { aiResultMeta } from "$lib/ai/usage";
   import { modelChoice } from "$lib/ai/modelChoice.svelte";
-  import AiSettings from "./AiSettings.svelte";
+  import { emitUiEvent } from "$lib/palette/events";
   import AiModelPicker from "./AiModelPicker.svelte";
   import AiMarkdown from "./AiMarkdown.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -51,7 +51,6 @@
   let outcome = $state<FeatureOutcome | null>(null);
   let error = $state<string | null>(null);
   let needsOptIn = $state(false);
-  let settingsOpen = $state(false);
   /** Bumped per attempt so re-running the effect re-fires the request. */
   let attempt = $state(0);
 
@@ -161,7 +160,7 @@
             class="mini whitespace-nowrap rounded-full text-ui-meta"
             type="button"
             onclick={() => {
-              settingsOpen = true;
+              emitUiEvent("open-ai-settings");
             }}
           >
             Configure…
@@ -178,5 +177,3 @@
     {/if}
   </div>
 </div>
-
-<AiSettings bind:open={settingsOpen} />

@@ -271,18 +271,12 @@ describe("SettingsDialog", () => {
     expect(localStorage.getItem(CUSTOM_APPS_KEY)).not.toBeNull();
   });
 
-  it("links to the AI settings dialog without duplicating it", async () => {
-    render(SettingsDialog, { open: true, settings, apps });
-    await fireEvent.click(screen.getByRole("button", { name: "AI" }));
+  it("embeds the AI settings section and supports initialSection", async () => {
+    render(SettingsDialog, { open: true, initialSection: "ai", settings, apps });
 
-    const open = screen.getByRole("button", { name: "AI settings…" });
-    expect(open).toBeTruthy();
-    // The typed UI bus carries the request (App.svelte owns the dialog).
-    const listener = vi.fn();
-    document.addEventListener("open-ai-settings", listener);
-    await fireEvent.click(open);
-    document.removeEventListener("open-ai-settings", listener);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("AI Features & Activity")).toBeTruthy();
+    expect(screen.getByText("Enable AI features")).toBeTruthy();
+    expect(screen.getByText("Preferred Provider")).toBeTruthy();
   });
 
   it("reflects and persists the updater switches", async () => {

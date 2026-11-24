@@ -33,7 +33,7 @@
   import type { FeatureOutcome } from "$lib/ai/features";
   import { AGENTIC_FEATURES, aiElapsedLabel, aiFeatureLabel, aiPhaseLabel } from "$lib/ai/registry";
   import { modelChoice } from "$lib/ai/modelChoice.svelte";
-  import AiSettings from "./AiSettings.svelte";
+  import { emitUiEvent } from "$lib/palette/events";
   import AiModelPicker from "./AiModelPicker.svelte";
   import { floating } from "$lib/components/overlay/floating";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -119,7 +119,6 @@
 
   let root = $state<HTMLSpanElement | undefined>(undefined);
   let confirmOpen = $state(false);
-  let settingsOpen = $state(false);
   let error = $state<string | null>(null);
   let running = $state(false);
 
@@ -312,7 +311,7 @@
             type="button"
             onclick={() => {
               confirmOpen = false;
-              settingsOpen = true;
+              emitUiEvent("open-ai-settings");
             }}
           >
             Configure…
@@ -349,5 +348,3 @@
     {/if}
   </span>
 {/if}
-
-<AiSettings bind:open={settingsOpen} />

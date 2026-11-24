@@ -40,6 +40,7 @@
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import ConfirmDialog from "$lib/components/safety/ConfirmDialog.svelte";
   import CustomAppsSection from "$lib/components/openWith/CustomAppsSection.svelte";
+  import AiSettingsSection from "$lib/components/ai/AiSettingsSection.svelte";
   import Icon from "$lib/components/icons/Icon.svelte";
   import { appIcon } from "$lib/components/icons/library.svelte";
   import { toast } from "$lib/toast";
@@ -93,9 +94,8 @@
     type ShortcutSection,
   } from "$lib/palette/shortcutSections";
   import { bindingConflict, conflictWarning } from "./keybindsModel";
-  import { emitUiEvent } from "$lib/palette/events";
+  import { emitUiEvent, onUiEvent } from "$lib/palette/events";
   import { openAboutDialog } from "$lib/components/aboutDialog";
-  import { ai } from "$lib/ai/ai.svelte";
   import { formatDateTime } from "$lib/git/format";
   import { tabStore } from "$lib/stores/tabs.svelte";
   import {
@@ -207,10 +207,10 @@
     buttons: readonly ActionButtonDef[];
   }
 
-  /** Hand-drawn block (override list, custom apps, storage inspector). */
+  /** Hand-drawn block (override list, custom apps, storage inspector, ai settings). */
   interface CustomRowDef extends BaseRowDef {
     kind: "custom";
-    render: "overrides" | "apps" | "inspector" | "keybinds" | "repo-history" | "repo-colors";
+    render: "overrides" | "apps" | "inspector" | "keybinds" | "repo-history" | "repo-colors" | "ai";
   }
 
   type SettingRowDef =
@@ -232,7 +232,7 @@
     rows: readonly SettingRowDef[];
   }
 
-  type SectionId =
+  export type SectionId =
     | "general"
     | "appearance"
     | "repo"
@@ -248,10 +248,12 @@
 
   let {
     open = $bindable(false),
+    initialSection = "general",
     settings = appSettings,
     apps = customApps,
   }: {
     open?: boolean;
+    initialSection?: SectionId;
     /** Global-settings store (injectable for tests; default: the singleton). */
     settings?: AppSettingsStore;
     /** Custom open-with apps store (injectable for tests; default: the singleton). */
@@ -260,6 +262,31 @@
 
   /** Active left-nav section. */
   let active = $state<SectionId>("general");
+
+  let lastOpen = false;
+  let prevSection: SectionId = "general";
+
+  $effect(() => {
+    if (open) {
+      if (!lastOpen || initialSection !== prevSection) {
+        active = initialSection;
+        query = "";
+      }
+      lastOpen = true;
+      prevSection = initialSection;
+    } else {
+      lastOpen = false;
+    }
+  });
+
+  onMount(() => {
+    const off = onUiEvent("open-ai-settings", () => {
+      active = "ai";
+      query = "";
+      open = true;
+    });
+    return off;
+  });
 
   // --- General: theme + about -------------------------------------------------
 
@@ -511,12 +538,6 @@
     });
     if (applied.some((key) => key !== APP_SETTINGS_KEY)) reloadOpen = true;
   }
-
-  // --- AI ---------------------------------------------------------------------
-
-  const aiBackendLabel = $derived(
-    ai.config.backend === "openrouter" ? "OpenRouter (direct API)" : "OpenCode (local server)",
-  );
 
   // --- Updates ----------------------------------------------------------------
 
@@ -1332,35 +1353,14 @@
       blurb: "AI features, providers and transparency.",
       rows: [
         {
-          kind: "toggle",
-          id: "ai-enabled",
-          title: "AI features",
+          kind: "custom",
+          id: "ai-settings",
+          title: "AI features & providers",
           description:
-            "Master switch. Off hides every AI affordance (buttons, assistant, health chip) and cancels running AI jobs. Nothing is sent anywhere while off.",
-          keywords: "ai enable disable off llm privacy",
-          get: () => ai.isEnabled(),
-          set: (value) => ai.setEnabled(value),
-        },
-        {
-          kind: "toggle",
-          id: "ai-status-bar",
-          title: "Live AI activity in the status bar",
-          description:
-            "One row per running AI job with its phase, elapsed time and a Cancel button.",
-          keywords: "ai progress status bar indicator cancel activity",
-          get: () => ai.isStatusBarEnabled(),
-          set: (value) => ai.setStatusBarEnabled(value),
-        },
-        {
-          kind: "action",
-          id: "ai-provider",
-          title: "AI provider",
-          description: () =>
-            `Preferred backend: ${aiBackendLabel}. Backends, models, per-feature toggles and connection checks live in the AI settings dialog.`,
-          keywords: "openrouter opencode model llm provider backend",
-          buttons: [
-            { label: "AI settings…", onclick: () => emitUiEvent("open-ai-settings") },
-          ],
+            "Master switch, status bar indicator, OpenCode/OpenRouter configuration, models, agentic feature modes, usage budgets, custom prompt templates, and permissions.",
+          keywords:
+            "ai llm provider backend opencode openrouter prompt budget permissions model status activity agentic token",
+          render: "ai",
         },
       ],
     },
@@ -1692,6 +1692,8 @@
       </div>
     {:else if row.render === "apps"}
       <CustomAppsSection store={apps} />
+    {:else if row.render === "ai"}
+      <AiSettingsSection />
     {:else if row.render === "repo-history"}
       <div class="flex flex-col gap-2">
         <span class="flex min-w-0 flex-col gap-0.5">
